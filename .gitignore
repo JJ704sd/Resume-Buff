@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vite
+node_modules/
+dist/
+.DS_Store
+*.local
+*.log
+
+# 编辑器 / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 用户材料(不进 git,仅本地参考)
+原始材料/
+简历帮知识库/
+
+# 生成产物(本地运行时,不入库;团队/外发时按需)
+backend/output/
+backend/logs/

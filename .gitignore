@@ -14,6 +14,7 @@ env/
 # Node / Vite
 node_modules/
 dist/
+*.tsbuildinfo
 .DS_Store
 *.local
 *.log

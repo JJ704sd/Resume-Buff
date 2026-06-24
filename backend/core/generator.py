@@ -59,7 +59,7 @@ SKILL_LABEL = {
 # ----------------------------------------------------------------------
 @dataclass
 class Section:
-    type: str  # "header" | "education" | "project" | "skills" | "honors" | "self_eval"
+    type: str  # "header" | "education" | "project_group" | "skills" | "honors" | "self_eval"
     title: str
     content: dict = field(default_factory=dict)
 
@@ -92,9 +92,7 @@ def build_sections(
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
     if target_role not in ENABLED_ROLES:
-        raise ValueError(f"岗位 {target_role} 暂未启用 (Round 1 仅 tech_metric)。"
-
-                              )
+        raise ValueError(f"岗位 {target_role} 暂未启用 (Round 1 仅 tech_metric)。")
 
     materials = load_materials()
     role_cfg = ROLE_CONFIG[target_role]

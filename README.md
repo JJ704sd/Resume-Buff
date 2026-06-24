@@ -2,6 +2,10 @@
 
 > 个人简历助手 — 一份素材库,一键生成多份针对性简历。
 
+> ⚠️ **隐私提醒**:`backend/data/materials.json` 含本人姓名/手机号/邮箱/学校/项目细节,已默认随仓库提交(单人本地工具)。若要推送到公开仓库(GitHub 等),**先脱敏**再 push。
+>
+> ⚠️ **部署边界**:本工具**仅设计为本地单用户使用** — `PUT /api/materials` 无鉴权,不能直接暴露公网。需要多人协作或多端同步请等 Round 2。
+
 ## 这是什么 / 不是什么
 
 ### ✅ 简历帮**做**的事
@@ -87,19 +91,21 @@ npm run dev                       # http://127.0.0.1:5173
 │   │   └── logger.py         # 本地日志
 │   ├── data/
 │   │   └── materials.json    # 素材库(单人唯一真源)
-│   ├── logs/
-│   │   └── generation.log    # 生成历史(自动)
-│   ├── output/               # 生成的 docx(自动)
+│   ├── logs/                 # 生成历史 .log(被 gitignore,本地保留)
+│   ├── output/               # 生成的 docx(被 gitignore,本地保留)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.vue           # 单页主界面
+│   │   ├── App.vue           # 单页主界面(三段式:选岗位→预览→下载)
 │   │   ├── api/index.ts      # axios 封装
 │   │   └── main.ts
 │   ├── package.json
-│   └── vite.config.ts        # /api 代理 → :8000
+│   ├── vite.config.ts        # /api 代理 → :8000
+│   └── dist/                 # 构建产物(vite build 产出,被 gitignore)
 └── README.md
 ```
+
+> 注:`backend/output/` 和 `backend/logs/` 已在 `.gitignore` 内,只保留在本地不外发。
 
 ---
 

@@ -23,7 +23,7 @@ export interface Role {
 }
 
 export interface Section {
-  type: string  // "header" | "education" | "project_group" | "project" | "skills" | "honors" | "self_eval"
+  type: string  // "header" | "education" | "project_group" | "skills" | "honors" | "self_eval"
   title: string
   content: any
 }

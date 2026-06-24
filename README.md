@@ -2,7 +2,8 @@
 
 > 个人简历助手 — 一份素材库,一键生成多份针对性简历。
 
-> ⚠️ **隐私提醒**:`backend/data/materials.json` 含本人姓名/手机号/邮箱/学校/项目细节,已默认随仓库提交(单人本地工具)。若要推送到公开仓库(GitHub 等),**先脱敏**再 push。
+> 🔒 **隐私状态(公开仓库版)**:`backend/data/materials.json` 已是**脱敏示例版**(姓名/手机/邮箱/学校/公司已替换为占位符,技术亮点保留作 demo)。本地真实数据在 `backend/data/_private_backup.json`(被 `.gitignore` 忽略,不入库)。
+> - clone 后想用自己的数据:`cp backend/data/_private_backup.json backend/data/materials.json`,然后编辑内容
 >
 > ⚠️ **部署边界**:本工具**仅设计为本地单用户使用** — `PUT /api/materials` 无鉴权,不能直接暴露公网。需要多人协作或多端同步请等 Round 2。
 

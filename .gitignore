@@ -28,6 +28,7 @@ desktop.ini
 # 用户材料(不进 git,仅本地参考)
 原始材料/
 简历帮知识库/
+backend/data/_private_backup.json
 
 # 生成产物(本地运行时,不入库;团队/外发时按需)
 backend/output/

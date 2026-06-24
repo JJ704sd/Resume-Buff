@@ -11,21 +11,21 @@
       "暑假日常实习-通用版2.docx",
       "暑假日常实习.docx",
       "测试与质量管理-个人简历.docx",
-      "深圳技术大学-陈佳豪-大二-下周末到岗.docx"
+      "示例大学-示例同学-大二-下周末到岗.docx"
     ]
   },
   "basics": {
-    "name": "陈佳豪",
-    "phone": "15813489353",
-    "email": "756695045@qq.com",
+    "name": "示例同学",
+    "phone": "13800000000",
+    "email": "your_email@example.com",
     "location": "深圳市",
     "political_status": "共青团员",
     "age": 20
   },
   "education": {
-    "school": "深圳技术大学",
-    "college": "健康与环境工程学院",
-    "major": "智能医学工程",
+    "school": "示例大学",
+    "college": "示例学院",
+    "major": "示例专业(医工交叉)",
     "degree": "本科",
     "period": "2024.9 - 2028.6",
     "year": "大二(在读)",
@@ -46,8 +46,8 @@
   },
   "projects": [
     {
-      "id": "tencent_medical_eval",
-      "name": "腾讯医疗垂类大模型评测项目",
+      "id": "company_medical_eval",
+      "name": "某头部互联网公司医疗垂类大模型评测项目",
       "role": "大模型医疗评测工程师 / 核心度量助理",
       "period": "2025.10 - 2025.12",
       "category": "校企合作高级项目",
@@ -58,7 +58,7 @@
           "将度量维度延伸至\"全生命周期\",囊括预防、诊断、治疗、康复、长期管理 5 大阶段",
           "设计\"漏斗式评分算法\",将度量维度划分为安全风控层、交互认知层、表现体验层及专业胜任力",
           "制定\"10 大维度优先级铁律\",确立安全问题、无法回答、关键信息缺失为 Top 级拦截指标",
-          "通过结构化 Prompt 工程实现 LLM-as-a-Judge 自动化裁判,度量元宝、豆包、蚂蚁阿福等模型在 0-4 分档位上的分布差异",
+          "通过结构化 Prompt 工程实现 LLM-as-a-Judge 自动化裁判,度量主流大模型产品等模型在 0-4 分档位上的分布差异",
           "高危甄别度量:模拟\"误导性主诉\"场景(如用良性生活归因掩盖一氧化碳中毒),度量模型提取隐蔽风险信号的能力",
           "逻辑校验度量:构造\"医学指标逻辑悖论\"(如 LDL-C > 总胆固醇),评估模型底层逻辑批判性校验能力",
           "统计并分析模型在免责缺失、丰富度不足、指令识别失败等高频标签上的表现分布",
@@ -69,13 +69,13 @@
           "审核超过 200 条大模型生成的体检报告、病历信息及护理建议,标注准确率 90% 以上",
           "深度挖掘模型医学事实错误与逻辑矛盾,整理典型错误样本并输出 5+ 份高质量分析报告",
           "构建\"科室 × 服务周期 × 用户身份\"三层医学评测框架,验证模型在真实医疗场景的可靠性",
-          "因项目表现优异受邀前往腾讯总部进行成果汇报,工作质量获得腾讯技术专家高度认可"
+          "因项目表现优异受邀前往某头部互联网公司总部进行成果汇报,工作质量获得某头部互联网公司技术专家高度认可"
         ],
         "data_annot": [
           "基于医学专业知识审核 200+ 条大模型生成内容,严格判断 AI 输出护理建议的临床合理性,标注准确率 90% 以上",
           "深度挖掘模型存在的医学事实错误与逻辑矛盾,整理典型错误样本并输出 5+ 份分析报告,直接支持研发迭代",
           "参与构建\"科室 × 服务周期 × 用户身份\"三层医学评测框架,协助制定多维度评估指标",
-          "因项目表现优异受邀前往腾讯总部进行成果汇报"
+          "因项目表现优异受邀前往某头部互联网公司总部进行成果汇报"
         ],
         "product": [
           "深入研究 20+ 篇医疗 AI 前沿论文,参与构建包含\"科室 × 服务周期 × 用户身份\"的三维场景矩阵,定义医疗垂类场景下的模型能力验收标准",
@@ -85,14 +85,22 @@
         ]
       },
       "tags": [
-        "llm_eval", "medical", "data_annotation", "badcase_analysis",
-        "prompt_eng", "rubric_design", "adversarial_eval", "human_eval",
-        "llm_as_judge", "medical_metrics", "metric_design"
+        "llm_eval",
+        "medical",
+        "data_annotation",
+        "badcase_analysis",
+        "prompt_eng",
+        "rubric_design",
+        "adversarial_eval",
+        "human_eval",
+        "llm_as_judge",
+        "medical_metrics",
+        "metric_design"
       ]
     },
     {
-      "id": "edan_ecg",
-      "name": "深技大 × 理邦仪器 ECG 心电大模型预研课题组",
+      "id": "university_ecg",
+      "name": "示例高校 × 某医疗器械公司 ECG 心电大模型预研课题组",
       "role": "医疗 AI 算法开发",
       "period": "2026.1 - 至今",
       "category": "校企联合研究项目",
@@ -119,8 +127,16 @@
         ]
       },
       "tags": [
-        "pytorch", "ecg", "transformer", "cnn", "deep_learning",
-        "model_training", "medical_signal", "linux", "docker", "git"
+        "pytorch",
+        "ecg",
+        "transformer",
+        "cnn",
+        "deep_learning",
+        "model_training",
+        "medical_signal",
+        "linux",
+        "docker",
+        "git"
       ]
     },
     {
@@ -141,11 +157,17 @@
           "持续学习大模型推理部署、API 调用及 AI Agent 相关技术,跟进开源社区前沿实践"
         ]
       },
-      "tags": ["docker", "linux", "cloud_platform", "reproducibility", "llm_deployment"]
+      "tags": [
+        "docker",
+        "linux",
+        "cloud_platform",
+        "reproducibility",
+        "llm_deployment"
+      ]
     },
     {
       "id": "volunteer",
-      "name": "第十五届全运会马拉松游泳赛事志愿服务",
+      "name": "大型体育赛事马拉松游泳赛事志愿服务",
       "role": "志愿者(交通调度 / 内勤)",
       "period": "2024.12 - 2025.11",
       "category": "社会实践",
@@ -158,7 +180,11 @@
           "获赛事组委会\"优秀志愿者\"称号"
         ]
       },
-      "tags": ["communication", "coordination", "responsibility"]
+      "tags": [
+        "communication",
+        "coordination",
+        "responsibility"
+      ]
     }
   ],
   "skills": {
@@ -208,7 +234,7 @@
   },
   "honors": [
     {
-      "name": "2025 亚太地区大学生数学建模竞赛(APMCM)三等奖",
+      "name": "数学建模竞赛三等奖",
       "date": "2025"
     },
     {
@@ -216,15 +242,15 @@
       "date": "通过"
     },
     {
-      "name": "第十五届全运会马拉松游泳赛事 优秀志愿者",
+      "name": "大型体育赛事马拉松游泳赛事 优秀志愿者",
       "date": "2024.12 - 2025.11"
     }
   ],
   "certs": [
     {
-      "name": "腾讯高级项目实践证明(AI 搜索医疗评测项目 · 评测工程师)",
+      "name": "某头部互联网公司高级项目实践证明(AI 搜索医疗评测项目 · 评测工程师)",
       "date": "2025.12.31",
-      "issuer": "腾讯科技(深圳)有限公司"
+      "issuer": "某头部互联网公司"
     }
   ],
   "self_eval_versions": {
@@ -236,8 +262,8 @@
       "项目执行素养:能够独立完成测试任务,具备规范的文档操作习惯和团队协作意识"
     ],
     "general": [
-      "智能医学工程专业在读,具备医学与人工智能交叉复合背景",
-      "通过腾讯医疗大模型项目的实战历练,已熟练掌握医学文本标注规范与评测流程",
+      "示例专业(医工交叉)专业在读,具备医学与人工智能交叉复合背景",
+      "通过某头部互联网公司医疗大模型项目的实战历练,已熟练掌握医学文本标注规范与评测流程",
       "性格沉稳细致,具备极强的责任心与执行力,渴望利用专业所学助力医疗 AI 的可靠性提升"
     ]
   }

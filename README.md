@@ -49,7 +49,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;无预览不能直接生成 |
-| **6. 评测** | Round 1 仅做"事实覆盖自检"(每个 role 必须包含腾讯/理邦项目,作为 sanity check) |
+| **6. 评测** | Round 1 仅做"事实覆盖自检"(每个 role 必须包含至少 2 个项目作为 sanity check) |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 

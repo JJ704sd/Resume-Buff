@@ -92,7 +92,7 @@ async function onConfirmDownload() {
       customIntention.value.trim() || undefined
     )
     const roleName = currentRole.value?.name ?? '简历'
-    const filename = `陈佳豪_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
+    const filename = `${summary.value?.name ?? '简历'}_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
     downloadBlob(blob, filename)
     lastDownloaded.value = {
       name: filename,

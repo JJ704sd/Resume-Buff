@@ -5,3 +5,6 @@ python-docx==1.2.0
 pymupdf==1.27.2.3
 pydantic==2.12.5
 python-multipart==0.0.20
+
+# 测试（41 个用例：25 jd_parser + 16 llm_rewriter）
+pytest==9.0.2

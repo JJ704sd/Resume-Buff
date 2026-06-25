@@ -8,9 +8,9 @@ JD (Job Description) 文本解析 + 匹配度评分 — 纯规则化旁路模块
   - API 边界由 api/jd.py 提供;本模块不依赖 FastAPI,纯逻辑可单测
 
 公开 API:
-  - parse_jd(text)                 -> 提取关键词 / 经验 / 学历
+  - parse_jd(text)                 -> 提取关键词 / 经验 / 学历 / tier
   - match_score(text, role, mats)  -> 对当前素材库算 0-100 分 + 建议
-  - KEYWORD_GROUPS                 -> 关键词字典(skills / tools / domains)
+  - KEYWORD_GROUPS                 -> 关键词字典(skills / tools / domains),三元组 (surface, normalized, weight)
 """
 import re
 from typing import Any
@@ -35,54 +35,60 @@ def _cn_to_int(s: str) -> int | None:
 
 
 # ----------------------------------------------------------------------
-# 关键词字典:每个关键词 = (surface, normalized_form)
-#   - surface: 在 JD 文本里查的字面
+# 关键词字典:每个关键词 = (surface, normalized_form, weight)
+#   - surface:        在 JD 文本里查的字面
 #   - normalized_form: 命中后归一化的形式(同义词 → 同一 normalized)
-# 同一个 normalized_form 在同一 group 内只算一次(去重)
+#   - weight:         1.0 = 必选 (必备技能) / 0.5 = 加分 (nice to have / 业务偏好)
+#   同一个 normalized_form 在同一 group 内只算一次(去重)
 # ----------------------------------------------------------------------
-KEYWORD_GROUPS: dict[str, list[tuple[str, str]]] = {
+KEYWORD_GROUPS: dict[str, list[tuple[str, str, float]]] = {
     "skills": [
-        ("Python", "Python"),
-        ("PyTorch", "PyTorch"),
-        ("TensorFlow", "TensorFlow"),
-        ("Transformer", "Transformer"),
-        ("CNN", "CNN"),
-        ("LLM", "LLM"),
-        ("大模型", "LLM"),
-        ("大语言模型", "LLM"),
-        ("深度学习", "深度学习"),
-        ("评测", "评测"),
-        ("数据标注", "数据标注"),
-        ("标注", "数据标注"),
-        ("Prompt", "Prompt"),
-        ("prompt 工程", "Prompt"),
-        ("鲁棒性", "鲁棒性"),
-        ("微调", "微调"),
-        ("LoRA", "LoRA"),
-        ("推理", "推理"),
-        ("部署", "部署"),
-        ("NLP", "NLP"),
+        # 必选权重 (1.0) — 核心算法/AI 技能,几乎所有 JD 都要求
+        ("Python", "Python", 1.0),
+        ("PyTorch", "PyTorch", 1.0),
+        ("TensorFlow", "TensorFlow", 1.0),
+        ("Transformer", "Transformer", 1.0),
+        ("CNN", "CNN", 1.0),
+        ("LLM", "LLM", 1.0),
+        ("大模型", "LLM", 1.0),
+        ("大语言模型", "LLM", 1.0),
+        # 加分权重 (0.5) — 领域细分 / 加分项
+        ("深度学习", "深度学习", 0.5),
+        ("评测", "评测", 0.5),
+        ("数据标注", "数据标注", 0.5),
+        ("标注", "数据标注", 0.5),
+        ("Prompt", "Prompt", 0.5),
+        ("prompt 工程", "Prompt", 0.5),
+        ("鲁棒性", "鲁棒性", 0.5),
+        ("微调", "微调", 0.5),
+        ("LoRA", "LoRA", 0.5),
+        ("推理", "推理", 0.5),
+        ("部署", "部署", 0.5),
+        ("NLP", "NLP", 0.5),
     ],
     "tools": [
-        ("Docker", "Docker"),
-        ("Git", "Git"),
-        ("Linux", "Linux"),
-        ("CUDA", "CUDA"),
-        ("SQL", "SQL"),
-        ("MySQL", "MySQL"),
-        ("WSL", "WSL"),
-        ("Flask", "Flask"),
-        ("FastAPI", "FastAPI"),
-        ("Shell", "Shell"),
+        # 必选 (1.0) — 主流工程工具
+        ("Docker", "Docker", 1.0),
+        ("Git", "Git", 1.0),
+        ("Linux", "Linux", 1.0),
+        # 加分 (0.5) — 业务场景
+        ("CUDA", "CUDA", 0.5),
+        ("SQL", "SQL", 0.5),
+        ("MySQL", "MySQL", 0.5),
+        ("WSL", "WSL", 0.5),
+        ("Flask", "Flask", 0.5),
+        ("FastAPI", "FastAPI", 0.5),
+        ("Shell", "Shell", 0.5),
     ],
     "domains": [
-        ("医疗", "医疗"),
-        ("医学", "医疗"),
-        ("临床", "医疗"),
-        ("ECG", "ECG"),
-        ("心电", "ECG"),
-        ("NLP", "NLP"),
-        ("评测", "评测"),
+        # 加分 (0.5) — 业务偏好,所有 domain 都不算必选
+        ("医疗", "医疗", 0.5),
+        ("医学", "医疗", 0.5),
+        ("临床", "医疗", 0.5),
+        ("ECG", "ECG", 0.5),
+        ("心电", "ECG", 0.5),
+        ("NLP", "NLP", 0.5),
+        ("评测", "评测", 0.5),
     ],
 }
 
@@ -180,6 +186,141 @@ def _extract_education(text: str) -> str:
 
 
 # ----------------------------------------------------------------------
+# Tier 修饰词识别 (上下文窗口法,非 strict regex)
+# ----------------------------------------------------------------------
+# 修饰词 → tier 名称 映射
+# 中文 + 英文双覆盖,按"语义"分组
+_TIER_KEYWORDS: dict[str, list[str]] = {
+    "required": [
+        "必须", "必备", "必需", "要求", "需要",
+        "熟悉", "熟练", "精通",
+        "required", "must", "must have", "must-have",
+    ],
+    "preferred": [
+        "优先", "优先考虑", "优先录取", "优先选择",
+        "preferred", "nice to have", "nice-to-have",
+    ],
+    "bonus": [
+        "加分", "加分项", "加 bonus", "是加分",
+        "bonus", "plus", "extra",
+    ],
+}
+
+# tier 在 match_score 中的加权系数
+_TIER_WEIGHT: dict[str, float] = {
+    "required": 1.0,
+    "preferred": 0.6,
+    "bonus": 0.3,
+}
+
+# 上下文窗口半径(字符)
+_TIER_CONTEXT_RADIUS = 30
+
+
+def _classify_tier(norm_text: str) -> dict[str, list[str]]:
+    """
+    在 JD 文本里找出所有 tier 修饰词出现的位置,把文本按 (起始, 结束, tier) 区间记录。
+    返回 {tier: [pos, pos, ...]} 用于后续上下文窗口匹配。
+    """
+    spans: list[tuple[int, int, str]] = []
+    # 按长度倒序排(避免短词先匹配,把长词的子串吃掉 — 例 "nice to have" 必须先于 "have")
+    for tier, kws in _TIER_KEYWORDS.items():
+        for kw in sorted(kws, key=len, reverse=True):
+            kw_lower = kw.lower()
+            start = 0
+            while True:
+                idx = norm_text.find(kw_lower, start)
+                if idx < 0:
+                    break
+                spans.append((idx, idx + len(kw_lower), tier))
+                start = idx + len(kw_lower)
+    return spans
+
+
+def _keyword_tier(norm_text: str, surface: str, tier_spans: list[tuple[int, int, str]]) -> str:
+    """
+    给定 surface 在 norm_text 中的出现位置,判断它属于哪个 tier。
+    规则:用上下文窗口(前后 _TIER_CONTEXT_RADIUS 字符)找**最近的** tier 修饰词。
+    没有命中任何 tier 修饰 → 兜底为 "required"(业务 JD 默认就是必须)。
+
+    决策策略:"最近距离" 优先 — 因为 JD 行文里 "必须 X, 优先 Y" 中,X 物理上离 "必须"
+    更近,Y 离 "优先" 更近;这种"近邻"语义最符合人类阅读直觉。
+
+    距离定义:
+      - 重叠 (区间相交): 距离 = 0
+      - 不重叠: 距离 = 两个区间端点之间的字符数
+    """
+    surface_lower = surface.lower()
+    # 拿 surface 的第一次出现(同一 surface 多处都按最近一次 tier 算)
+    idx = norm_text.find(surface_lower)
+    if idx < 0:
+        return "required"
+    kw_start = idx
+    kw_end = idx + len(surface_lower)
+
+    best_tier = "required"  # 兜底:没命中任何 tier → required
+    best_dist = _TIER_CONTEXT_RADIUS + 1
+    for span_start, span_end, tier in tier_spans:
+        # 区间距离:重叠 = 0,不重叠 = |左/右端点差|
+        if kw_start >= span_end:
+            dist = kw_start - span_end
+        elif kw_end <= span_start:
+            dist = span_start - kw_end
+        else:
+            dist = 0
+        if dist <= _TIER_CONTEXT_RADIUS and dist < best_dist:
+            best_dist = dist
+            best_tier = tier
+
+    return best_tier
+
+
+def _parse_tier_info(
+    norm_text: str,
+    matched_normalized: list[str],
+) -> dict[str, list[str]]:
+    """
+    给定 norm_text + 命中关键词,构建 tier_info。
+    包含所有命中的关键词,按 tier 分组(上下文窗口法)。
+
+    Tier 优先级:required (1.0) > preferred (0.6) > bonus (0.3)
+    多个 surface 指向同一 normalized,取"最严"的那个(权重最大的)。
+
+    关键:只考虑**实际出现在文本里**的 surface(否则同 normalized
+    的"未出现 alias"会污染 tier 判断)。
+    """
+    tier_spans = _classify_tier(norm_text)
+    tier_info: dict[str, list[str]] = {"required": [], "preferred": [], "bonus": []}
+    # 用 set 避免同一 surface 多次添加(同 group 内 normalized 去重)
+    seen: set[str] = set()
+    for kw in matched_normalized:
+        if kw in seen:
+            continue
+        seen.add(kw)
+        # 找出这个 normalized 在哪些 group/keyword 里**实际出现** → 拿 surface
+        tier = "bonus"  # 兜底:假设最弱,然后用"最严"覆盖
+        found = False
+        for group_name, keywords in KEYWORD_GROUPS.items():
+            for surface, normalized, _w in keywords:
+                if normalized == kw and surface.lower() in norm_text:
+                    found = True
+                    t = _keyword_tier(norm_text, surface, tier_spans)
+                    # 取"最严"(权重最大)那个
+                    if _TIER_WEIGHT[t] > _TIER_WEIGHT[tier]:
+                        tier = t
+        if not found:
+            # 兜底:这个 normalized 没有 surface 出现在文本里(理论不该发生,
+            # 因为 parse_jd 调过同样的 surface 命中检查)
+            tier = "required"
+        if kw not in tier_info[tier]:
+            tier_info[tier].append(kw)
+    # 每 tier 内排序(让前端展示稳定)
+    for t in tier_info:
+        tier_info[t].sort()
+    return tier_info
+
+
+# ----------------------------------------------------------------------
 # parse_jd: 关键词 + 经验 + 学历 一次性提取
 # ----------------------------------------------------------------------
 def parse_jd(text: str) -> dict[str, Any]:
@@ -197,6 +338,9 @@ def parse_jd(text: str) -> dict[str, Any]:
           - experience_years: str     "1-3" / "3年以上" / "不限"
           - education:     str        "博士"/"硕士"/"本科"/"大专"/"不限"
           - raw_keywords:  list[str]  所有命中词 (skills+tools+domains 合并去重)
+          - tier_info:     dict       {"required": [...], "preferred": [...], "bonus": [...]}
+                                     上下文窗口法识别 JD 里的"必须/优先/加分"修饰词,
+                                     命中的关键词按 tier 分组;未命中修饰词的关键词归 required
     """
     norm_text = _normalize_text(text)
 
@@ -207,12 +351,13 @@ def parse_jd(text: str) -> dict[str, Any]:
         "experience_years": _extract_experience(norm_text),
         "education": _extract_education(norm_text),
         "raw_keywords": [],
+        "tier_info": {"required": [], "preferred": [], "bonus": []},
     }
 
     # 按 group 提取,每个 group 内 normalized 去重
     for group_name, keywords in KEYWORD_GROUPS.items():
         seen: set[str] = set()
-        for surface, normalized in keywords:
+        for surface, normalized, _w in keywords:
             if surface.lower() in norm_text and normalized not in seen:
                 out[group_name].append(normalized)
                 seen.add(normalized)
@@ -222,6 +367,12 @@ def parse_jd(text: str) -> dict[str, Any]:
     for group_name in ("skills", "tools", "domains"):
         all_normalized.update(out[group_name])
     out["raw_keywords"] = sorted(all_normalized)
+
+    # tier_info: 把所有命中关键词按上下文窗口里的 tier 修饰词分组
+    out["tier_info"] = _parse_tier_info(
+        norm_text,
+        list(all_normalized),
+    )
 
     return out
 
@@ -247,7 +398,7 @@ def _build_candidate_pool(role_skill_keys: list[str], materials: dict) -> set[st
         for item in items:
             item_lower = item.lower()
             for group_keywords in KEYWORD_GROUPS.values():
-                for surface, normalized in group_keywords:
+                for surface, normalized, _w in group_keywords:
                     if surface.lower() in item_lower:
                         pool.add(normalized)
     return pool
@@ -265,7 +416,7 @@ def _suggest_group_for_missing_keyword(
       - skills → 推荐 role 的第一个 skill_key
     """
     for group_name, keywords in KEYWORD_GROUPS.items():
-        for surface, normalized in keywords:
+        for surface, normalized, _w in keywords:
             if normalized == kw:
                 if group_name == "tools":
                     return "tools"
@@ -350,13 +501,29 @@ def _build_suggestions(
     return suggestions[:5]
 
 
+def _classify_recommendation(score: int) -> str:
+    """
+    把 0-100 的整数分转成"高/中/低"业务建议。
+
+    阈值说明 (Round 3 占位,Round 3.5 用真实 JD 调优):
+      - ≥ 80  → "高" (强烈推荐投递)
+      - 60-79 → "中" (建议补充素材后再投递)
+      - < 60  → "低" (需大幅补充素材)
+    """
+    if score >= 80:
+        return "高"
+    if score >= 60:
+        return "中"
+    return "低"
+
+
 def match_score(
     text: str,
     target_role: str,
     materials: dict | None = None,
 ) -> dict[str, Any]:
     """
-    给定 JD 文本 + target_role + materials,计算 0-100 匹配度评分。
+    给定 JD 文本 + target_role + materials,计算 0-100 匹配度评分 (加权)。
 
     Args:
         text: JD 文本
@@ -365,12 +532,14 @@ def match_score(
 
     Returns:
         dict:
-          - score:            int  0-100,整数
+          - score:            int  0-100,整数 (按 KEYWORD_GROUPS weight 加权)
           - matched_keywords: list[str]
           - missing_keywords: list[str]
-          - coverage:         dict[str, float]  skills/tools/domains 三维
+          - coverage:         dict[str, float]  skills/tools/domains 三维 (加权)
           - suggestions:      list[str]  2-5 条
           - role_id:          str
+          - tier_info:        dict  {"required": [...], "preferred": [...], "bonus": [...]}
+          - recommendation:   str   "高" / "中" / "低"
 
     Raises:
         ValueError: target_role 不在 ENABLED_ROLES
@@ -389,7 +558,15 @@ def match_score(
     parsed = parse_jd(text)
     pool = _build_candidate_pool(role_cfg["skill_keys"], mats)
 
-    # 按 group 算 coverage + 收集 matched/missing
+    # 构建 normalized -> weight 的反查表(同 normalized 在多 group 出现取最大 weight)
+    kw_weight: dict[str, float] = {}
+    for group_name, keywords in KEYWORD_GROUPS.items():
+        for surface, normalized, w in keywords:
+            # 取最大 weight(同 normalized 在 skills/tools 跨 group 时)
+            if normalized not in kw_weight or w > kw_weight[normalized]:
+                kw_weight[normalized] = w
+
+    # 按 group 算 coverage(按权重加权) + 收集 matched/missing
     matched: list[str] = []
     missing: list[str] = []
     coverage: dict[str, float] = {}
@@ -403,9 +580,12 @@ def match_score(
         miss = [k for k in parsed_set if k not in pool]
         matched.extend(hit)
         missing.extend(miss)
-        coverage[group_name] = round(len(hit) / len(parsed_set), 2)
+        # 加权 coverage:sum(hit_w) / sum(all_w)
+        all_w = sum(kw_weight.get(k, 0.5) for k in parsed_set)
+        hit_w = sum(kw_weight.get(k, 0.5) for k in hit)
+        coverage[group_name] = round(hit_w / all_w, 2) if all_w > 0 else 0.0
 
-    # 整体 score: 跨 group 去重后的命中率
+    # 整体 score: 跨 group 去重后,按权重加权的命中率
     all_parsed = (
         set(parsed["skills"]) | set(parsed["tools"]) | set(parsed["domains"])
     )
@@ -413,7 +593,9 @@ def match_score(
     if not all_parsed:
         score = 0
     else:
-        score = round(len(all_matched) / len(all_parsed) * 100)
+        all_w = sum(kw_weight.get(k, 0.5) for k in all_parsed)
+        hit_w = sum(kw_weight.get(k, 0.5) for k in all_matched)
+        score = round(hit_w / all_w * 100)
 
     # 收集 skill items (for suggestions 扩展,目前没用上,保留以备 Round 3)
     skill_items_per_group: dict[str, list[str]] = {
@@ -436,4 +618,6 @@ def match_score(
         "coverage": coverage,
         "suggestions": suggestions,
         "role_id": target_role,
+        "tier_info": parsed.get("tier_info", {"required": [], "preferred": [], "bonus": []}),
+        "recommendation": _classify_recommendation(int(score)),
     }

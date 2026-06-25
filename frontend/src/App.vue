@@ -109,6 +109,25 @@ function scoreTag(s: number): 'success' | 'warning' | 'danger' {
   return 'danger'
 }
 
+// Round 3 A: recommendation → el-alert type + 文案
+function recommendationAlertType(
+  r: '高' | '中' | '低' | undefined,
+): 'success' | 'warning' | 'error' {
+  if (r === '高') return 'success'
+  if (r === '中') return 'warning'
+  return 'error'
+}
+function recommendationAlertTitle(r: '高' | '中' | '低' | undefined): string {
+  if (r === '高') return '强烈推荐投递'
+  if (r === '中') return '建议补充素材后再投递'
+  return '需大幅补充素材'
+}
+function recommendationAlertDetail(r: '高' | '中' | '低' | undefined): string {
+  if (r === '高') return '关键词覆盖完整，可立即行动'
+  if (r === '中') return '部分关键词尚可加强，补充后再投递命中率更高'
+  return '当前覆盖与岗位要求差距较大，建议先扩充素材库'
+}
+
 function backToSelect() {
   stage.value = 'select'
   previewData.value = null
@@ -315,6 +334,23 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
               <!-- 评分结果展示 -->
               <template v-if="jdResult">
                 <el-divider />
+
+                <!-- Round 3 A: 业务阈值 banner (顶部显眼位置) -->
+                <el-alert
+                  :type="recommendationAlertType(jdResult.recommendation)"
+                  :title="recommendationAlertTitle(jdResult.recommendation)"
+                  :description="recommendationAlertDetail(jdResult.recommendation)"
+                  :closable="false"
+                  show-icon
+                  style="margin-bottom: 16px"
+                >
+                  <template #default>
+                    <span style="color: #666; font-size: 12px">
+                      阈值:≥80 强烈推荐 · 60-79 建议补充 · &lt;60 需大幅补充（Round 3.5 调优）
+                    </span>
+                  </template>
+                </el-alert>
+
                 <el-row :gutter="20">
                   <el-col :span="6">
                     <div class="score-box" :style="{ borderColor: scoreColor(jdResult.score) }">

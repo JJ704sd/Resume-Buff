@@ -42,6 +42,8 @@ export interface JdParseResult {
   experience_years: string
   education: string
   raw_keywords: string[]
+  // ----- Round 3 A: tier 关键词分组 -----
+  tier_info: { required: string[]; preferred: string[]; bonus: string[] }
 }
 
 export interface JdMatchResult {
@@ -51,6 +53,9 @@ export interface JdMatchResult {
   coverage: { skills: number; tools: number; domains: number }
   suggestions: string[]
   role_id: string
+  // ----- Round 3 A: tier 透传 + 业务阈值建议 -----
+  tier_info: { required: string[]; preferred: string[]; bonus: string[] }
+  recommendation: '高' | '中' | '低'
 }
 
 export const materialsApi = {

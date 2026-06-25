@@ -26,7 +26,7 @@
 
 ---
 
-## Round 2 当前能力(2026-06-25)
+## Round 3 A 当前能力(2026-06-25)
 
 | 功能 | 状态 |
 |---|---|
@@ -34,21 +34,21 @@
 | 6 个岗位方向(度量/产品/算法/标注/测试/通用) | ✅ |
 | 生成预览(按模块)+ fallback 链(test_qa → tech_metric → general) | ✅ |
 | 本地日志 `backend/logs/generation.log` | ✅ |
-| JD 解析 / 0-100 匹配度评分(后端 `core/jd_parser.py` + 前端评分卡) | ✅ Round 2 #2 |
+| JD 解析(关键词 + 经验 + 学历 + **tier 分组**) + 加权 0-100 匹配度评分 + **业务阈值 banner (高≥80 / 中 60-79 / 低<60)** | ✅ Round 2 #2 + R3-A |
 | LLM 智能改写项目描述(无 key 静默降级,OpenAI 兼容 HTTP) | ✅ Round 2 #3 |
 
 ---
 
-## 8 要素 × Round 2 落地表
+## 8 要素 × Round 3-A 落地表
 
-| 要素 | Round 1 → Round 2 增量 |
+| 要素 | Round 1 → Round 3-A 增量 |
 |---|---|
 | **1. 任务边界** | 本 README 顶部"做/不做"清单;`ENABLED_ROLES` 写死,**Round 2 启用 6 个 role**(度量/产品/算法/标注/测试/通用) |
 | **2. 上下文** | Round 1 用"素材库 + role 模板";**Round 2 加 JD 文本解析**(skill/tool/domain/experience/education 5 维度)+ LLM 改写上下文(target_role + jd_context) |
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
-| **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**Round 2 加 41 个 pytest 用例**(25 jd_parser + 16 llm_rewriter),含 R2#1 baseline 锁死测试 |
+| **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 72 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 
@@ -96,7 +96,8 @@ npm run dev                       # http://127.0.0.1:5173
 │   │   └── logger.py          # 本地日志
 │   ├── tests/
 │   │   ├── conftest.py
-│   │   ├── test_jd_parser.py       # 25 pytest 用例
+│   │   ├── test_jd_parser.py       # 53 pytest 用例(R2#2 关键词 + R3-A 加权/tier/recommendation + bugfix 回归)
+│   │   ├── test_api_jd.py          # 3 pytest 用例(R3-A FastAPI TestClient 集成)
 │   │   └── test_llm_rewriter.py    # 16 pytest 用例(含 R2#1 baseline 锁死)
 │   ├── data/
 │   │   └── materials.json     # 素材库(单人唯一真源,脱敏版)
@@ -132,14 +133,16 @@ npm run dev                       # http://127.0.0.1:5173
 - **Round 2**: 6 个 role 全启用 + JD 解析/匹配度评分 + LLM 智能改写项目描述 + 前端 JD 评分卡 + `.harness/` 多 agent 协作脚手架
   - Round 2 收尾 commit: `d932bcc merge: Round 2 integration — JD 解析 + LLM 改写`
   - 远端: https://github.com/JJ704sd/Resume-Buff
+- **Round 3-A**: JD 解析 MVP 升级 — KEYWORD_GROUPS weight 三元组 (必选 1.0 / 加分 0.5) + tier 上下文窗口识别(必选/优先/加分)+ 加权 score + 业务阈值 banner(≥80 高 / 60-79 中 / <60 低)+ bugfix(UI 阈值一致 + 死代码清理 + 签名修正)
+  - R3-A 收尾 commit: `931da41 chore(round3#a): gitignore orchestrator scratch` + `9ceeaf6 fix(round3#a): bug hunt — UI 阈值一致 + 死代码清理 + 注释对齐`
 
-### 🎯 Round 3 候选(等用户拍)
-- **R3-A**: JD 解析升级 — jieba 分词 + 关键词权重 + score 阈值业务化(≥80 推荐投递警告)
+### 🎯 Round 3 后续候选(等用户拍)
 - **R3-B**: LLM prompt 模板库 — 按 role 区分 system prompt(产品/算法/度量风格差异)
 - **R3-C**: LLM 缓存层 — 同 role+intention+bullet 复用上次改写,省 token
 - **R3-D**: 求职信 / 自我介绍生成 — README 之前提的能力,`.docx` 多一份输出
 - **R3-E**: CI / pre-push hook — pytest + vue-tsc + build 自动拦
 - **R3-F**: 异步化 + 评测强化 — Round 2 #3 已知限制 + 8 要素 #6
+- **R3.5**: 阈值调优 — 用真实 JD 数据校准 80/60 阈值(R3-A 当前是占位)
 
 ### 📌 默认不启动(长期 P3,等用户明确)
 - 多端同步、云端部署、账号系统、多用户协作

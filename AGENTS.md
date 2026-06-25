@@ -39,23 +39,33 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 2 收尾后有 **41 个用例**（25 jd_parser + 16 llm_rewriter），全绿
+- 后端 `pytest`：Round 3-A 收尾后有 **72 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter），全绿
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余
+  - **bugfix 必须加回归测试**：覆盖每个 score 区间 + 每个死代码删除点,防止回潮
 - 后端冒烟：`python main.py` 启动后访问 `http://127.0.0.1:8000/api/health` 应返回 `{"status":"ok"}`
 - 前端类型检查：`cd frontend && npx vue-tsc --noEmit` 必须 0 error
 - 前端构建：`cd frontend && npm run build` 必须成功
 - **新增行为必须有验证**（详见 `.harness/docs/dev-workflow.md`）：
   - 后端：手测对应 API；可补充 `pytest` 用例
   - 前端：手测 UI；类型检查 + 构建为底线
+- **bugfix 闭环**:
+  - 复盘本轮 diff,逐文件过 — 签名/docstring/阈值是否一致
+  - 修一个 bug 必须加 ≥1 个回归测试
+  - 跑全量绿 + 前端构建成功才 commit
 
 ## PR & commit conventions
 
 - 从 `main` 拉特性分支（如 `feat/round2-jd` / `fix/<scope>` / `chore/<scope>`）
 - **永远不要直接 push 到 `main`** — 用 PR/MR 合并
 - 提交信息遵循 conventional commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:` / `test:`）
-- 范围限定：消息中标注 round 编号（如 `feat(round2#2): JD 解析`）
+- 范围限定：消息中标注 round 编号（如 `feat(round2#2): JD 解析` / `fix(round3#a): bug hunt`）
+- **bugfix commit 必须说明**:
+  - 哪个 bug (Bug A/B/C 编号)
+  - 触发条件 (e.g. score=50-59 时 UI 冲突)
+  - 修复路径 (改哪几个文件 + 阈值/签名/注释)
+  - 回归测试覆盖 (e.g. +6 TestBugfix*)
 
 ## Privacy & deploy
 

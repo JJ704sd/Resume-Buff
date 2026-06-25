@@ -1,0 +1,439 @@
+"""
+JD (Job Description) 文本解析 + 匹配度评分 — 纯规则化旁路模块
+
+设计原则 (MVP):
+  - **不**联网、不调用 LLM,所有逻辑 = 关键词字典 + 正则
+  - **不**写数据库,parse_jd 是无状态函数
+  - **不**改 core/generator.py 主流程,只读 ROLE_CONFIG / load_materials
+  - API 边界由 api/jd.py 提供;本模块不依赖 FastAPI,纯逻辑可单测
+
+公开 API:
+  - parse_jd(text)                 -> 提取关键词 / 经验 / 学历
+  - match_score(text, role, mats)  -> 对当前素材库算 0-100 分 + 建议
+  - KEYWORD_GROUPS                 -> 关键词字典(skills / tools / domains)
+"""
+import re
+from typing import Any
+
+from core.generator import ENABLED_ROLES, ROLE_CONFIG, load_materials
+
+
+# ----------------------------------------------------------------------
+# 中文-阿拉伯数字映射 (处理 "三年以上" 这种)
+# ----------------------------------------------------------------------
+_CN_NUM_MAP: dict[str, int] = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+
+
+def _cn_to_int(s: str) -> int | None:
+    """把单个数字字符(中文或阿拉伯)转 int,无法解析返 None"""
+    if s.isdigit():
+        return int(s)
+    return _CN_NUM_MAP.get(s)
+
+
+# ----------------------------------------------------------------------
+# 关键词字典:每个关键词 = (surface, normalized_form)
+#   - surface: 在 JD 文本里查的字面
+#   - normalized_form: 命中后归一化的形式(同义词 → 同一 normalized)
+# 同一个 normalized_form 在同一 group 内只算一次(去重)
+# ----------------------------------------------------------------------
+KEYWORD_GROUPS: dict[str, list[tuple[str, str]]] = {
+    "skills": [
+        ("Python", "Python"),
+        ("PyTorch", "PyTorch"),
+        ("TensorFlow", "TensorFlow"),
+        ("Transformer", "Transformer"),
+        ("CNN", "CNN"),
+        ("LLM", "LLM"),
+        ("大模型", "LLM"),
+        ("大语言模型", "LLM"),
+        ("深度学习", "深度学习"),
+        ("评测", "评测"),
+        ("数据标注", "数据标注"),
+        ("标注", "数据标注"),
+        ("Prompt", "Prompt"),
+        ("prompt 工程", "Prompt"),
+        ("鲁棒性", "鲁棒性"),
+        ("微调", "微调"),
+        ("LoRA", "LoRA"),
+        ("推理", "推理"),
+        ("部署", "部署"),
+        ("NLP", "NLP"),
+    ],
+    "tools": [
+        ("Docker", "Docker"),
+        ("Git", "Git"),
+        ("Linux", "Linux"),
+        ("CUDA", "CUDA"),
+        ("SQL", "SQL"),
+        ("MySQL", "MySQL"),
+        ("WSL", "WSL"),
+        ("Flask", "Flask"),
+        ("FastAPI", "FastAPI"),
+        ("Shell", "Shell"),
+    ],
+    "domains": [
+        ("医疗", "医疗"),
+        ("医学", "医疗"),
+        ("临床", "医疗"),
+        ("ECG", "ECG"),
+        ("心电", "ECG"),
+        ("NLP", "NLP"),
+        ("评测", "评测"),
+    ],
+}
+
+
+# ----------------------------------------------------------------------
+# 工具:文本标准化 (lowercase + 中文标点 → 英文标点)
+# ----------------------------------------------------------------------
+_CN_PUNCT_TO_EN: dict[str, str] = {
+    "，": ",", "。": ".", "；": ";", "：": ":",
+    "！": "!", "？": "?",
+    "（": "(", "）": ")",
+    "【": "[", "】": "]",
+    "「": '"', "」": '"',
+    "『": "'", "』": "'",
+    "、": ",",
+    "“": '"', "”": '"',
+    "‘": "'", "’": "'",
+    "—": "-", "–": "-",
+    "…": "...",
+}
+
+
+def _normalize_text(text: str) -> str:
+    """lowercase + 中文标点 → 英文标点。JD 文本可以 >10k 字符,无副作用。"""
+    if not text:
+        return ""
+    out: list[str] = []
+    for ch in text:
+        if ch in _CN_PUNCT_TO_EN:
+            out.append(_CN_PUNCT_TO_EN[ch])
+        else:
+            out.append(ch)
+    return "".join(out).lower()
+
+
+# ----------------------------------------------------------------------
+# 经验年限提取
+# ----------------------------------------------------------------------
+_YEAR_RANGE_RE = re.compile(
+    r"([\d\u4e00-\u4e9f]+)\s*[-~到至]\s*([\d\u4e00-\u4e9f]+)\s*年"
+)
+_YEAR_MIN_RE = re.compile(r"([\d\u4e00-\u4e9f]+)\s*年\s*(?:以上|经验以上)")
+_NO_LIMIT_RE = re.compile(r"(经验不限|经验无要求|不限|无要求)")
+
+
+def _extract_experience(text: str) -> str:
+    """从 JD 文本提取经验年限要求。
+
+    支持的写法:
+      - "1-3 年" / "1~3年" / "1到3年" / "一年到三年" -> "1-3"
+      - "3 年以上" / "三年以上经验" -> "3年以上"
+      - "经验不限" / "不限" -> "不限"
+      - 没匹配到 -> "不限" (默认,不抛错)
+    """
+    m = _YEAR_RANGE_RE.search(text)
+    if m:
+        n1 = _cn_to_int(m.group(1))
+        n2 = _cn_to_int(m.group(2))
+        if n1 is not None and n2 is not None:
+            return f"{min(n1, n2)}-{max(n1, n2)}"
+        # 兜底:返字面
+        return f"{m.group(1)}-{m.group(2)}"
+
+    m = _YEAR_MIN_RE.search(text)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n is not None:
+            return f"{n}年以上"
+        return f"{m.group(1)}年以上"
+
+    if _NO_LIMIT_RE.search(text):
+        return "不限"
+
+    return "不限"
+
+
+# ----------------------------------------------------------------------
+# 学历提取(取最高要求)
+# ----------------------------------------------------------------------
+_EDU_ORDER: list[tuple[str, list[str]]] = [
+    ("博士", ["博士", "phd"]),
+    ("硕士", ["硕士", "研究生", "master"]),
+    ("本科", ["本科", "bachelor"]),
+    ("大专", ["大专", "专科"]),
+]
+
+
+def _extract_education(text: str) -> str:
+    """提取学历要求(从高到低匹配,取最先命中 = 最高)。"""
+    for level_name, keywords in _EDU_ORDER:
+        for kw in keywords:
+            if kw in text:
+                return level_name
+    return "不限"
+
+
+# ----------------------------------------------------------------------
+# parse_jd: 关键词 + 经验 + 学历 一次性提取
+# ----------------------------------------------------------------------
+def parse_jd(text: str) -> dict[str, Any]:
+    """
+    解析 JD 文本,返回结构化结果。
+
+    Args:
+        text: 原始 JD 文本,任意长度,支持中英文混排。
+
+    Returns:
+        dict:
+          - skills:        list[str]  归一化后的技能关键词
+          - tools:         list[str]  工具/平台
+          - domains:       list[str]  业务领域
+          - experience_years: str     "1-3" / "3年以上" / "不限"
+          - education:     str        "博士"/"硕士"/"本科"/"大专"/"不限"
+          - raw_keywords:  list[str]  所有命中词 (skills+tools+domains 合并去重)
+    """
+    norm_text = _normalize_text(text)
+
+    out: dict[str, Any] = {
+        "skills": [],
+        "tools": [],
+        "domains": [],
+        "experience_years": _extract_experience(norm_text),
+        "education": _extract_education(norm_text),
+        "raw_keywords": [],
+    }
+
+    # 按 group 提取,每个 group 内 normalized 去重
+    for group_name, keywords in KEYWORD_GROUPS.items():
+        seen: set[str] = set()
+        for surface, normalized in keywords:
+            if surface.lower() in norm_text and normalized not in seen:
+                out[group_name].append(normalized)
+                seen.add(normalized)
+
+    # raw_keywords: 跨 group 合并 + 去重 + 排序(让前端展示稳定)
+    all_normalized: set[str] = set()
+    for group_name in ("skills", "tools", "domains"):
+        all_normalized.update(out[group_name])
+    out["raw_keywords"] = sorted(all_normalized)
+
+    return out
+
+
+# ----------------------------------------------------------------------
+# match_score: 与素材库 + role 的匹配度评分
+# ----------------------------------------------------------------------
+def _build_candidate_pool(role_skill_keys: list[str], materials: dict) -> set[str]:
+    """
+    从素材库 + role 的 skill_keys 构造"可提供关键词池"。
+
+    逻辑:
+      1. 拿 role 的 skill_keys 列表 (e.g. ["ai_ml", "evaluation_metrics", ...])
+      2. 对每个 skill group,把 group 里的所有 item 字符串拿出来
+      3. 在每个 item 里再过一遍 KEYWORD_GROUPS surface,命中即纳入池
+
+    例: ai_ml 有 "PyTorch 深度学习框架" → 包含 surface "PyTorch" → 池里有 "PyTorch"
+    """
+    pool: set[str] = set()
+    skills = materials.get("skills", {})
+    for sk in role_skill_keys:
+        items = skills.get(sk, []) or []
+        for item in items:
+            item_lower = item.lower()
+            for group_keywords in KEYWORD_GROUPS.values():
+                for surface, normalized in group_keywords:
+                    if surface.lower() in item_lower:
+                        pool.add(normalized)
+    return pool
+
+
+def _suggest_group_for_missing_keyword(
+    kw: str, role_skill_keys: list[str]
+) -> str | None:
+    """
+    给一个 missing 关键词,推荐在素材库哪个 skill group 里补充经验。
+
+    启发式:根据 kw 在 KEYWORD_GROUPS 里属于哪个 group 决定。
+      - tools → 推荐 "tools"
+      - domains → 推荐 "medical" (示例素材库业务偏医疗)
+      - skills → 推荐 role 的第一个 skill_key
+    """
+    for group_name, keywords in KEYWORD_GROUPS.items():
+        for surface, normalized in keywords:
+            if normalized == kw:
+                if group_name == "tools":
+                    return "tools"
+                if group_name == "domains":
+                    return "medical"
+                # skills
+                return role_skill_keys[0] if role_skill_keys else None
+    return None
+
+
+# SKILL_LABEL 镜像 (避免 import cycle / 改 generator.py)
+_SKILL_LABEL_LOCAL: dict[str, str] = {
+    "programming_languages": "编程语言",
+    "ai_ml": "AI / 算法",
+    "tools": "工程与工具",
+    "evaluation_metrics": "评测指标",
+    "medical": "医学素养",
+    "documentation": "文档与协作",
+    "data": "数据处理",
+}
+
+
+def _build_suggestions(
+    missing: list[str],
+    score: int,
+    all_parsed: bool,
+    role_cfg: dict,
+    skill_items_per_group: dict[str, list[str]],
+) -> list[str]:
+    """
+    生成 2-5 条人话建议(MVP 规则化,不调 LLM)。
+
+    决策表:
+      - all_parsed 为 False (JD 没识别到任何已知关键词) → "词典不足"提示
+      - missing 为空 (全命中) → "无需补充"
+      - 否则 → 前 3 个 missing 推荐 skill group + 自我评价 + 求职意向
+    """
+    suggestions: list[str] = []
+
+    # 1) 没识别到任何已知关键词
+    if not all_parsed:
+        suggestions.append(
+            "未在 JD 中识别到已知技能/工具/领域关键词"
+            "(关键词词典 KEYWORD_GROUPS 范围有限,可考虑扩展)"
+        )
+        intention = role_cfg.get("intention", "")
+        if intention:
+            suggestions.append(
+                f"建议在求职意向部分对齐 '{intention}' 的方向"
+            )
+        return suggestions
+
+    # 2) 全部命中
+    if not missing:
+        suggestions.append("素材库与 JD 匹配度极高,JD 关键词全部命中,无需补充")
+        return suggestions
+
+    role_skill_keys: list[str] = role_cfg.get("skill_keys", [])
+
+    # 3) 前 3 个 missing → 推荐 skill group
+    for kw in missing[:3]:
+        target_group = _suggest_group_for_missing_keyword(kw, role_skill_keys)
+        if target_group:
+            label = _SKILL_LABEL_LOCAL.get(target_group, target_group)
+            suggestions.append(
+                f"素材库的 '{label}' 维度可补充 '{kw}' 的实操经验"
+            )
+
+    # 4) 自我评价建议
+    suggestions.append(
+        f"建议在自我评价里强调 '{missing[0]}' 相关经验"
+    )
+
+    # 5) 兜底:role 方向对齐
+    intention = role_cfg.get("intention", "")
+    if intention:
+        suggestions.append(
+            f"建议在求职意向部分对齐 '{intention}' 的方向"
+        )
+
+    # 截断到 5 条
+    return suggestions[:5]
+
+
+def match_score(
+    text: str,
+    target_role: str,
+    materials: dict | None = None,
+) -> dict[str, Any]:
+    """
+    给定 JD 文本 + target_role + materials,计算 0-100 匹配度评分。
+
+    Args:
+        text: JD 文本
+        target_role: 6 个 role id 之一,必须在 ENABLED_ROLES
+        materials: 可选,外部传入素材库;不传则内部 load_materials() 读 json
+
+    Returns:
+        dict:
+          - score:            int  0-100,整数
+          - matched_keywords: list[str]
+          - missing_keywords: list[str]
+          - coverage:         dict[str, float]  skills/tools/domains 三维
+          - suggestions:      list[str]  2-5 条
+          - role_id:          str
+
+    Raises:
+        ValueError: target_role 不在 ENABLED_ROLES
+    """
+    if target_role not in ENABLED_ROLES:
+        raise ValueError(
+            f"不支持/未启用的岗位: {target_role!r},"
+            f"当前已启用: {ENABLED_ROLES}"
+        )
+    if target_role not in ROLE_CONFIG:
+        raise ValueError(f"岗位 {target_role!r} 不在 ROLE_CONFIG")
+
+    mats = materials if materials is not None else load_materials()
+    role_cfg = ROLE_CONFIG[target_role]
+
+    parsed = parse_jd(text)
+    pool = _build_candidate_pool(role_cfg["skill_keys"], mats)
+
+    # 按 group 算 coverage + 收集 matched/missing
+    matched: list[str] = []
+    missing: list[str] = []
+    coverage: dict[str, float] = {}
+    for group_name in ("skills", "tools", "domains"):
+        parsed_set = set(parsed[group_name])
+        if not parsed_set:
+            # 没有 JD 要求 → 视为"无要求 = 已覆盖"
+            coverage[group_name] = 1.0
+            continue
+        hit = [k for k in parsed_set if k in pool]
+        miss = [k for k in parsed_set if k not in pool]
+        matched.extend(hit)
+        missing.extend(miss)
+        coverage[group_name] = round(len(hit) / len(parsed_set), 2)
+
+    # 整体 score: 跨 group 去重后的命中率
+    all_parsed = (
+        set(parsed["skills"]) | set(parsed["tools"]) | set(parsed["domains"])
+    )
+    all_matched = set(matched) & all_parsed
+    if not all_parsed:
+        score = 0
+    else:
+        score = round(len(all_matched) / len(all_parsed) * 100)
+
+    # 收集 skill items (for suggestions 扩展,目前没用上,保留以备 Round 3)
+    skill_items_per_group: dict[str, list[str]] = {
+        sk: mats.get("skills", {}).get(sk, []) or []
+        for sk in role_cfg["skill_keys"]
+    }
+
+    suggestions = _build_suggestions(
+        missing=missing,
+        score=score,
+        all_parsed=bool(all_parsed),
+        role_cfg=role_cfg,
+        skill_items_per_group=skill_items_per_group,
+    )
+
+    return {
+        "score": int(score),
+        "matched_keywords": sorted(all_matched),
+        "missing_keywords": sorted(set(missing)),
+        "coverage": coverage,
+        "suggestions": suggestions,
+        "role_id": target_role,
+    }

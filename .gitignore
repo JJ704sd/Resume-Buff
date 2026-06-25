@@ -36,3 +36,9 @@ backend/logs/
 
 # Orchestrator scratch (本地规划产物,不入库)
 .mavis/
+
+# 环境变量(本地运行时配置,不入库;用 backend/.env.example 作模板)
+# 防止 LLM_API_KEY / 数据库密码等敏感配置误 commit
+.env
+.env.*
+!.env.example

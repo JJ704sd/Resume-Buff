@@ -24,9 +24,10 @@
   - `data/materials.json` — 素材库（**单人唯一真源**，已脱敏）
   - `output/`、`logs/` — 运行时产物（`.gitignore`，本地保留）
 - `frontend/` — Vue 3 + TypeScript + Vite 单页
-  - `src/App.vue` — 三段式主界面（选岗位 → 预览 → 下载）
-  - `src/api/index.ts` — axios 封装（`materialsApi` / `resumeApi`）
+  - `src/App.vue` — 三段式主界面（选岗位 → 预览 → 下载）+ ② JD 评分卡
+  - `src/api/index.ts` — axios 封装（`materialsApi` / `resumeApi` / `jdApi`）
   - `vite.config.ts` — `/api` 代理到 `:8000`
+- `.harness/` — 多 agent 协作脚手架（`agent.md` = orchestrator；`reins/{developer,tester}/` = 两个 rein；`docs/` = 架构/流程/隐私；`memory/` = 团队共享记忆）
 - `简历帮知识库/` — 个人素材草稿（`.gitignore`，不进库）
 
 ## Code style
@@ -38,7 +39,10 @@
 
 ## Testing instructions
 
-- 后端目前**无自动化测试** — Round 1/2 以手工端到端为主（README "端到端" 节）
+- 后端 `pytest`：Round 2 收尾后有 **41 个用例**（25 jd_parser + 16 llm_rewriter），全绿
+  - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
+  - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
+  - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余
 - 后端冒烟：`python main.py` 启动后访问 `http://127.0.0.1:8000/api/health` 应返回 `{"status":"ok"}`
 - 前端类型检查：`cd frontend && npx vue-tsc --noEmit` 必须 0 error
 - 前端构建：`cd frontend && npm run build` 必须成功

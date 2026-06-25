@@ -5,7 +5,7 @@
 > 🔒 **隐私状态(公开仓库版)**:`backend/data/materials.json` 已是**脱敏示例版**(姓名/手机/邮箱/学校/公司已替换为占位符,技术亮点保留作 demo)。本地真实数据在 `backend/data/_private_backup.json`(被 `.gitignore` 忽略,不入库)。
 > - clone 后想用自己的数据:`cp backend/data/_private_backup.json backend/data/materials.json`,然后编辑内容
 >
-> ⚠️ **部署边界**:本工具**仅设计为本地单用户使用** — `PUT /api/materials` 无鉴权,不能直接暴露公网。需要多人协作或多端同步请等 Round 2。
+> ⚠️ **部署边界**:本工具**仅设计为本地单用户使用** — `PUT /api/materials` 无鉴权,不能直接暴露公网。多人协作 / 多端同步 / 云端部署属长期 P3 任务,**默认不做**,等用户明确启动再开。
 
 ## 这是什么 / 不是什么
 
@@ -34,22 +34,22 @@
 | 6 个岗位方向(度量/产品/算法/标注/测试/通用) | ✅ |
 | 生成预览(按模块)+ fallback 链(test_qa → tech_metric → general) | ✅ |
 | 本地日志 `backend/logs/generation.log` | ✅ |
-| JD 解析 / 匹配度评分 | ⏸️ Round 2 #2 |
-| LLM 智能改写项目描述 | ⏸️ Round 2 #3 |
+| JD 解析 / 0-100 匹配度评分(后端 `core/jd_parser.py` + 前端评分卡) | ✅ Round 2 #2 |
+| LLM 智能改写项目描述(无 key 静默降级,OpenAI 兼容 HTTP) | ✅ Round 2 #3 |
 
 ---
 
-## 8 要素 × Round 1 落地表
+## 8 要素 × Round 2 落地表
 
-| 要素 | 落地方式 |
+| 要素 | Round 1 → Round 2 增量 |
 |---|---|
-| **1. 任务边界** | 本 README 顶部明确"做/不做"清单;`ENABLED_ROLES` 写死在代码里,Round 2 启用 6 个 role |
-| **2. 上下文** | Round 1 只用"素材库 + role 模板"两样;生成历史/用户偏好留 Round 2 |
-| **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus |
+| **1. 任务边界** | 本 README 顶部"做/不做"清单;`ENABLED_ROLES` 写死,**Round 2 启用 6 个 role**(度量/产品/算法/标注/测试/通用) |
+| **2. 上下文** | Round 1 用"素材库 + role 模板";**Round 2 加 JD 文本解析**(skill/tool/domain/experience/education 5 维度)+ LLM 改写上下文(target_role + jd_context) |
+| **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
-| **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;无预览不能直接生成 |
-| **6. 评测** | Round 1 仅做"事实覆盖自检"(每个 role 必须包含至少 2 个项目作为 sanity check) |
-| **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态) |
+| **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词) |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**Round 2 加 41 个 pytest 用例**(25 jd_parser + 16 llm_rewriter),含 R2#1 baseline 锁死测试 |
+| **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 
 ---
@@ -81,28 +81,44 @@ npm run dev                       # http://127.0.0.1:5173
 
 ```
 简历帮/
+├── AGENTS.md                  # 项目级 agent 指令(给 OpenCode / Codex 等读)
+├── README.md                  # 本文件
 ├── backend/
-│   ├── main.py               # FastAPI 入口
+│   ├── main.py                # FastAPI 入口 + CORS
 │   ├── api/
-│   │   ├── materials.py      # 素材库 CRUD
-│   │   └── resume.py         # 简历预览/生成
+│   │   ├── materials.py       # 素材库 CRUD
+│   │   ├── resume.py          # 简历预览/生成/角色列表
+│   │   └── jd.py              # Round 2 #2: JD 解析 + 匹配度评分
 │   ├── core/
-│   │   ├── generator.py      # sections 构造 + docx 渲染
-│   │   └── logger.py         # 本地日志
+│   │   ├── generator.py       # sections 构造 + docx 渲染(+ Round 2 #3 LLM hook)
+│   │   ├── jd_parser.py       # Round 2 #2: KEYWORD_GROUPS + parse_jd + match_score
+│   │   ├── llm_rewriter.py    # Round 2 #3: OpenAI 兼容 HTTP,4 道防线静默降级
+│   │   └── logger.py          # 本地日志
+│   ├── tests/
+│   │   ├── conftest.py
+│   │   ├── test_jd_parser.py       # 25 pytest 用例
+│   │   └── test_llm_rewriter.py    # 16 pytest 用例(含 R2#1 baseline 锁死)
 │   ├── data/
-│   │   └── materials.json    # 素材库(单人唯一真源)
-│   ├── logs/                 # 生成历史 .log(被 gitignore,本地保留)
-│   ├── output/               # 生成的 docx(被 gitignore,本地保留)
+│   │   └── materials.json     # 素材库(单人唯一真源,脱敏版)
+│   ├── .env.example           # Round 2 #3: LLM_API_KEY / LLM_BASE_URL / LLM_MODEL / LLM_ENABLED 模板
+│   ├── logs/                  # 生成历史 .log(被 gitignore,本地保留)
+│   ├── output/                # 生成的 docx(被 gitignore,本地保留)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.vue           # 单页主界面(三段式:选岗位→预览→下载)
-│   │   ├── api/index.ts      # axios 封装
+│   │   ├── App.vue            # 三段式主界面 + JD 评分卡(Round 2)
+│   │   ├── api/index.ts       # axios 封装(materialsApi / resumeApi / jdApi)
 │   │   └── main.ts
 │   ├── package.json
-│   ├── vite.config.ts        # /api 代理 → :8000
-│   └── dist/                 # 构建产物(vite build 产出,被 gitignore)
-└── README.md
+│   ├── vite.config.ts         # /api 代理 → :8000
+│   └── dist/                  # 构建产物(vite build 产出,被 gitignore)
+└── .harness/                  # 多 agent 协作脚手架
+    ├── agent.md               # orchestrator 路由与节奏规则
+    ├── reins/
+    │   ├── developer/agent.md # 实施 rein 角色定义
+    │   └── tester/agent.md    # 验证 rein 角色定义
+    ├── docs/                  # 架构 / 开发流程 / 隐私部署
+    └── memory/MEMORY.md       # 团队共享记忆
 ```
 
 > 注:`backend/output/` 和 `backend/logs/` 已在 `.gitignore` 内,只保留在本地不外发。
@@ -111,6 +127,19 @@ npm run dev                       # http://127.0.0.1:5173
 
 ## 后续规划
 
-- **Round 2**: 启用 5 个 role + JD 解析(关键词/匹配度) + LLM 改写项目描述
-- **Round 3**: 求职信/自我介绍生成 + 模板库 + 历史偏好
-- **未来可选**: 多端同步、云端部署(不主动做,看用户需求)
+### ✅ 已完成
+- **Round 1**: 素材库 + 单 role 预览/生成 + fallback 链 + 本地日志
+- **Round 2**: 6 个 role 全启用 + JD 解析/匹配度评分 + LLM 智能改写项目描述 + 前端 JD 评分卡 + `.harness/` 多 agent 协作脚手架
+  - Round 2 收尾 commit: `d932bcc merge: Round 2 integration — JD 解析 + LLM 改写`
+  - 远端: https://github.com/JJ704sd/Resume-Buff
+
+### 🎯 Round 3 候选(等用户拍)
+- **R3-A**: JD 解析升级 — jieba 分词 + 关键词权重 + score 阈值业务化(≥80 推荐投递警告)
+- **R3-B**: LLM prompt 模板库 — 按 role 区分 system prompt(产品/算法/度量风格差异)
+- **R3-C**: LLM 缓存层 — 同 role+intention+bullet 复用上次改写,省 token
+- **R3-D**: 求职信 / 自我介绍生成 — README 之前提的能力,`.docx` 多一份输出
+- **R3-E**: CI / pre-push hook — pytest + vue-tsc + build 自动拦
+- **R3-F**: 异步化 + 评测强化 — Round 2 #3 已知限制 + 8 要素 #6
+
+### 📌 默认不启动(长期 P3,等用户明确)
+- 多端同步、云端部署、账号系统、多用户协作

@@ -659,6 +659,75 @@ class TestBugfixNoDeadCode:
         )
 
 
+class TestBugfixClassifyTierSignature:
+    """回归测试:_classify_tier 返回签名必须与 docstring/类型注解一致。
+
+    之前错误:def 签名写 `-> dict[str, list[str]]` 但实际返回 `list[tuple]`
+    且 docstring 也写 "返回 {tier: [pos, pos, ...]}"。这两个都是错的,
+    维护者按 docstring 以为返回 dict 会 KeyError。
+    """
+
+    def test_classify_tier_returns_list_of_tuples(self):
+        """_classify_tier 必须返回 list[tuple[int, int, str]],不是 dict。"""
+        import inspect
+        import typing
+        from core import jd_parser
+        sig = inspect.signature(jd_parser._classify_tier)
+        # typing.get_type_hints 把字符串 annotation 解析为对象
+        hints = typing.get_type_hints(jd_parser._classify_tier)
+        assert hints["return"] == list[tuple[int, int, str]], (
+            f"_classify_tier 返回类型应是 list[tuple[int, int, str]],"
+            f"实际 {hints['return']}"
+        )
+
+        # 实际跑:有 tier 修饰词时返回 list of (start, end, tier)
+        result = jd_parser._classify_tier("must have python")
+        assert isinstance(result, list), (
+            f"_classify_tier 应返 list,实际 {type(result).__name__}"
+        )
+        # 每个元素是 (start, end, tier) 三元组
+        for span in result:
+            assert isinstance(span, tuple)
+            assert len(span) == 3
+            assert isinstance(span[0], int)  # start
+            assert isinstance(span[1], int)  # end
+            assert isinstance(span[2], str)  # tier
+            assert span[2] in ("required", "preferred", "bonus")
+
+    def test_classify_tier_empty_input_returns_empty_list(self):
+        """空文本 → 返空 list(不是 dict)。"""
+        from core import jd_parser
+        result = jd_parser._classify_tier("")
+        assert result == []
+        assert isinstance(result, list)
+
+    def test_classify_tier_finds_all_occurrences(self):
+        """多次出现的 tier 修饰词 → 全部记录到 spans。"""
+        from core import jd_parser
+        # "must" 出现 3 次
+        text = "must have python, must have docker, must sql"
+        result = jd_parser._classify_tier(text)
+        # 至少 3 个 must span + 0~3 个其他
+        must_spans = [s for s in result if s[2] == "required"]
+        assert len(must_spans) >= 3, (
+            f"must 应出现 3 次,实际 {len(must_spans)} 个 span"
+        )
+
+    def test_classify_tier_long_kw_beats_short_substring(self):
+        """长关键词优先匹配:'nice to have' 不会被 'have' 单独吃掉。"""
+        from core import jd_parser
+        result = jd_parser._classify_tier("nice to have docker")
+        # 'nice to have' (11 字符) 应整体作为 preferred 出现一次
+        # 不应该有单独的 'have' (4 字符) 也作为 preferred 出现
+        preferred_spans = [s for s in result if s[2] == "preferred"]
+        assert len(preferred_spans) == 1, (
+            f"应有 1 个 'nice to have' span,实际 {len(preferred_spans)} 个"
+        )
+        # span 文本 = "nice to have"
+        start, end, _ = preferred_spans[0]
+        assert end - start == len("nice to have")
+
+
 # ======================================================================
 # Round 3 A: match_score 返回里包含 tier_info
 # ======================================================================

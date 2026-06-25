@@ -218,13 +218,15 @@ _TIER_PRIORITY: dict[str, int] = {
 }
 
 
-def _classify_tier(norm_text: str) -> dict[str, list[str]]:
+def _classify_tier(norm_text: str) -> list[tuple[int, int, str]]:
     """
-    在 JD 文本里找出所有 tier 修饰词出现的位置,把文本按 (起始, 结束, tier) 区间记录。
-    返回 {tier: [pos, pos, ...]} 用于后续上下文窗口匹配。
+    在 JD 文本里找出所有 tier 修饰词出现的位置,记录为 (起始, 结束, tier) 区间列表。
+    返回 list[tuple[int, int, str]] 供 _keyword_tier 做上下文窗口距离匹配。
+
+    实现细节:按关键词长度倒序匹配,避免短词先匹配把长词的子串吃掉
+    (例 "nice to have" 必须先于 "have")。
     """
     spans: list[tuple[int, int, str]] = []
-    # 按长度倒序排(避免短词先匹配,把长词的子串吃掉 — 例 "nice to have" 必须先于 "have")
     for tier, kws in _TIER_KEYWORDS.items():
         for kw in sorted(kws, key=len, reverse=True):
             kw_lower = kw.lower()

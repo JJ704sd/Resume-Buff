@@ -117,10 +117,15 @@ function recommendationAlertType(
   if (r === '中') return 'warning'
   return 'error'
 }
-function recommendationAlertText(r: '高' | '中' | '低' | undefined): string {
-  if (r === '高') return '强烈推荐投递 — 关键词覆盖完整,可立即行动'
-  if (r === '中') return '建议补充素材后再投递 — 部分关键词尚可加固'
-  return '需大幅补充素材 — 当前覆盖与岗位要求差距较大'
+function recommendationAlertTitle(r: '高' | '中' | '低' | undefined): string {
+  if (r === '高') return '强烈推荐投递'
+  if (r === '中') return '建议补充素材后再投递'
+  return '需大幅补充素材'
+}
+function recommendationAlertDetail(r: '高' | '中' | '低' | undefined): string {
+  if (r === '高') return '关键词覆盖完整，可立即行动'
+  if (r === '中') return '部分关键词尚可加强，补充后再投递命中率更高'
+  return '当前覆盖与岗位要求差距较大，建议先扩充素材库'
 }
 
 function backToSelect() {
@@ -333,17 +338,15 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                 <!-- Round 3 A: 业务阈值 banner (顶部显眼位置) -->
                 <el-alert
                   :type="recommendationAlertType(jdResult.recommendation)"
-                  :title="recommendationAlertText(jdResult.recommendation)"
+                  :title="recommendationAlertTitle(jdResult.recommendation)"
+                  :description="recommendationAlertDetail(jdResult.recommendation)"
                   :closable="false"
                   show-icon
                   style="margin-bottom: 16px"
                 >
                   <template #default>
-                    <span style="font-weight: 600">
-                      {{ recommendationAlertText(jdResult.recommendation) }}
-                    </span>
-                    <span style="margin-left: 12px; color: #666; font-size: 13px">
-                      阈值:≥80 强烈推荐 · 60-79 建议补充 · &lt;60 需大幅补充 (Round 3.5 调优)
+                    <span style="color: #666; font-size: 12px">
+                      阈值:≥80 强烈推荐 · 60-79 建议补充 · &lt;60 需大幅补充（Round 3.5 调优）
                     </span>
                   </template>
                 </el-alert>

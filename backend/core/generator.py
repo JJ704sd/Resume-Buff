@@ -23,24 +23,66 @@ from docx.oxml.ns import qn
 MATERIALS_PATH = Path(__file__).parent.parent / "data" / "materials.json"
 
 # ----------------------------------------------------------------------
-# 范围声明 (Round 1): 只启用 "tech_metric",其他 5 个 role 暂留 config 但不暴露
+# 范围声明 (Round 2): 启用 6 个 role,覆盖产品 / 算法 / 测试 / 标注 / 度量 / 通用
 # ----------------------------------------------------------------------
-ENABLED_ROLES = ["tech_metric"]
+ENABLED_ROLES = ["tech_metric", "product", "algorithm", "data_annot", "test_qa", "general"]
 
 ROLE_CONFIG = {
+    # ---- Round 1 原保留 ----
     "tech_metric": {
         "intention": "大模型技术度量实习生",
-        "preferred_project_ids": ["tencent_medical_eval", "edan_ecg", "datawhale", "volunteer"],
+        "preferred_project_ids": ["company_medical_eval", "university_ecg", "datawhale", "volunteer"],
         "skill_keys": ["ai_ml", "evaluation_metrics", "tools", "programming_languages", "documentation", "medical"],
         "self_eval_key": "tech_metric",
         "title_color": RGBColor(0x1F, 0x4E, 0x79),  # 深蓝
+        "highlights_fallback": [],  # 空 → 默认 fallback 到 ["general"]
     },
-    # ---- 预留: Round 2 启用 ----
-    # "data_annot": { ... }
-    # "product": { ... }
-    # "algorithm": { ... }
-    # "test_qa": { ... }
-    # "general": { ... }
+    # ---- Round 2 新增 ----
+    "product": {
+        "intention": "AI 产品经理实习生",
+        # 公司医疗评测项目有 product 视角的 highlights(场景矩阵 / Golden Set / Badcase 反馈)
+        "preferred_project_ids": ["company_medical_eval", "datawhale", "volunteer"],
+        "skill_keys": ["ai_ml", "documentation", "data", "tools"],
+        "self_eval_key": "general",  # 暂无 product 专属,降级 general
+        "title_color": RGBColor(0xC0, 0x50, 0x4D),  # 红
+        "highlights_fallback": [],
+    },
+    "algorithm": {
+        "intention": "医疗 AI 算法实习生",
+        # 大学 ECG 项目有 algorithm 专属 highlights(模型复现 / 架构对比 / 训练全流程)
+        "preferred_project_ids": ["university_ecg", "company_medical_eval", "datawhale"],
+        "skill_keys": ["programming_languages", "ai_ml", "tools", "medical", "evaluation_metrics"],
+        "self_eval_key": "general",
+        "title_color": RGBColor(0x2E, 0x75, 0xB6),  # 蓝
+        "highlights_fallback": [],
+    },
+    "data_annot": {
+        "intention": "大模型数据标注实习生",
+        # 公司医疗评测项目有 data_annot 视角(标注准确率 / SOP / 错误样本)
+        "preferred_project_ids": ["company_medical_eval", "datawhale"],
+        "skill_keys": ["documentation", "data", "ai_ml", "medical"],
+        "self_eval_key": "general",
+        "title_color": RGBColor(0x70, 0x80, 0x30),  # 橄榄绿
+        "highlights_fallback": [],
+    },
+    "test_qa": {
+        "intention": "AI 测试 / QA 实习生",
+        # test_qa 没专属 highlights,fallback 到 tech_metric(最接近的测试能力),再降级 general
+        "preferred_project_ids": ["company_medical_eval", "university_ecg", "datawhale"],
+        "skill_keys": ["ai_ml", "evaluation_metrics", "documentation", "tools"],
+        "self_eval_key": "general",
+        "title_color": RGBColor(0x70, 0x33, 0x99),  # 紫
+        "highlights_fallback": ["tech_metric"],
+    },
+    "general": {
+        "intention": "日常实习(通用方向)",
+        # 全部项目都至少有 general 降级
+        "preferred_project_ids": ["company_medical_eval", "university_ecg", "datawhale", "volunteer"],
+        "skill_keys": ["programming_languages", "ai_ml", "tools", "documentation", "data"],
+        "self_eval_key": "general",
+        "title_color": RGBColor(0x60, 0x60, 0x60),  # 灰
+        "highlights_fallback": [],
+    },
 }
 
 SKILL_LABEL = {
@@ -72,10 +114,22 @@ def load_materials() -> dict:
         return json.load(f)
 
 
-def _pick_highlights(project: dict, target_role: str) -> list[str]:
-    """优先用 target_role 专属 highlights,降级 general"""
-    h = project.get("highlights", {})
-    return h.get(target_role) or h.get("general") or []
+def _pick_highlights(project: dict, target_role: str, fallback_chain: Optional[list[str]] = None) -> list[str]:
+    """
+    按 fallback 链顺序挑选 highlights:
+      1. target_role 自己的
+      2. fallback_chain 里指定的角色(按顺序)
+      3. 兜底 "general"
+      4. 空列表(项目没数据)
+    """
+    h = project.get("highlights", {}) or {}
+    if h.get(target_role):
+        return h[target_role]
+    chain = fallback_chain or []
+    for role in chain:
+        if h.get(role):
+            return h[role]
+    return h.get("general", [])
 
 
 # ----------------------------------------------------------------------
@@ -92,7 +146,9 @@ def build_sections(
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
     if target_role not in ENABLED_ROLES:
-        raise ValueError(f"岗位 {target_role} 暂未启用 (Round 1 仅 tech_metric)。")
+        raise ValueError(
+            f"岗位 {target_role} 暂未启用,当前已启用: {ENABLED_ROLES}"
+        )
 
     materials = load_materials()
     role_cfg = ROLE_CONFIG[target_role]
@@ -139,7 +195,9 @@ def build_sections(
                 "role": p["role"],
                 "period": p["period"],
                 "summary": p.get("summary", ""),
-                "highlights": _pick_highlights(p, target_role),
+                "highlights": _pick_highlights(
+                    p, target_role, role_cfg.get("highlights_fallback")
+                ),
                 "tags": p.get("tags", []),
             },
         ))

@@ -41,6 +41,17 @@ class GenerateRequest(BaseModel):
     custom_project_ids: list[str] | None = None
 
 
+# 每个 role 的展示名 + 风格描述(前端 listRoles 用)
+ROLE_DISPLAY = {
+    "tech_metric": ("大模型技术度量", "评测严谨 / 方法论导向"),
+    "product":     ("AI 产品经理",   "用户视角 / 场景驱动"),
+    "algorithm":   ("医疗 AI 算法",   "模型复现 / 架构对比"),
+    "data_annot":  ("大模型数据标注", "准确率导向 / SOP 严谨"),
+    "test_qa":     ("AI 测试 / QA",  "指标体系 / Badcase 归因"),
+    "general":     ("日常实习(通用)", "全面展示 / 不偏科"),
+}
+
+
 @router.get("/roles")
 def list_roles():
     """返回当前启用的岗位方向"""
@@ -49,13 +60,13 @@ def list_roles():
         "roles": [
             {
                 "id": rid,
-                "name": "大模型技术度量",
+                "name": ROLE_DISPLAY.get(rid, (rid, ""))[0],
                 "intention": ROLE_CONFIG[rid]["intention"],
-                "tone": "评测严谨 / 方法论导向",
+                "tone": ROLE_DISPLAY.get(rid, (rid, ""))[1],
             }
             for rid in ENABLED_ROLES
         ],
-        "note": "Round 1 仅启用大模型技术度量,其他 5 个方向 Round 2 解锁",
+        "note": "Round 2 启用全部 6 个岗位方向",
     }
 
 

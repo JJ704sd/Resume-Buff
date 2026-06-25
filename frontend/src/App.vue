@@ -155,7 +155,7 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
               <template #header>
                 <div class="card-header">
                   <span class="card-title">① 选择目标岗位</span>
-                  <el-tag size="small" type="info">Round 1 · 大模型技术度量</el-tag>
+                  <el-tag size="small" type="info">Round 2 · 6 个方向可用</el-tag>
                 </div>
               </template>
 

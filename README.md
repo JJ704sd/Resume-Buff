@@ -26,17 +26,16 @@
 
 ---
 
-## Round 1 当前能力(2026-06-24)
+## Round 2 当前能力(2026-06-25)
 
 | 功能 | 状态 |
 |---|---|
 | 素材库(4 项目 + 7 技能组 + 3 荣誉 + 1 证书) | ✅ |
-| 大模型技术度量方向简历生成 | ✅ |
-| 其他 5 个方向(产品/算法/测试/标注/通用) | ⏸️ Round 2 |
-| 生成预览(按模块) | ✅ |
+| 6 个岗位方向(度量/产品/算法/标注/测试/通用) | ✅ |
+| 生成预览(按模块)+ fallback 链(test_qa → tech_metric → general) | ✅ |
 | 本地日志 `backend/logs/generation.log` | ✅ |
-| JD 解析 / 匹配度评分 | ⏸️ Round 2 |
-| LLM 智能改写项目描述 | ⏸️ Round 2 |
+| JD 解析 / 匹配度评分 | ⏸️ Round 2 #2 |
+| LLM 智能改写项目描述 | ⏸️ Round 2 #3 |
 
 ---
 
@@ -44,7 +43,7 @@
 
 | 要素 | 落地方式 |
 |---|---|
-| **1. 任务边界** | 本 README 顶部明确"做/不做"清单;`ENABLED_ROLES` 写死在代码里,只暴露 `tech_metric` |
+| **1. 任务边界** | 本 README 顶部明确"做/不做"清单;`ENABLED_ROLES` 写死在代码里,Round 2 启用 6 个 role |
 | **2. 上下文** | Round 1 只用"素材库 + role 模板"两样;生成历史/用户偏好留 Round 2 |
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |

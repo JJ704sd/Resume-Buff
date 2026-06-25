@@ -19,6 +19,8 @@ from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
+from core.llm_rewriter import rewrite_highlights, is_llm_enabled
+
 
 MATERIALS_PATH = Path(__file__).parent.parent / "data" / "materials.json"
 
@@ -188,6 +190,19 @@ def build_sections(
         if pid not in proj_map:
             continue
         p = proj_map[pid]
+        proj_highlights = _pick_highlights(
+            p, target_role, role_cfg.get("highlights_fallback")
+        )
+        # Round 2 #3: LLM 智能改写 (无 key / 失败 → 静默回退原文,不破现有 API)
+        if proj_highlights and is_llm_enabled():
+            try:
+                proj_highlights = rewrite_highlights(
+                    proj_highlights,
+                    target_role=target_role,
+                    jd_text=final_intention,
+                )
+            except Exception:
+                pass  # 静默降级 — 高层 build_sections 仍返回原文
         proj_sections.append(Section(
             type="project",
             title=p["name"],
@@ -195,9 +210,7 @@ def build_sections(
                 "role": p["role"],
                 "period": p["period"],
                 "summary": p.get("summary", ""),
-                "highlights": _pick_highlights(
-                    p, target_role, role_cfg.get("highlights_fallback")
-                ),
+                "highlights": proj_highlights,
                 "tags": p.get("tags", []),
             },
         ))

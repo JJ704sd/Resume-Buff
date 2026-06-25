@@ -4,10 +4,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   materialsApi,
   resumeApi,
+  jdApi,
   downloadBlob,
   type MaterialSummary,
   type Role,
   type PreviewResponse,
+  type JdMatchResult,
   type Section,
 } from './api'
 
@@ -18,6 +20,14 @@ const enabledRoles = ref<string[]>([])
 // 表单
 const selectedRole = ref<string>('tech_metric')
 const customIntention = ref<string>('')
+
+// Round 2 #2: JD 解析 + 匹配度评分
+const jdText = ref<string>('')
+const jdLoading = ref(false)
+const jdResult = ref<JdMatchResult | null>(null)
+
+// Round 2 #3: LLM 改写 toggle (UI 提示,实际启用需后端 LLM_API_KEY)
+const llmHintShown = ref(true)
 
 // 流程
 type Stage = 'select' | 'preview' | 'done'
@@ -63,6 +73,40 @@ async function onPreview() {
   } finally {
     loading.value = false
   }
+}
+
+// ---------- Round 2 #2: JD 解析 + 匹配度评分 ----------
+async function onScoreJd() {
+  const text = jdText.value.trim()
+  if (!text) {
+    ElMessage.warning('请粘贴 JD 文本')
+    return
+  }
+  if (!selectedRole.value) {
+    ElMessage.warning('请先选择目标岗位')
+    return
+  }
+  jdLoading.value = true
+  try {
+    jdResult.value = await jdApi.match(text, selectedRole.value)
+  } catch (e: any) {
+    ElMessage.error(`评分失败: ${e?.response?.data?.detail ?? e?.message ?? '未知错误'}`)
+    jdResult.value = null
+  } finally {
+    jdLoading.value = false
+  }
+}
+
+// 分数 → 颜色 (高/中/低)
+function scoreColor(s: number): string {
+  if (s >= 80) return '#67c23a'  // green
+  if (s >= 50) return '#e6a23c'  // orange
+  return '#f56c6c'                // red
+}
+function scoreTag(s: number): 'success' | 'warning' | 'danger' {
+  if (s >= 80) return 'success'
+  if (s >= 50) return 'warning'
+  return 'danger'
 }
 
 function backToSelect() {
@@ -225,6 +269,115 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                 </ul>
               </template>
               <el-skeleton v-else :rows="6" animated />
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- ============ Round 2 #2: JD 解析 · 匹配度评分 ============ -->
+        <el-row :gutter="20" style="margin-top: 20px">
+          <el-col :span="24">
+            <el-card shadow="hover" class="card">
+              <template #header>
+                <div class="card-header">
+                  <span class="card-title">② JD 解析 · 匹配度评分 <el-tag size="small" type="info" style="margin-left: 8px">Round 2 新增 · 可选</el-tag></span>
+                  <el-tag v-if="llmHintShown" size="small" type="warning">
+                    LLM 改写需后端设置 LLM_API_KEY(留空则走原文)
+                  </el-tag>
+                </div>
+              </template>
+
+              <el-form label-position="top">
+                <el-form-item label="粘贴目标岗位 JD 文本(中文/英文均可,支持任意长度)">
+                  <el-input
+                    v-model="jdText"
+                    type="textarea"
+                    :rows="6"
+                    placeholder="例如:招聘大模型评测实习生,要求熟悉 Python/PyTorch,有 LLM 评测经验,本科及以上..."
+                    resize="vertical"
+                  />
+                </el-form-item>
+
+                <el-form-item>
+                  <el-button
+                    type="success"
+                    :loading="jdLoading"
+                    :disabled="!jdText.trim()"
+                    @click="onScoreJd"
+                  >
+                    对当前岗位跑匹配度评分 →
+                  </el-button>
+                  <span class="hint" style="margin-left: 12px">
+                    评分 0-100,绿色 ≥80 可放心投递,橙色 50-79 建议补充素材,红色 <50 需要大幅补充
+                  </span>
+                </el-form-item>
+              </el-form>
+
+              <!-- 评分结果展示 -->
+              <template v-if="jdResult">
+                <el-divider />
+                <el-row :gutter="20">
+                  <el-col :span="6">
+                    <div class="score-box" :style="{ borderColor: scoreColor(jdResult.score) }">
+                      <div class="score-value" :style="{ color: scoreColor(jdResult.score) }">
+                        {{ jdResult.score }}
+                      </div>
+                      <div class="score-label">综合匹配分</div>
+                      <el-tag :type="scoreTag(jdResult.score)" size="small" effect="dark" style="margin-top: 8px">
+                        {{ jdResult.score >= 80 ? '可放心投递' : jdResult.score >= 50 ? '建议补充' : '需大幅补充' }}
+                      </el-tag>
+                    </div>
+                  </el-col>
+                  <el-col :span="6">
+                    <div class="coverage-box">
+                      <div class="coverage-title">三维覆盖率</div>
+                      <div class="coverage-row">
+                        <span class="lbl">技能</span>
+                        <el-progress :percentage="Math.round(jdResult.coverage.skills * 100)" :stroke-width="10" />
+                      </div>
+                      <div class="coverage-row">
+                        <span class="lbl">工具</span>
+                        <el-progress :percentage="Math.round(jdResult.coverage.tools * 100)" :stroke-width="10" />
+                      </div>
+                      <div class="coverage-row">
+                        <span class="lbl">领域</span>
+                        <el-progress :percentage="Math.round(jdResult.coverage.domains * 100)" :stroke-width="10" />
+                      </div>
+                    </div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="kw-box">
+                      <div class="kw-title">
+                        <span>命中 <el-tag size="small" type="success">{{ jdResult.matched_keywords.length }}</el-tag></span>
+                        <span style="margin-left: 16px">缺失 <el-tag size="small" type="danger">{{ jdResult.missing_keywords.length }}</el-tag></span>
+                      </div>
+                      <div class="kw-row">
+                        <span class="kw-lbl">命中:</span>
+                        <span v-for="k in jdResult.matched_keywords" :key="'m-'+k" class="kw-chip matched">{{ k }}</span>
+                        <span v-if="jdResult.matched_keywords.length === 0" class="hint">(无)</span>
+                      </div>
+                      <div class="kw-row">
+                        <span class="kw-lbl">缺失:</span>
+                        <span v-for="k in jdResult.missing_keywords" :key="'x-'+k" class="kw-chip missing">{{ k }}</span>
+                        <span v-if="jdResult.missing_keywords.length === 0" class="hint">(无)</span>
+                      </div>
+                    </div>
+                  </el-col>
+                </el-row>
+
+                <el-alert
+                  v-if="jdResult.suggestions.length"
+                  type="info"
+                  :closable="false"
+                  style="margin-top: 16px"
+                >
+                  <template #title>
+                    <b>补充建议</b>
+                  </template>
+                  <ul style="margin: 4px 0 0 16px; padding: 0; line-height: 1.8">
+                    <li v-for="(s, i) in jdResult.suggestions" :key="i">{{ s }}</li>
+                  </ul>
+                </el-alert>
+              </template>
             </el-card>
           </el-col>
         </el-row>
@@ -439,5 +592,84 @@ body {
   display: flex;
   justify-content: space-between;
   margin-top: 16px;
+}
+
+/* ===== Round 2 #2: JD 评分卡 ===== */
+.score-box {
+  border: 3px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  height: 100%;
+}
+.score-value {
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1;
+}
+.score-label {
+  color: #888;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.coverage-box { padding: 8px 0; }
+.coverage-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #303133;
+}
+.coverage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.coverage-row .lbl {
+  width: 36px;
+  font-size: 13px;
+  color: #555;
+  flex-shrink: 0;
+}
+.coverage-row .el-progress { flex: 1; }
+.kw-box { padding: 8px 0; }
+.kw-title {
+  display: flex;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #303133;
+}
+.kw-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.kw-lbl {
+  font-weight: 600;
+  color: #555;
+  margin-right: 4px;
+  min-width: 36px;
+}
+.kw-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin: 2px 0;
+}
+.kw-chip.matched {
+  background: #f0f9eb;
+  color: #67c23a;
+  border: 1px solid #e1f3d8;
+}
+.kw-chip.missing {
+  background: #fef0f0;
+  color: #f56c6c;
+  border: 1px solid #fde2e2;
 }
 </style>

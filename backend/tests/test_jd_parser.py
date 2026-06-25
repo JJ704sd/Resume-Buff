@@ -10,9 +10,13 @@ JD 解析 + 匹配度评分 — 单元测试 (核心逻辑)
   - coverage 各维度独立计算
   - 错误路径 (invalid target_role)
   - 关键词去重 (NLP / 评测 跨 group 不重复)
+  - KEYWORD_GROUPS 三元组 weight (Round 3 A 新增)
+  - tier 关键词识别 (Round 3 A 新增)
+  - 加权 score / coverage (Round 3 A 新增)
+  - recommendation 业务阈值 (Round 3 A 新增)
 
 运行:
-  cd D:\\r2-jd\\backend
+  cd D:\\r3-jd-upgrade\\backend
   D:\\python3.11\\python.exe -m pytest tests/test_jd_parser.py -v
 """
 import pytest
@@ -230,8 +234,8 @@ class TestMatchScore:
         assert all(v == 1.0 for v in result["coverage"].values())
 
     def test_score_is_integer_in_0_100(self):
-        """score 必须是整数,且在 [0, 100] 区间。"""
-        # 素材库里有 PyTorch + Docker (命中);LoRA 没有 (缺失) → 部分命中
+        """score 必须是整数,且在 [0, 100] 区间(R3 加权算法: PyTorch 命中 + Docker 命中, LoRA 缺失)。"""
+        # 关键:加权 score = (1.0 + 1.0) / (1.0 + 1.0 + 0.5) × 100 = 80
         materials = _minimal_materials(
             ai_ml=["PyTorch 深度学习框架", "Transformer/CNN"],
             tools=["Docker 容器化部署"],
@@ -245,21 +249,22 @@ class TestMatchScore:
         assert 0 <= result["score"] <= 100
         # 部分命中 → 在 (0, 100) 之间
         assert 0 < result["score"] < 100
-        # 命中 2/3 → ~67
-        assert 60 <= result["score"] <= 70
+        # R3 加权:PyTorch (1.0) + Docker (1.0) 命中, LoRA (0.5) 缺失
+        # score = 2.0 / 2.5 × 100 = 80
+        assert result["score"] == 80
 
     def test_coverage_calculated_per_dimension(self):
-        """coverage 必须按 skills/tools/domains 三个维度独立计算。"""
+        """coverage 必须按 skills/tools/domains 三个维度独立计算(R3 加权版)。"""
         materials = _minimal_materials(
-            ai_ml=["PyTorch"],     # pool: PyTorch
-            tools=["Docker"],      # pool: Docker
+            ai_ml=["PyTorch"],     # pool: PyTorch (weight 1.0)
+            tools=["Docker"],      # pool: Docker (weight 1.0)
         )
-        # JD: skills 里 2 个 (PyTorch, LoRA) → 命中 1 / 2 = 0.5
-        #     tools 里 1 个 (Docker) → 命中 1 / 1 = 1.0
+        # JD: skills 里 2 个 (PyTorch 1.0, LoRA 0.5) → 命中 1.0 / 总 1.5 ≈ 0.67
+        #     tools 里 1 个 (Docker 1.0) → 命中 1.0 / 1.0 = 1.0
         #     domains 里 0 个 → 视为 1.0
         text = "PyTorch / LoRA,使用 Docker"
         result = match_score(text, "tech_metric", materials=materials)
-        assert result["coverage"]["skills"] == 0.5
+        assert result["coverage"]["skills"] == 0.67
         assert result["coverage"]["tools"] == 1.0
         assert result["coverage"]["domains"] == 1.0
 
@@ -321,6 +326,264 @@ class TestMatchScore:
         # 关键:suggestion 必须告诉用户"词典不足",而不是误报"无需补充"
         suggestions_text = " ".join(result["suggestions"])
         assert "未识别" in suggestions_text or "关键词词典" in suggestions_text
+
+
+# ======================================================================
+# Round 3 A: KEYWORD_GROUPS 三元组 weight
+# ======================================================================
+class TestKeywordWeight:
+    def test_keyword_weight_default_1(self):
+        """KEYWORD_GROUPS 升级后,每个 tuple 是 (surface, normalized, weight) 三元组。"""
+        # 抽样检查
+        for group_name, kws in KEYWORD_GROUPS.items():
+            for kw in kws:
+                assert isinstance(kw, tuple)
+                assert len(kw) == 3, f"{group_name}.{kw} 应该是三元组"
+                surface, normalized, weight = kw
+                assert isinstance(surface, str)
+                assert isinstance(normalized, str)
+                # weight 必须是 0.5 或 1.0 (MVP 阶段只有这俩)
+                assert weight in (0.5, 1.0), (
+                    f"{group_name}.{kw} weight 应是 0.5/1.0"
+                )
+
+    def test_keyword_weight_addition_bonus(self):
+        """必选 weight=1.0,加分项 weight=0.5。"""
+        # 抽样几个核心必选词
+        for required_kw in ["Python", "PyTorch", "LLM"]:
+            for surface, normalized, weight in KEYWORD_GROUPS["skills"]:
+                if surface == required_kw:
+                    assert weight == 1.0, f"{required_kw} 应是必选 1.0,实际 {weight}"
+        # 加分项
+        for bonus_kw in ["深度学习", "评测", "LoRA"]:
+            for surface, normalized, weight in KEYWORD_GROUPS["skills"]:
+                if surface == bonus_kw:
+                    assert weight == 0.5, f"{bonus_kw} 应是加分 0.5,实际 {weight}"
+
+    def test_score_uses_weighted_matching(self):
+        """score 必须用 KEYWORD_GROUPS 三元组的 weight 加权,不能简单命中率。"""
+        # 素材库有 PyTorch (1.0) + LoRA (0.5)
+        materials = _minimal_materials(ai_ml=["PyTorch 框架", "LoRA 微调"])
+        # JD 命中 PyTorch, LoRA 缺失
+        r1 = match_score("需要 PyTorch", "tech_metric", materials=materials)
+        # score = 1.0 / 1.0 × 100 = 100 (LoRA 没在 JD 里,不扣分)
+        assert r1["score"] == 100
+
+        # JD 同时要 PyTorch + LoRA → 全命中 → 100
+        r2 = match_score("需要 PyTorch 和 LoRA", "tech_metric", materials=materials)
+        assert r2["score"] == 100
+
+        # JD 要 PyTorch + 缺失的 Transformer → 部分命中
+        materials2 = _minimal_materials(ai_ml=["PyTorch 框架"])
+        r3 = match_score("需要 PyTorch 和 Transformer", "tech_metric", materials=materials2)
+        # score = 1.0 / (1.0 + 1.0) × 100 = 50
+        assert r3["score"] == 50
+
+
+# ======================================================================
+# Round 3 A: tier 关键词识别
+# ======================================================================
+class TestTierDetection:
+    def test_tier_required_detected(self):
+        """中文'必须'+近距离关键词 → required tier。"""
+        result = parse_jd("必须熟悉 Python 编程。")
+        assert "Python" in result["tier_info"]["required"]
+        assert result["tier_info"]["preferred"] == []
+        assert result["tier_info"]["bonus"] == []
+
+    def test_tier_preferred_detected(self):
+        """中文'优先'+近距离关键词 → preferred tier。"""
+        result = parse_jd("优先考虑 Docker 经验。")
+        assert "Docker" in result["tier_info"]["preferred"]
+        assert "Docker" not in result["tier_info"]["required"]
+
+    def test_tier_bonus_detected(self):
+        """中文'加分项'+近距离关键词 → bonus tier。"""
+        result = parse_jd("加分项:医疗场景经验。")
+        assert "医疗" in result["tier_info"]["bonus"]
+        assert "医疗" not in result["tier_info"]["required"]
+
+    def test_tier_english_preferred(self):
+        """英文 'Nice to have' / 'preferred' → preferred tier。"""
+        for text in [
+            "Nice to have Docker experience.",
+            "Preferred: Python background.",
+        ]:
+            result = parse_jd(text)
+            # 至少有一个 kw 在 preferred
+            assert any(
+                result["tier_info"]["preferred"]
+            ), f"expected preferred tier in {text!r}, got {result['tier_info']}"
+
+    def test_tier_english_required(self):
+        """英文 'Required' / 'Must have' → required tier。"""
+        result = parse_jd("Required: Python. Must have PyTorch.")
+        assert "Python" in result["tier_info"]["required"]
+        assert "PyTorch" in result["tier_info"]["required"]
+
+    def test_no_tier_keyword_defaults_to_required(self):
+        """没出现任何 tier 修饰词 → 所有 kw 归 required(业务 JD 兜底)。"""
+        result = parse_jd("熟悉 Python 和 Docker 经验。")
+        # 没 tier 修饰词,Python / Docker 都归 required
+        assert "Python" in result["tier_info"]["required"]
+        assert "Docker" in result["tier_info"]["required"]
+        assert result["tier_info"]["preferred"] == []
+        assert result["tier_info"]["bonus"] == []
+
+    def test_tier_context_radius_30(self):
+        """上下文窗口半径 30 字符:超过 30 字符远的 kw 不会被 tier 修饰词影响。"""
+        # "必须" 在最前,Python 紧挨(0 距离),"x" * 35 + Docker(> 30 字符远)
+        text = "必须" + "熟悉" + "Python" + ("x" * 35) + "Docker"
+        result = parse_jd(text)
+        # Python 距"必须" 5 字符 → required
+        assert "Python" in result["tier_info"]["required"]
+        # Docker 距"必须" 5+1+6+35 = 47 字符 → > 30,无 tier 修饰,兜底 required
+        assert "Docker" in result["tier_info"]["required"]
+
+    def test_tier_info_in_response(self):
+        """parse_jd 返回里必须有 tier_info 字段,且结构是 {required, preferred, bonus}。"""
+        result = parse_jd("需要 Python 经验")
+        assert "tier_info" in result
+        assert isinstance(result["tier_info"], dict)
+        assert set(result["tier_info"].keys()) == {"required", "preferred", "bonus"}
+        for v in result["tier_info"].values():
+            assert isinstance(v, list)
+
+
+# ======================================================================
+# Round 3 A: recommendation 业务阈值
+# ======================================================================
+class TestRecommendation:
+    def test_recommendation_high(self):
+        """score >= 80 → '高' (强烈推荐投递)。"""
+        # 素材库: PyTorch + Docker + Git 都有 → 全命中
+        materials = _minimal_materials(
+            ai_ml=["PyTorch 框架", "Transformer", "CNN"],
+            tools=["Docker 容器化", "Git 版本控制", "Linux"],
+        )
+        # JD 要 PyTorch (1.0) + Docker (1.0) → 100% → 100 分 → 高
+        result = match_score("需要 PyTorch 和 Docker", "tech_metric", materials=materials)
+        assert result["score"] >= 80
+        assert result["recommendation"] == "高"
+
+    def test_recommendation_medium(self):
+        """score 60-79 → '中' (建议补充素材后再投递)。"""
+        # 构造一个 score 在 60-79 的场景
+        # JD: PyTorch (1.0) + 缺失的 LoRA (0.5) + 缺失的 Transformer (1.0)
+        # 素材库: 只有 PyTorch
+        # 总 weight = 2.5, hit = 1.0, score = 40 ❌ 不行
+        # 换个组合: JD: PyTorch (1.0) + Docker (1.0) + 缺失的 LoRA (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0/2.5 = 80 → 高 (边界)
+        # 要 60-79:JD: PyTorch (1.0) + 缺失的 Transformer (1.0) + Docker (1.0) + 缺失的 LoRA (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0/3.5 = 57.1 → 57 (太低了)
+        # 最简单:JD 4 个,kw 命中 2 个 (1.0 权重)
+        # score = 2.0 / (2.0 + 1.0 + 0.5) = 2.0/3.5 ≈ 57
+        # 用 2 命中 + 1 缺失必选 + 1 缺失加分
+        # JD: PyTorch (1.0) + Docker (1.0) + 缺失 TensorFlow (1.0) + 缺失 LoRA (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0 / 3.5 = 57 ❌
+        # 试个能到 60-79 的:JD: PyTorch (1.0) + 缺失 LoRA (0.5) + 缺失 FastAPI (0.5) + 缺失 SQL (0.5)
+        # 素材库: 只有 PyTorch
+        # score = 1.0 / 2.5 = 40 ❌
+        # 用 eval/medical role + 多个 0.5 命中
+        materials = _minimal_materials(
+            ai_ml=["PyTorch"],
+            tools=["Docker"],
+            medical=["医疗数据", "医学影像"],  # 提供医疗 domain 命中
+            evaluation_metrics=["BLEU 评测", "Rouge"],  # 提供评测命中
+        )
+        # JD: PyTorch (1.0) + Docker (1.0) + 医疗 (0.5) + 评测 (0.5) + 缺失的 NLP (0.5) + 缺失的 LoRA (0.5)
+        # hit = 1.0 + 1.0 + 0.5 + 0.5 = 3.0
+        # all = 1.0 + 1.0 + 0.5 + 0.5 + 0.5 + 0.5 = 4.0
+        # score = 3.0/4.0 = 75 ✓
+        result = match_score(
+            "需要 PyTorch Docker 医疗 评测 NLP LoRA",
+            "tech_metric",
+            materials=materials,
+        )
+        assert 60 <= result["score"] < 80, f"score {result['score']} not in 60-79"
+        assert result["recommendation"] == "中"
+
+    def test_recommendation_low(self):
+        """score < 60 → '低' (需大幅补充素材)。"""
+        # JD 要 5 个,素材库只有 1 个 → score = 1.0/5.0 = 20
+        materials = _minimal_materials(ai_ml=["PyTorch"])
+        result = match_score(
+            "需要 PyTorch TensorFlow LoRA FastAPI 部署",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] < 60
+        assert result["recommendation"] == "低"
+
+    def test_recommendation_in_match_response(self):
+        """match_score 返回 dict 必须包含 recommendation 字段。"""
+        result = match_score("需要 Python", "tech_metric", materials=_minimal_materials())
+        assert "recommendation" in result
+        assert result["recommendation"] in ("高", "中", "低")
+
+    def test_recommendation_threshold_boundary_80(self):
+        """边界:score 正好 80 → '高'。"""
+        # score = 80 → 高(>= 80)
+        # JD: PyTorch (1.0) + Docker (1.0) + 缺失 LoRA (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0/2.5 = 80
+        materials = _minimal_materials(ai_ml=["PyTorch"], tools=["Docker"])
+        result = match_score(
+            "需要 PyTorch, Docker, LoRA",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] == 80
+        assert result["recommendation"] == "高"
+
+    def test_recommendation_threshold_boundary_60(self):
+        """边界:score 正好 60 → '中'(60-79 是中)。"""
+        # score = 60 → 中
+        # JD: PyTorch (1.0) + Docker (1.0) + Transformer (1.0) + 缺失 LoRA (0.5) + 缺失 FastAPI (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0 / 4.0 = 50 ❌
+        # 试 60:JD: PyTorch (1.0) + Docker (1.0) + 缺失 Transformer (1.0) + 缺失 LoRA (0.5) + 缺失 FastAPI (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0/4.0 = 50 ❌
+        # 试:JD: PyTorch (1.0) + Docker (1.0) + 缺失 LoRA (0.5) + 缺失 FastAPI (0.5) + 缺失 SQL (0.5)
+        # 素材库: PyTorch + Docker
+        # score = 2.0/3.5 ≈ 57 ❌
+        # 用 hit: 3 (1.0) + missing: 1 (1.0) + 2 (0.5)
+        # score = 3/(3+1+1) = 60 ✓
+        # JD: PyTorch + Docker + Git + 缺失 TensorFlow + 缺失 LoRA + 缺失 FastAPI
+        materials = _minimal_materials(ai_ml=["PyTorch"], tools=["Docker", "Git"])
+        result = match_score(
+            "需要 PyTorch Docker Git TensorFlow LoRA FastAPI",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] == 60
+        assert result["recommendation"] == "中"
+
+
+# ======================================================================
+# Round 3 A: match_score 返回里包含 tier_info
+# ======================================================================
+class TestMatchResponseTierInfo:
+    def test_match_response_contains_tier_info(self):
+        """match_score 返回里必须包含 tier_info 字段(从 parse_jd 透传)。"""
+        result = match_score(
+            "必须 Python, 优先 Docker, 加分 医疗",
+            "tech_metric",
+            materials=_minimal_materials(),
+        )
+        assert "tier_info" in result
+        assert isinstance(result["tier_info"], dict)
+        assert set(result["tier_info"].keys()) == {"required", "preferred", "bonus"}
+        # Python 在 must 后 → required
+        assert "Python" in result["tier_info"]["required"]
+        # Docker 在 优先 后 → preferred
+        assert "Docker" in result["tier_info"]["preferred"]
+        # 医疗 在 加分 后 → bonus
+        assert "医疗" in result["tier_info"]["bonus"]
 
 
 # ======================================================================

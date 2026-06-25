@@ -206,15 +206,16 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# tier 在 match_score 中的加权系数
-_TIER_WEIGHT: dict[str, float] = {
-    "required": 1.0,
-    "preferred": 0.6,
-    "bonus": 0.3,
-}
-
 # 上下文窗口半径(字符)
 _TIER_CONTEXT_RADIUS = 30
+
+# Tier 优先级(数字越大 = 越严),仅用于 tier_info 内部"取最严"比较,
+# 不参与 match_score 计算(score 走 KEYWORD_GROUPS weight 1.0/0.5)
+_TIER_PRIORITY: dict[str, int] = {
+    "required": 3,
+    "preferred": 2,
+    "bonus": 1,
+}
 
 
 def _classify_tier(norm_text: str) -> dict[str, list[str]]:
@@ -249,9 +250,12 @@ def _keyword_tier(norm_text: str, surface: str, tier_spans: list[tuple[int, int,
     距离定义:
       - 重叠 (区间相交): 距离 = 0
       - 不重叠: 距离 = 两个区间端点之间的字符数
+
+    注:同一 surface 多次出现,只判断**第一次出现**位置的 tier(MVP 简化;
+    实际 JD 里同一关键词重复出现概率低,第二次出现的 tier 修饰通常与第一次一致)。
     """
     surface_lower = surface.lower()
-    # 拿 surface 的第一次出现(同一 surface 多处都按最近一次 tier 算)
+    # 拿 surface 的第一次出现
     idx = norm_text.find(surface_lower)
     if idx < 0:
         return "required"
@@ -283,8 +287,9 @@ def _parse_tier_info(
     给定 norm_text + 命中关键词,构建 tier_info。
     包含所有命中的关键词,按 tier 分组(上下文窗口法)。
 
-    Tier 优先级:required (1.0) > preferred (0.6) > bonus (0.3)
-    多个 surface 指向同一 normalized,取"最严"的那个(权重最大的)。
+    Tier 优先级(weight, 仅用于内部比较取"最严",不参与 score 计算):
+      required > preferred > bonus
+    多个 surface 指向同一 normalized,取"最严"的那个(优先级最高的)。
 
     关键:只考虑**实际出现在文本里**的 surface(否则同 normalized
     的"未出现 alias"会污染 tier 判断)。
@@ -305,8 +310,8 @@ def _parse_tier_info(
                 if normalized == kw and surface.lower() in norm_text:
                     found = True
                     t = _keyword_tier(norm_text, surface, tier_spans)
-                    # 取"最严"(权重最大)那个
-                    if _TIER_WEIGHT[t] > _TIER_WEIGHT[tier]:
+                    # 取"最严"那个(优先级最高)
+                    if _TIER_PRIORITY[t] > _TIER_PRIORITY[tier]:
                         tier = t
         if not found:
             # 兜底:这个 normalized 没有 surface 出现在文本里(理论不该发生,

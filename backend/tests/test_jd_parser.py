@@ -565,6 +565,101 @@ class TestRecommendation:
 
 
 # ======================================================================
+# Round 3 A bugfix: UI 阈值一致性 + _TIER_WEIGHT 死代码清理
+# ======================================================================
+class TestBugfixThresholdConsistency:
+    """
+    回归测试:前端 scoreColor/scoreTag (App.vue) 必须与后端 _classify_recommendation
+    使用同一阈值 (80/60),否则 score=50-59 时 UI 会同时显示:
+      - el-alert banner: 红色"需大幅补充素材"  (recommendation="低" 按 80/60)
+      - score-tag:      橙色"建议补充"        (按 80/50)
+    文案冲突,用户困惑。
+    """
+
+    def test_score_in_50_59_range_recommendation_is_low(self):
+        """score ∈ [50, 59] → recommendation="低" (前端 banner 应显示红色)。
+
+        构造:素材库只有 PyTorch (1.0),JD 要 PyTorch + 多个缺失 0.5 关键词,
+        score = 1.0 / (1.0 + 0.5*4) = 1/3 ≈ 33 — 太低,换一个组合:
+        JD 要 PyTorch (1.0) + LoRA (0.5) + 缺失 NLP (0.5) + 缺失 SQL (0.5),
+        素材库只有 PyTorch,score = 1/2.5 = 40 — 还是不够 50。
+        试:JD 要 PyTorch (1.0) + Docker (1.0) + 缺失 LoRA (0.5) + 缺失 FastAPI (0.5)
+            + 缺失 SQL (0.5) → score = 2/3.5 ≈ 57 ✓
+        """
+        materials = _minimal_materials(ai_ml=["PyTorch"], tools=["Docker"])
+        result = match_score(
+            "需要 PyTorch Docker LoRA FastAPI SQL",
+            "tech_metric",
+            materials=materials,
+        )
+        assert 50 <= result["score"] < 60, (
+            f"预期 score ∈ [50, 60),实际 {result['score']}"
+        )
+        # 关键断言:UI banner 必须显示"低"(红色),而不是"中"(橙色)
+        assert result["recommendation"] == "低", (
+            f"score={result['score']} 但 recommendation={result['recommendation']!r} "
+            f"→ 前端 banner 与 score-tag 会显示冲突提示"
+        )
+
+    def test_score_in_60_79_range_recommendation_is_medium(self):
+        """score ∈ [60, 79] → recommendation="中" (前端 banner 与 tag 都应显示橙色)。"""
+        # 用现成的 boundary 60 case
+        materials = _minimal_materials(ai_ml=["PyTorch"], tools=["Docker", "Git"])
+        result = match_score(
+            "需要 PyTorch Docker Git TensorFlow LoRA FastAPI",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] == 60
+        assert result["recommendation"] == "中"
+
+    def test_score_above_80_recommendation_is_high(self):
+        """score ≥ 80 → recommendation="高" (banner 与 tag 都应显示绿色)。"""
+        materials = _minimal_materials(
+            ai_ml=["PyTorch 框架"],
+            tools=["Docker 容器化"],
+        )
+        result = match_score(
+            "需要 PyTorch 和 Docker",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] >= 80
+        assert result["recommendation"] == "高"
+
+    def test_score_below_50_recommendation_is_low(self):
+        """score < 50 → recommendation="低" (banner 与 tag 都应显示红色)。"""
+        materials = _minimal_materials(ai_ml=["PyTorch"])
+        result = match_score(
+            "需要 PyTorch TensorFlow LoRA FastAPI 部署",
+            "tech_metric",
+            materials=materials,
+        )
+        assert result["score"] < 50
+        assert result["recommendation"] == "低"
+
+
+class TestBugfixNoDeadCode:
+    """回归测试:_TIER_WEIGHT 死代码已清理,只剩 _TIER_PRIORITY 用于 tier_info 内部比较。"""
+
+    def test_tier_priority_defined(self):
+        """_TIER_PRIORITY 必须存在且包含三档 (score 不参与,仅 tier_info 内部排序)。"""
+        from core import jd_parser
+        assert hasattr(jd_parser, "_TIER_PRIORITY")
+        assert set(jd_parser._TIER_PRIORITY.keys()) == {"required", "preferred", "bonus"}
+        # required 最严,bonus 最弱
+        assert jd_parser._TIER_PRIORITY["required"] > jd_parser._TIER_PRIORITY["preferred"]
+        assert jd_parser._TIER_PRIORITY["preferred"] > jd_parser._TIER_PRIORITY["bonus"]
+
+    def test_tier_weight_dict_removed(self):
+        """_TIER_WEIGHT 死代码已删 — 防止未来再次误用混淆 score 加权逻辑。"""
+        from core import jd_parser
+        assert not hasattr(jd_parser, "_TIER_WEIGHT"), (
+            "_TIER_WEIGHT 已废弃,score 走 KEYWORD_GROUPS weight (1.0/0.5) 而非 tier"
+        )
+
+
+# ======================================================================
 # Round 3 A: match_score 返回里包含 tier_info
 # ======================================================================
 class TestMatchResponseTierInfo:

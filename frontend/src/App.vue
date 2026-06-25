@@ -98,14 +98,16 @@ async function onScoreJd() {
 }
 
 // 分数 → 颜色 (高/中/低)
+// 阈值与后端 _classify_recommendation (80/60) 保持一致 — 否则 score=50-59 时
+// el-alert banner 显示红色"需大幅补充" + score-tag 显示橙色"建议补充",文案冲突
 function scoreColor(s: number): string {
   if (s >= 80) return '#67c23a'  // green
-  if (s >= 50) return '#e6a23c'  // orange
+  if (s >= 60) return '#e6a23c'  // orange
   return '#f56c6c'                // red
 }
 function scoreTag(s: number): 'success' | 'warning' | 'danger' {
   if (s >= 80) return 'success'
-  if (s >= 50) return 'warning'
+  if (s >= 60) return 'warning'
   return 'danger'
 }
 
@@ -326,7 +328,7 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                     对当前岗位跑匹配度评分 →
                   </el-button>
                   <span class="hint" style="margin-left: 12px">
-                    评分 0-100,绿色 ≥80 可放心投递,橙色 50-79 建议补充素材,红色 <50 需要大幅补充
+                    评分 0-100,绿色 ≥80 可放心投递,橙色 60-79 建议补充素材,红色 &lt;60 需要大幅补充
                   </span>
                 </el-form-item>
               </el-form>
@@ -359,7 +361,7 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                       </div>
                       <div class="score-label">综合匹配分</div>
                       <el-tag :type="scoreTag(jdResult.score)" size="small" effect="dark" style="margin-top: 8px">
-                        {{ jdResult.score >= 80 ? '可放心投递' : jdResult.score >= 50 ? '建议补充' : '需大幅补充' }}
+                        {{ jdResult.score >= 80 ? '可放心投递' : jdResult.score >= 60 ? '建议补充' : '需大幅补充' }}
                       </el-tag>
                     </div>
                   </el-col>

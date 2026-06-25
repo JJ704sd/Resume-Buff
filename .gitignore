@@ -33,3 +33,6 @@ backend/data/_private_backup.json
 # 生成产物(本地运行时,不入库;团队/外发时按需)
 backend/output/
 backend/logs/
+
+# Orchestrator scratch (本地规划产物,不入库)
+.mavis/

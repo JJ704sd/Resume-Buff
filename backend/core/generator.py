@@ -22,6 +22,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 from core.llm_rewriter import rewrite_highlights, is_llm_enabled
+from core.jd_ranker import rank_projects, rank_highlights, rank_skill_groups
 
 
 MATERIALS_PATH = Path(__file__).parent.parent / "data" / "materials.json"
@@ -213,15 +214,59 @@ def _pick_highlights(project: dict, target_role: str, fallback_chain: Optional[l
 
 
 # ----------------------------------------------------------------------
+# Round 3 I: JD-driven 上下文工具
+# ----------------------------------------------------------------------
+def _truncate_kw(kw: str, limit: int = 20) -> str:
+    """截断关键词字符串(LLM prompt 注入限长,避免 token 涨)。"""
+    if not kw:
+        return ""
+    s = str(kw)
+    return s if len(s) <= limit else s[:limit]
+
+
+def _build_jd_focus(parsed_jd: Optional[dict]) -> Optional[dict]:
+    """
+    从 parsed JD 构造 LLM prompt 用的 jd_focus dict。
+    字段:
+      - matched:         parsed["raw_keywords"] 全部(去重)+ 截断
+      - missing:         当 parsed 有 matched 但缺 missing 字段时,留空列表(实际 missing 由 match_score 给)
+                         这里 fallback 用 raw_keywords 自身(命中数 > 0 部分)
+      - tier_required:   parsed["tier_info"]["required"]
+      - tier_preferred:  parsed["tier_info"]["preferred"]
+    注:parsed_jd 来自 parse_jd(),没有 missing 字段;若调用方想要 missing,
+    应当用 match_score() 的结果而不是 parse_jd() 的结果。本函数是"无 context 时的最佳努力"。
+    """
+    if not parsed_jd:
+        return None
+    raw = parsed_jd.get("raw_keywords") or []
+    tier = parsed_jd.get("tier_info") or {}
+    return {
+        "matched": [_truncate_kw(k) for k in raw],
+        "missing": [],  # parse_jd 不给 missing;若需要由调用方用 match_score
+        "tier_required": [_truncate_kw(k) for k in (tier.get("required") or [])],
+        "tier_preferred": [_truncate_kw(k) for k in (tier.get("preferred") or [])],
+    }
+
+
+# ----------------------------------------------------------------------
 # Sections 构造 (preview 和 docx 共用这一份)
 # ----------------------------------------------------------------------
 def build_sections(
     target_role: str,
     intention: Optional[str] = None,
     custom_project_ids: Optional[list[str]] = None,
+    *,
+    jd_context: Optional[dict] = None,
 ) -> list[Section]:
     """
     构造完整的简历 sections 列表(可序列化为 JSON 预览,也可喂给 docx 渲染)。
+
+    Round 3 I 新增:可选 jd_context(来自 jd_parser.parse_jd(jd_text))。
+    传 jd_context 时,会:
+      1. 重排 project 列表(按命中 JD 关键词数倒序,tie 时维持 preferred_ids 原顺序)
+      2. 项目内重排 highlights(命中数倒序,维持原顺序在 tie)
+      3. 重排 skill group(组内 item 命中数总和倒序)
+    不传 jd_context / jd_context 为空 dict → 完全走原路径(向后兼容,字节级一致)。
     """
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
@@ -264,13 +309,29 @@ def build_sections(
     # ----- Projects -----
     proj_sections = []
     proj_map = {p["id"]: p for p in materials["projects"]}
-    for pid in preferred_ids:
-        if pid not in proj_map:
-            continue
+
+    # Round 3 I: jd_context 非空时,按命中数重排 project 列表
+    if jd_context:
+        ordered_projects = rank_projects(
+            [proj_map[pid] for pid in preferred_ids if pid in proj_map],
+            jd_context,
+            preferred_order=preferred_ids,
+        )
+        ordered_pids = [p["id"] for p in ordered_projects]
+    else:
+        ordered_pids = [pid for pid in preferred_ids if pid in proj_map]
+
+    # Round 3 I: 构造 jd_focus(供 LLM 改写用),只在 jd_context 存在时构造
+    jd_focus = _build_jd_focus(jd_context) if jd_context else None
+
+    for pid in ordered_pids:
         p = proj_map[pid]
         proj_highlights = _pick_highlights(
             p, target_role, role_cfg.get("highlights_fallback")
         )
+        # Round 3 I: 项目内 highlight 排序(命中数倒序,维持原顺序在 tie)
+        if jd_context and proj_highlights:
+            proj_highlights = rank_highlights(proj_highlights, jd_context)
         # Round 2 #3: LLM 智能改写 (无 key / 失败 → 静默回退原文,不破现有 API)
         if proj_highlights and is_llm_enabled():
             try:
@@ -278,6 +339,7 @@ def build_sections(
                     proj_highlights,
                     target_role=target_role,
                     jd_text=final_intention,
+                    jd_focus=jd_focus,
                 )
             except Exception:
                 pass  # 静默降级 — 高层 build_sections 仍返回原文
@@ -297,7 +359,12 @@ def build_sections(
     # ----- Skills -----
     skills_content = []
     skills = materials["skills"]
-    for key in role_cfg["skill_keys"]:
+    # Round 3 I: jd_context 非空时,按组内 item 命中数重排 skill_keys
+    if jd_context:
+        ordered_skill_keys = rank_skill_groups(role_cfg["skill_keys"], materials, jd_context)
+    else:
+        ordered_skill_keys = role_cfg["skill_keys"]
+    for key in ordered_skill_keys:
         items = skills.get(key, [])
         if not items:
             continue
@@ -673,17 +740,33 @@ def preview_resume(
     intention: Optional[str] = None,
     custom_project_ids: Optional[list[str]] = None,
     template: str = "classic",
+    *,
+    jd_text: Optional[str] = None,
 ) -> dict:
-    """返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)"""
+    """
+    返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
+
+    Round 3 I: jd_text 非空时,parse_jd 一次后传 jd_context 给 build_sections,
+    触发 project / highlight / skill group 按命中数重排;
+    返回额外字段 jd_match_counts(每 project / skill group 的命中关键词数),
+    仅在 jd_text 非空时存在(无 jd 时键也存在但值为 None,前端按 None 不显示角标)。
+    """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
-    sections = build_sections(target_role, intention, custom_project_ids)
-    return {
+
+    jd_context = _resolve_jd_context(jd_text)
+    sections = build_sections(
+        target_role, intention, custom_project_ids, jd_context=jd_context
+    )
+
+    out: dict = {
         "target_role": target_role,
         "template": template,
         "intention": next((s.content["intention"] for s in sections if s.type == "header"), ""),
         "sections": [asdict(s) for s in sections],
+        "jd_match_counts": _build_jd_match_counts(sections, jd_context) if jd_context else None,
     }
+    return out
 
 
 def generate_resume_docx(
@@ -692,7 +775,67 @@ def generate_resume_docx(
     custom_project_ids: Optional[list[str]] = None,
     output_dir: Path = Path("output"),
     template: str = "classic",
+    *,
+    jd_text: Optional[str] = None,
 ) -> Path:
-    """生成定制版简历 .docx(供 preview 确认后调用)"""
-    sections = build_sections(target_role, intention, custom_project_ids)
+    """
+    生成定制版简历 .docx(供 preview 确认后调用)。
+
+    Round 3 I: jd_text 非空时透传到 build_sections,排序逻辑同上。
+    """
+    jd_context = _resolve_jd_context(jd_text)
+    sections = build_sections(
+        target_role, intention, custom_project_ids, jd_context=jd_context
+    )
     return render_docx(sections, target_role, output_dir, template=template)
+
+
+def _resolve_jd_context(jd_text: Optional[str]) -> Optional[dict]:
+    """
+    把 jd_text 原文解析成 parsed_jd dict 供 build_sections 使用。
+    - jd_text 空 / None → None(走原路径,字节级一致)
+    - 非空 → 调 parse_jd
+    """
+    if not jd_text or not jd_text.strip():
+        return None
+    # 局部 import 避免循环 + 单元测试时 jd_parser 已可用
+    from core.jd_parser import parse_jd
+    return parse_jd(jd_text)
+
+
+def _build_jd_match_counts(
+    sections: list[Section], jd_context: dict
+) -> dict:
+    """
+    给 preview 返回追加 jd_match_counts:{projects:[N,N,...], skill_groups:[N,N,...]}
+    数字 = 该 project / skill group 命中 JD 关键词的总数(供前端"命中 N 关键词"角标用)。
+    """
+    keywords: list[str] = jd_context.get("raw_keywords") or []
+
+    projects_count: list[int] = []
+    skill_count: list[int] = []
+
+    for s in sections:
+        if s.type == "project_group":
+            for proj in s.content.get("projects", []):
+                # 拼接项目内所有 highlight 文本(已按 rank_highlights 重排过)
+                hl = proj.get("content", {}).get("highlights", []) or []
+                joined = "\n".join(str(x) for x in hl)
+                projects_count.append(_count_matches_inline(joined, keywords))
+        elif s.type == "skills":
+            for g in s.content.get("groups", []):
+                joined = "\n".join(str(x) for x in g.get("items", []) or [])
+                skill_count.append(_count_matches_inline(joined, keywords))
+
+    return {"projects": projects_count, "skill_groups": skill_count}
+
+
+def _count_matches_inline(text: str, keywords: list[str]) -> int:
+    """跟 jd_ranker._count_matches 同语义(本地复制避免循环 import)。"""
+    if not text or not keywords:
+        return 0
+    n = 0
+    for kw in keywords:
+        if kw and kw in text:
+            n += 1
+    return n

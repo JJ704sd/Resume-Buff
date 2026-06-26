@@ -40,6 +40,9 @@ export interface PreviewResponse {
   template: string  // Round 3 J
   intention: string
   sections: Section[]
+  // Round 3 I: 各 section / 各 project / 各 skill group 的 JD 命中关键词数
+  // (None = 未传 JD,前端不显示角标)
+  jd_match_counts: { projects: number[]; skill_groups: number[] } | null
 }
 
 // ----- Round 2 #2: JD 解析 + 匹配度评分 -----
@@ -78,13 +81,13 @@ export const resumeApi = {
         '/resume/roles'
       )
       .then(r => r.data),
-  preview: (target_role: string, intention?: string, template?: string) =>
+  preview: (target_role: string, intention?: string, template?: string, jd_text?: string | null) =>
     api
-      .post<PreviewResponse>('/resume/preview', { target_role, intention, template })
+      .post<PreviewResponse>('/resume/preview', { target_role, intention, template, jd_text })
       .then(r => r.data),
-  generate: (target_role: string, intention?: string, template?: string) =>
+  generate: (target_role: string, intention?: string, template?: string, jd_text?: string | null) =>
     api
-      .post('/resume/generate', { target_role, intention, template }, { responseType: 'blob' })
+      .post('/resume/generate', { target_role, intention, template, jd_text }, { responseType: 'blob' })
       .then(r => r.data as Blob),
 }
 

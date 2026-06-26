@@ -6,6 +6,7 @@
   - preview()  和 generate_docx() 共享 build_sections() 的输出,保证预览 = 下载
   - Round 1: 规则化选项目 + 模板化排版(不接 LLM)
   - Round 2: 接 LLM 智能改写项目描述(改写层接在 build_sections 之前)
+  - Round 3 J: 5 套排版模板 — classic / single_column / two_column / minimal / technical
 """
 import json
 import re
@@ -18,6 +19,7 @@ from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 from core.llm_rewriter import rewrite_highlights, is_llm_enabled
 
@@ -95,6 +97,82 @@ SKILL_LABEL = {
     "medical": "医学素养",
     "documentation": "文档与协作",
     "data": "数据处理",
+}
+
+
+# ----------------------------------------------------------------------
+# Round 3 J: 5 套排版模板配置
+# ----------------------------------------------------------------------
+# 视觉差异驱动表 — 各 _render_* 通过 layout_cfg 决定表现
+# - use_color=False        → 全文黑,无任何彩色 RGBColor
+# - header_align="left"    → 姓名 / 求职意向 / 联系方式 改左对齐
+# - font_size_body         → _apply_layout_globals 写入 Normal style + 各 helper 默认字号
+# - line_spacing           → _add_text / _add_bullet 行距
+# - margins_cm             → _apply_layout_globals 应用 (top, bottom, left, right)
+# - shaded_highlights=True → 项目 highlights 用浅灰底纹(_add_shaded_highlight)
+# - skill_marker           → 非空时 skills 段前缀(技术感 "■ ")
+# - two_column=True        → 走 _render_two_column,下方 2 栏 table
+LAYOUT_CONFIG = {
+    "classic": {
+        "name": "经典",
+        "description": "居中 header + 彩色 H1,通用排版",
+        "use_color": True,
+        "header_align": "center",
+        "font_size_body": 10.5,
+        "line_spacing": 1.3,
+        "margins_cm": (1.8, 1.8, 2.0, 2.0),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "",
+    },
+    "single_column": {
+        "name": "单栏紧凑",
+        "description": "字号偏小、行距紧,适合 1 页纸",
+        "use_color": True,
+        "header_align": "center",
+        "font_size_body": 10.0,
+        "line_spacing": 1.15,
+        "margins_cm": (1.5, 1.5, 1.8, 1.8),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "",
+    },
+    "two_column": {
+        "name": "双栏",
+        "description": "上方 header,下方 2 栏(技能左 / 项目右)",
+        "use_color": True,
+        "header_align": "center",
+        "font_size_body": 10.5,
+        "line_spacing": 1.25,
+        "margins_cm": (1.8, 1.8, 2.0, 2.0),
+        "two_column": True,
+        "shaded_highlights": False,
+        "skill_marker": "",
+    },
+    "minimal": {
+        "name": "极简",
+        "description": "全黑白、无斜体、无装饰",
+        "use_color": False,
+        "header_align": "center",
+        "font_size_body": 10.5,
+        "line_spacing": 1.3,
+        "margins_cm": (1.8, 1.8, 2.0, 2.0),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "",
+    },
+    "technical": {
+        "name": "技术感",
+        "description": "header 左对齐,skills ■ 前缀,项目高亮带底纹",
+        "use_color": True,
+        "header_align": "left",
+        "font_size_body": 10.5,
+        "line_spacing": 1.3,
+        "margins_cm": (1.8, 1.8, 2.0, 2.0),
+        "two_column": False,
+        "shaded_highlights": True,
+        "skill_marker": "■ ",
+    },
 }
 
 
@@ -250,16 +328,22 @@ def build_sections(
     return sections
 
 
-# ----------------------------------------------------------------------
-# docx 渲染(消费 sections)
-# ----------------------------------------------------------------------
+# ======================================================================
+# docx 渲染 (Round 3 J: 5 套 layout dispatcher)
+# ======================================================================
+# 设计要点:
+# - 所有 helper (容器 = doc 或 cell) 都通过 `container.add_paragraph()` 添加段,
+#   python-docx 的 Document 和 _Cell 都支持 add_paragraph,行为一致。
+# - 视觉差异完全由 layout_cfg 驱动 — _render_classic / _render_single_column /
+#   _render_minimal / _render_technical 共用 _dispatch_section,只是 layout_cfg 不同。
+# - _render_two_column 是结构差异,走 table 布局。
+
 def _set_chinese_font(run, font_name: str = "微软雅黑", size_pt: float = 10.5):
     run.font.name = font_name
     run.font.size = Pt(size_pt)
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
-        from docx.oxml import OxmlElement
         rFonts = OxmlElement("w:rFonts")
         rPr.append(rFonts)
     rFonts.set(qn("w:eastAsia"), font_name)
@@ -267,18 +351,18 @@ def _set_chinese_font(run, font_name: str = "微软雅黑", size_pt: float = 10.
     rFonts.set(qn("w:hAnsi"), font_name)
 
 
-def _setup_doc() -> Document:
-    doc = Document()
+def _apply_layout_globals(doc: Document, layout_cfg: dict) -> Document:
+    """应用 margin / 行距 / Normal style 默认字号 / 中文字体"""
+    top, bottom, left, right = layout_cfg["margins_cm"]
     for section in doc.sections:
-        section.top_margin = Cm(1.8)
-        section.bottom_margin = Cm(1.8)
-        section.left_margin = Cm(2.0)
-        section.right_margin = Cm(2.0)
+        section.top_margin = Cm(top)
+        section.bottom_margin = Cm(bottom)
+        section.left_margin = Cm(left)
+        section.right_margin = Cm(right)
     style = doc.styles["Normal"]
     style.font.name = "微软雅黑"
-    style.font.size = Pt(10.5)
+    style.font.size = Pt(layout_cfg["font_size_body"])
     rPr = style.element.get_or_add_rPr()
-    from docx.oxml import OxmlElement
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
         rFonts = OxmlElement("w:rFonts")
@@ -287,124 +371,295 @@ def _setup_doc() -> Document:
     return doc
 
 
-def _add_h1(doc: Document, text: str, color: RGBColor):
-    p = doc.add_paragraph()
+def _setup_doc(layout_cfg: Optional[dict] = None) -> Document:
+    """创建 Document 并应用 layout 全局参数。layout_cfg=None → classic"""
+    if layout_cfg is None:
+        layout_cfg = LAYOUT_CONFIG["classic"]
+    doc = Document()
+    _apply_layout_globals(doc, layout_cfg)
+    return doc
+
+
+# ---- 段落 helper(签名:container, ...)— container 可以是 Document 或 _Cell ----
+
+def _add_h1(container, text: str, color: RGBColor, layout_cfg: dict):
+    """section 大标题 (e.g. 教育背景) — minimal 时不设 color(默认黑)"""
+    p = container.add_paragraph()
     run = p.add_run(text)
     _set_chinese_font(run, size_pt=12)
     run.bold = True
-    run.font.color.rgb = color
+    if layout_cfg.get("use_color", True) and color is not None:
+        run.font.color.rgb = color
     p.paragraph_format.space_before = Pt(8)
     p.paragraph_format.space_after = Pt(4)
     return p
 
 
-def _add_h2(doc: Document, text: str):
-    p = doc.add_paragraph()
+def _add_h2(container, text: str, layout_cfg: dict):
+    """子标题 (e.g. 项目名 + 角色)"""
+    p = container.add_paragraph()
     run = p.add_run(text)
-    _set_chinese_font(run, size_pt=10.5)
+    _set_chinese_font(run, size_pt=layout_cfg["font_size_body"])
     run.bold = True
     p.paragraph_format.space_before = Pt(4)
     p.paragraph_format.space_after = Pt(2)
     return p
 
 
-def _add_meta_line(doc: Document, text: str):
-    p = doc.add_paragraph()
+def _add_meta_line(container, text: str, layout_cfg: dict):
+    """项目时间 / meta 行 — minimal 时不 italic 不上灰"""
+    p = container.add_paragraph()
     run = p.add_run(text)
     _set_chinese_font(run, size_pt=9)
-    run.italic = True
-    run.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+    if layout_cfg.get("use_color", True):
+        run.italic = True
+        run.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
     p.paragraph_format.space_after = Pt(2)
     return p
 
 
-def _add_text(doc: Document, text: str, size_pt: float = 10):
-    p = doc.add_paragraph()
+def _add_text(container, text: str, layout_cfg: dict, size_pt: Optional[float] = None):
+    """正文段"""
+    p = container.add_paragraph()
+    run = p.add_run(text)
+    if size_pt is None:
+        size_pt = layout_cfg["font_size_body"]
+    _set_chinese_font(run, size_pt=size_pt)
+    p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.3)
+    return p
+
+
+def _add_bullet(container, text: str, layout_cfg: dict, size_pt: Optional[float] = None):
+    """普通 bullet"""
+    if size_pt is None:
+        size_pt = layout_cfg["font_size_body"]
+    p = container.add_paragraph(style="List Bullet")
     run = p.add_run(text)
     _set_chinese_font(run, size_pt=size_pt)
-    p.paragraph_format.line_spacing = 1.3
+    p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.25)
     return p
 
 
-def _add_bullet(doc: Document, text: str):
-    p = doc.add_paragraph(style="List Bullet")
+def _add_shaded_highlight(container, text: str, layout_cfg: dict, size_pt: Optional[float] = None):
+    """浅灰底纹 bullet(technical template 专用)— 用 w:shd 元素 fill=EEEEEE"""
+    if size_pt is None:
+        size_pt = layout_cfg["font_size_body"]
+    p = container.add_paragraph(style="List Bullet")
     run = p.add_run(text)
-    _set_chinese_font(run, size_pt=10)
-    p.paragraph_format.line_spacing = 1.25
+    _set_chinese_font(run, size_pt=size_pt)
+    p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.25)
+    # Add light gray shading to paragraph
+    pPr = p._element.get_or_add_pPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), "EEEEEE")
+    pPr.append(shd)
     return p
 
 
-def render_docx(sections: list[Section], target_role: str, output_dir: Path) -> Path:
-    """根据 sections 生成 .docx"""
+def _add_skill_line(container, label: str, items: list, layout_cfg: dict):
+    """技能行 — technical 模板用 marker (e.g. '■ ') 加前缀"""
+    marker = layout_cfg.get("skill_marker", "") or ""
+    p = container.add_paragraph()
+    text = f"{label}: " + "、".join(items)
+    run = p.add_run(marker + text)
+    _set_chinese_font(run, size_pt=layout_cfg["font_size_body"])
+    p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.3)
+    return p
+
+
+# ---- section 渲染(到 container)----
+
+def _render_header_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    """header(姓名/求职意向/联系方式)— technical 时左对齐"""
+    c = s.content
+    if layout_cfg.get("header_align") == "left":
+        align = WD_ALIGN_PARAGRAPH.LEFT
+    else:
+        align = WD_ALIGN_PARAGRAPH.CENTER
+
+    # 姓名 — 始终大字号 bold,不设 color(默认黑)
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(c["name"])
+    _set_chinese_font(run, size_pt=22)
+    run.bold = True
+    p.paragraph_format.space_after = Pt(4)
+
+    # 求职意向 — minimal 时不上色
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(f"求职意向:{c['intention']}")
+    _set_chinese_font(run, size_pt=11)
+    if layout_cfg.get("use_color", True):
+        run.font.color.rgb = color
+    p.paragraph_format.space_after = Pt(4)
+
+    # 联系方式 — minimal 时不上灰
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(c["contact"])
+    _set_chinese_font(run, size_pt=10)
+    if layout_cfg.get("use_color", True):
+        run.font.color.rgb = RGBColor(0x60, 0x60, 0x60)
+    p.paragraph_format.space_after = Pt(8)
+
+
+def _render_education_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    _add_h1(container, s.title, color, layout_cfg)
+    _add_h2(container, s.content["line"], layout_cfg)
+    if s.content.get("courses"):
+        _add_text(container, f"核心课程:{s.content['courses']}", layout_cfg)
+    for h in s.content.get("highlights", []):
+        _add_bullet(container, h, layout_cfg)
+
+
+def _render_project_group_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    _add_h1(container, s.title, color, layout_cfg)
+    for proj in s.content["projects"]:
+        c = proj["content"]
+        _add_h2(container, f"{proj['title']}  |  {c['role']}", layout_cfg)
+        _add_meta_line(container, c["period"], layout_cfg)
+        if c.get("summary"):
+            _add_text(container, c["summary"], layout_cfg)
+        for h in c.get("highlights", []):
+            if layout_cfg.get("shaded_highlights", False):
+                _add_shaded_highlight(container, h, layout_cfg)
+            else:
+                _add_bullet(container, h, layout_cfg)
+
+
+def _render_skills_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    _add_h1(container, s.title, color, layout_cfg)
+    for g in s.content["groups"]:
+        _add_skill_line(container, g["label"], g["items"], layout_cfg)
+
+
+def _render_honors_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    _add_h1(container, s.title, color, layout_cfg)
+    for item in s.content["items"]:
+        _add_bullet(container, item, layout_cfg)
+
+
+def _render_self_eval_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    _add_h1(container, s.title, color, layout_cfg)
+    for sent in s.content["sentences"]:
+        _add_bullet(container, sent, layout_cfg)
+
+
+def _dispatch_section(container, s: Section, color: RGBColor, layout_cfg: dict):
+    """section → renderer 路由"""
+    if s.type == "header":
+        _render_header_to(container, s, color, layout_cfg)
+    elif s.type == "education":
+        _render_education_to(container, s, color, layout_cfg)
+    elif s.type == "project_group":
+        _render_project_group_to(container, s, color, layout_cfg)
+    elif s.type == "skills":
+        _render_skills_to(container, s, color, layout_cfg)
+    elif s.type == "honors":
+        _render_honors_to(container, s, color, layout_cfg)
+    elif s.type == "self_eval":
+        _render_self_eval_to(container, s, color, layout_cfg)
+
+
+# ---- 5 套 layout renderer ----
+
+def _render_classic(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
+    """classic / single_column / minimal / technical 共用 body — 差异由 layout_cfg 驱动"""
+    color = role_cfg["title_color"]
+    for s in sections:
+        _dispatch_section(doc, s, color, layout_cfg)
+
+
+# 4 个 layout 共享 _render_classic 的 body — 用 alias 表达语义,便于将来差异扩展
+_render_single_column = _render_classic
+_render_minimal = _render_classic
+_render_technical = _render_classic
+
+
+def _add_two_column_table(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
+    """双栏布局:左栏 education/skills/honors,右栏 project_group/self_eval"""
+    color = role_cfg["title_color"]
+    left_types = {"education", "skills", "honors"}
+    right_types = {"project_group", "self_eval"}
+    left_sections = [s for s in sections if s.type in left_types]
+    right_sections = [s for s in sections if s.type in right_types]
+
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False
+
+    # 列宽:页面宽(A4=21cm) 减去左右 margin 后均分
+    _, _, ml, mr = layout_cfg["margins_cm"]
+    page_width_cm = 21.0 - ml - mr
+    col_width = Cm(page_width_cm / 2)
+
+    left_cell, right_cell = table.rows[0].cells
+    left_cell.width = col_width
+    right_cell.width = col_width
+
+    # 清掉 cell 自带的空 paragraph,避免顶端留白
+    for cell in (left_cell, right_cell):
+        if cell.paragraphs:
+            p_el = cell.paragraphs[0]._p
+            p_el.getparent().remove(p_el)
+
+    for s in left_sections:
+        _dispatch_section(left_cell, s, color, layout_cfg)
+    for s in right_sections:
+        _dispatch_section(right_cell, s, color, layout_cfg)
+
+
+def _render_two_column(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
+    """双栏 layout:header 全宽 + 下方 2 栏 table"""
+    color = role_cfg["title_color"]
+    # header 整行渲染
+    for s in sections:
+        if s.type == "header":
+            _dispatch_section(doc, s, color, layout_cfg)
+            break
+    # 其余 sections 进 2 栏 table
+    _add_two_column_table(doc, sections, role_cfg, layout_cfg)
+
+
+# ---- dispatcher 入口 ----
+
+_LAYOUT_DISPATCH = {
+    "classic": _render_classic,
+    "single_column": _render_single_column,
+    "two_column": _render_two_column,
+    "minimal": _render_minimal,
+    "technical": _render_technical,
+}
+
+
+def render_docx(
+    sections: list[Section],
+    target_role: str,
+    output_dir: Path,
+    template: str = "classic",
+) -> Path:
+    """根据 sections 生成 .docx(template: classic / single_column / two_column / minimal / technical)"""
+    if template not in LAYOUT_CONFIG:
+        raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
+    if target_role not in ROLE_CONFIG:
+        raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
+
     materials = load_materials()
     role_cfg = ROLE_CONFIG[target_role]
-    color = role_cfg["title_color"]
+    layout_cfg = LAYOUT_CONFIG[template]
+
     intention = next((s.content["intention"] for s in sections if s.type == "header"), role_cfg["intention"])
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    doc = _setup_doc()
+    doc = _setup_doc(layout_cfg)
 
-    for s in sections:
-        if s.type == "header":
-            c = s.content
-            # 姓名
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(c["name"])
-            _set_chinese_font(run, size_pt=22)
-            run.bold = True
-            p.paragraph_format.space_after = Pt(4)
-            # 求职意向
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(f"求职意向:{c['intention']}")
-            _set_chinese_font(run, size_pt=11)
-            run.font.color.rgb = color
-            p.paragraph_format.space_after = Pt(4)
-            # 联系方式
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(c["contact"])
-            _set_chinese_font(run, size_pt=10)
-            run.font.color.rgb = RGBColor(0x60, 0x60, 0x60)
-            p.paragraph_format.space_after = Pt(8)
-
-        elif s.type == "education":
-            _add_h1(doc, s.title, color)
-            _add_h2(doc, s.content["line"])
-            if s.content.get("courses"):
-                _add_text(doc, f"核心课程:{s.content['courses']}")
-            for h in s.content.get("highlights", []):
-                _add_bullet(doc, h)
-
-        elif s.type == "project_group":
-            _add_h1(doc, s.title, color)
-            for proj in s.content["projects"]:
-                c = proj["content"]
-                _add_h2(doc, f"{proj['title']}  |  {c['role']}")
-                _add_meta_line(doc, c["period"])
-                if c.get("summary"):
-                    _add_text(doc, c["summary"])
-                for h in c.get("highlights", []):
-                    _add_bullet(doc, h)
-
-        elif s.type == "skills":
-            _add_h1(doc, s.title, color)
-            for g in s.content["groups"]:
-                _add_text(doc, f"{g['label']}: " + "、".join(g["items"]))
-
-        elif s.type == "honors":
-            _add_h1(doc, s.title, color)
-            for item in s.content["items"]:
-                _add_bullet(doc, item)
-
-        elif s.type == "self_eval":
-            _add_h1(doc, s.title, color)
-            for sent in s.content["sentences"]:
-                _add_bullet(doc, sent)
+    renderer = _LAYOUT_DISPATCH[template]
+    renderer(doc, sections, role_cfg, layout_cfg)
 
     safe = re.sub(r"[^\w\u4e00-\u9fff]+", "_", intention)
-    filename = f"{materials['basics']['name']}_{safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    filename = f"{materials['basics']['name']}_{safe}_{template}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
     out_path = output_dir / filename
     doc.save(str(out_path))
     return out_path
@@ -417,11 +672,15 @@ def preview_resume(
     target_role: str,
     intention: Optional[str] = None,
     custom_project_ids: Optional[list[str]] = None,
+    template: str = "classic",
 ) -> dict:
-    """返回结构化预览(JSON 友好)"""
+    """返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)"""
+    if template not in LAYOUT_CONFIG:
+        raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
     sections = build_sections(target_role, intention, custom_project_ids)
     return {
         "target_role": target_role,
+        "template": template,
         "intention": next((s.content["intention"] for s in sections if s.type == "header"), ""),
         "sections": [asdict(s) for s in sections],
     }
@@ -432,7 +691,8 @@ def generate_resume_docx(
     intention: Optional[str] = None,
     custom_project_ids: Optional[list[str]] = None,
     output_dir: Path = Path("output"),
+    template: str = "classic",
 ) -> Path:
     """生成定制版简历 .docx(供 preview 确认后调用)"""
     sections = build_sections(target_role, intention, custom_project_ids)
-    return render_docx(sections, target_role, output_dir)
+    return render_docx(sections, target_role, output_dir, template=template)

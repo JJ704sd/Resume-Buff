@@ -41,7 +41,7 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 3-A 收尾后有 **72 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter），全绿
+- 后端 `pytest`：Round 3-J 收尾后有 **88 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts），全绿
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余

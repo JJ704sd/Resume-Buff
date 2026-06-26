@@ -1,0 +1,2317 @@
+{
+  "_meta": {
+    "version": "4.0.0-intern",
+    "generated_at": "2026-06-26",
+    "schema": "v1.0.0 + 三维度评分字段",
+    "scoring_dimensions": {
+      "timeliness": "时效性 0-30 (URL/文本日期线索)",
+      "quality": "质量性 0-40 (职责/要求条数 + 字段完整度)",
+      "authenticity": "真实性 0-30 (来源类型)",
+      "total": "总分 0-100"
+    },
+    "grade_thresholds": {
+      "A": "≥75 直接采用",
+      "B": "60-74 采用 + 标注",
+      "C": "<60 placeholder_url 高风险,待二次验证"
+    },
+    "stats": {
+      "total": 82,
+      "by_grade": {
+        "A": 32,
+        "B": 10,
+        "C": 0
+      },
+      "by_company": {
+        "阿里巴巴": {
+          "A": 5,
+          "B": 1,
+          "C": 0,
+          "total": 6
+        },
+        "腾讯": {
+          "A": 7,
+          "B": 0,
+          "C": 0,
+          "total": 7
+        },
+        "字节跳动": {
+          "A": 7,
+          "B": 2,
+          "C": 0,
+          "total": 9
+        },
+        "京东": {
+          "A": 5,
+          "B": 1,
+          "C": 0,
+          "total": 6
+        },
+        "美团": {
+          "A": 6,
+          "B": 2,
+          "C": 0,
+          "total": 8
+        },
+        "DeepSeek": {
+          "A": 1,
+          "B": 3,
+          "C": 0,
+          "total": 4
+        },
+        "拼多多": {
+          "A": 1,
+          "B": 1,
+          "C": 0,
+          "total": 2
+        }
+      },
+      "by_role": {
+        "product": {
+          "A": 14,
+          "B": 1,
+          "C": 0,
+          "total": 15
+        },
+        "algorithm": {
+          "A": 11,
+          "B": 8,
+          "C": 0,
+          "total": 19
+        },
+        "test_qa": {
+          "A": 7,
+          "B": 0,
+          "C": 0,
+          "total": 7
+        },
+        "data_annot": {
+          "A": 0,
+          "B": 1,
+          "C": 0,
+          "total": 1
+        }
+      },
+      "intern_match": {
+        "strong": 41,
+        "campus_to_intern": 7,
+        "weak": 23,
+        "none": 11
+      }
+    },
+    "notes": [
+      "本评分基于现有 v1.0 JSON 中的 URL/文本字段;未做实时 URL 探活",
+      "placeholder_url = 同 3 个 BOSS URL 占位(782972b13b48bbb503R-2NW-EFVT / 277ce05987fad2fc1H142t-1E1RQ / c8e41d75b92b893503R42tm1ElZR / 0e195c20959bf81f1Hd52dS9F1JR)",
+      "C 级不代表 JD 内容一定假,只代表 URL 不可追溯 + 评分低;建议用 web_search 二次验证后再决定保留/剔除"
+    ],
+    "filter_dimension": "实习岗匹配度（v4 补搜版）",
+    "intern_match_rules": {
+      "strong": "标题/正文/薪资强信号:实习/Intern/元/天/实习生 HC",
+      "campus_to_intern": "校招可转实习:校招/应届/26-27届/经验≤1年/牛客校招页",
+      "weak": "1-3 年初级社招,实习一般不开放",
+      "none": "3+ 年经验或资深岗"
+    },
+    "v4_addon": {
+      "added_count": 0,
+      "total_count": 82,
+      "search_strategy": [
+        "关键词组合 1: 大模型算法 + 实习 + 招聘",
+        "关键词组合 2: AI 产品经理 + 实习生 + nowcoder/boss",
+        "关键词组合 3: 算法实习生 + 大模型/深度学习",
+        "关键词组合 4: DeepSeek/阿里通义/字节 AI + 实习生 + 2026",
+        "关键词组合 5: 大模型数据 + 实习生 + 数据标注",
+        "关键词组合 6: 蚂蚁/京东/美团 + 大模型算法 + 实习生"
+      ],
+      "added_companies": []
+    }
+  },
+  "jds": [
+    {
+      "id": "JD-B010",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节跳动 ByteIntern 2027 届转正实习生（7000+ 名）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海 / 深圳 / 杭州 / 成都",
+      "source_url": "https://jobs.bytedance.com/campus",
+      "source_quality": "trusted",
+      "full_text": "ByteIntern：面向 2027 届毕业生（2026 年 9 月 - 2027 年 8 月期间毕业），为符合岗位要求的同学提供转正机会。\n\n2026 年招聘规模：\n- 字节跳动启动史上规模最大 ByteIntern 计划\n- 面向全球高校拟招聘超 7000 名 2027 届毕业生\n- 研发类岗位 Offer 数量超 4800 个，创历史新高\n- 所有岗位均提供转正机会，整体转正率预计超 50%\n\nAI 类在招岗位：\n- AIGC 算法实习生（智能创作团队）\n- 大模型算法实习生（开发者服务 / Data AML）\n- 豆包大模型算法研究实习生（机器学习中台）\n- 算法实习生（AI 数据与安全）\n- 算法实习生（AI 应用与创新）\n- ByteIntern 多业务方向\n\n工作地点：北京、上海、深圳、杭州、成都等\n\n投递通道：jobs.bytedance.com/campus",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2026-03-06 字节官方启动 2027 届实习",
+        "quality": 42,
+        "quality_reason": "招聘规模 + AI 类岗位 + 工作地点全列",
+        "authenticity": 28,
+        "authenticity_reason": "字节官方校招网站",
+        "total": 100,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 ByteIntern 2027 届转正实习生（7000+ 名）)"
+      ]
+    },
+    {
+      "id": "JD-B011",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "字节跳动 Seed Top Seed 大模型顶尖人才计划（2026/27 届博士）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海 / 深圳 / 杭州 / 成都 / 新加坡 / 悉尼 / 西雅图 / 圣何塞 / 圣地亚哥",
+      "source_url": "https://www.bytedance.com/en/position",
+      "source_quality": "trusted",
+      "full_text": "团队：字节跳动 Seed（基础研究团队）\n\n招聘对象：\n- 全职岗位：博士同学（2026 年 9 月 - 2027 年 8 月期间毕业）\n- 实习岗位：在校博士同学（2026 年 9 月及以后毕业）\n\n研究方向与课题：\n1. 大模型应用\n2. 搜索 / 推荐 / 广告\n3. 计算机体系结构与系统优化\n4. 安全 / AI Safety\n5. 硬件\n6. AI Coding\n7. AIGC\n8. 视频架构\n9. AI for Science\n\n计划优势：\n- 字节唯一为强化大模型人才长期吸引与激励而设立专门的\"虚拟股\"\n- 顶级研究团队（谷歌 DeepMind 副总裁吴永辉等带队）\n- 不限专业背景，更关注研究潜力\n- 招聘标准极高：寻找大模型领域前 5% 的人\n- 2027 届校招计划招募约 100 位大模型方向优秀人才\n- 2026 届 Top Seed 计划招募约 30 位顶尖应届博士",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2025-04-01 字节 Seed 官方启动",
+        "quality": 45,
+        "quality_reason": "招聘对象 + 9 大研究方向 + 福利全列",
+        "authenticity": 28,
+        "authenticity_reason": "字节官方 + 多家媒体（环球网/腾讯/网易）",
+        "total": 100,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "正文/薪资含 '实习岗'"
+      ]
+    },
+    {
+      "id": "JD-T009",
+      "company": "腾讯",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "腾讯 2026 实习生招聘（10000+ 实习岗，AI 大幅扩招）",
+      "salary_range": "未披露",
+      "location": "深圳 / 北京 / 广州 / 上海 / 杭州 / 成都 + 全球",
+      "source_url": "https://careers.tencent.com",
+      "source_quality": "trusted",
+      "full_text": "腾讯宣布正式启动 2026 实习生招聘，全球招 10000+ 位实习生。岗位涉及技术研究、软件开发、产品等。\n\n面向对象：在 2026 年 9 月 - 2027 年 12 月期间的在校大学生\n\n2026 实习生招聘规模：\n- 三年内新增 28000 个校招实习岗位，并加大转化录用\n- 仅 2025 年就会迎来 10000 名校招实习生岗位\n- 六成面向技术人才开放\n- 2026 实习生招聘技术类扩招 36%，产品类扩招 39%\n- AI 相关岗位大幅扩招\n\n招聘岗位涵盖技术、产品、设计、市场、职能等五大类 70 余种岗位，包括大模型、研发、算法、市场、策划、运营、销售、美术等多个岗位职能。\n\n工作地点：深圳、北京、广州、上海、杭州、成都六个城市（深圳岗位占比最高），海外覆盖 20 多个国家和地区（新加坡、美国、英国、日本、荷兰等）",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2025-03-06 腾讯官方启动 2026 实习",
+        "quality": 40,
+        "quality_reason": "招聘规模 + 岗位类型 + 工作地点全列",
+        "authenticity": 28,
+        "authenticity_reason": "腾讯官方招聘 + 多家媒体",
+        "total": 98,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (腾讯 2026 实习生招聘（10000+ 实习岗，AI 大幅扩招）)"
+      ]
+    },
+    {
+      "id": "JD-F001",
+      "company": "第四范式",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "第四范式 大模型算法实习（北京）",
+      "salary_range": "200-400 元/天",
+      "location": "北京",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "公司：第四范式（中国智能决策市场的最大参与者，2023 年发布自研多模态大模型产品\"式说\"）\n\n部门：科技部专注于 AI 大模型、计算机视觉、自然语言处理、机器学习、决策优化、语音等领域的前沿技术研究和应用落地\n\n岗位职责：\n1. 参与机器学习、强化学习等模型的研发、设计、训练调优和部署\n2. 将机器学习、强化学习领域的算法应用于实际场景\n3. 将实践中的创新点以 Github Repo/Paper/Tech Report 等形式开源\n\n岗位要求：\n1. 本科及以上学历，熟悉机器学习、深度学习、数据挖掘、强化学习等方向之一\n2. 熟练掌握 python/C++ 等编程语言\n3. 掌握 AutoML、强化学习、迁移学习、对抗学习、凸优化、搜索、推荐、图神经网络、知识图谱等\n4. 在 ICML/NeurIPS/ICLR/KDD/WebConf/AAAI/IJCAI 等国际顶级会议或期刊上发表过论文者优先\n5. 有大模型多模态领域相关技术经验或竞赛经验\n\n时间要求：本科，5 天/周，最少 3 个月",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 42,
+        "quality_reason": "公司介绍 + 部门介绍 + 职责 3 项 + 任职要求 5 项",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 98,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (第四范式 大模型算法实习（北京）)"
+      ]
+    },
+    {
+      "id": "JD-A009",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "阿里通义实验室 研发实习生（推理/CV/NLP/多模态/ModelScope）",
+      "salary_range": "未披露",
+      "location": "北京 / 杭州",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里巴巴通义实验室研发团队\n\n岗位职责：\n1. 参与大模型推理框架以及定制微调技术的研发与优化\n2. 建设支持高并发访问的弹性平台服务后端，推动大模型在实际业务中的落地\n3. 参与自然语言处理、计算机视觉、语音、多模态模型的研发\n4. 建设中国最具影响力的 AI 模型开源社区（ModelScope）\n5. 分析和处理大规模图计算相关问题，研发高性能图计算系统\n\n任职要求：\n1. 计算机科学或相关专业硕士及以上学历\n2. 具备良好的编程能力和代码风格，有分布式系统开发经验者优先\n3. 加分项：ACM/ICPC 等知名编程竞赛获奖、HuggingFace/ModelScope 平台经验、分布式计算经验",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 40,
+        "quality_reason": "职责 5 项 + 任职要求 3 项",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 96,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里通义实验室 研发实习生（推理/CV/NLP/多模态/ModelScope）)"
+      ]
+    },
+    {
+      "id": "JD-D007",
+      "company": "DeepSeek",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "DeepSeek AGI 大模型实习生（NLP/多模态/视觉）",
+      "salary_range": "500-1000 元/天",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_detail/c6ef4039892b2b8a1HRz29q7ElBW.html",
+      "source_quality": "trusted",
+      "full_text": "公司简介：DeepSeek 是探索通用人工智能（AGI）本质的公司。我们相信大模型是科研+工程+组织的优雅艺术。\n\n实习内容：\n1. 大型语言模型、多模态模型研究，包括模型预训练、理论研究、模型评估等\n2. 计算机视觉研究，包括视觉内容生成、开放场景视觉判别模型\n3. 大模型训练数据构建，训练策略迭代和调优\n\n任职要求：\n1. 计算机及相关专业研究生，特别优秀的本科生亦欢迎申请\n2. 具有扎实的编程功底和 DL/ML 基础，熟练掌握 PyTorch\n3. 顶级 AI 会议论文发表经验或开源项目贡献经验者优先\n4. 自然语言处理、计算机视觉、模型压缩和推理优化等领域经验者优先\n\n实习要求：\n- 实习地：北京中关村融科\n- 实习时间 6 个月以上，每周可以现场实习至少 4 个工作日\n\n我们的优势：\n- 顶尖 GPU 集群算力支持\n- 行业顶尖的实习工资和工作环境\n- 实习期间表现优秀者，可直接获得转正名额\n- 非北京地区学生来京实习有租房补助（3000元/月）\n\n投递邮箱：zy.wu@high-flyer.cn",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "BOSS 直聘 + 脉脉一手实习帖",
+        "quality": 42,
+        "quality_reason": "实习内容 3 项 + 任职要求 4 项 + 福利 4 项",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS 一手实习帖 + 脉脉转发",
+        "total": 96,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (DeepSeek AGI 大模型实习生（NLP/多模态/视觉）)"
+      ]
+    },
+    {
+      "id": "JD-B014",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节跳动 大模型算法实习生 - 开发者 AI 团队",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://jobs.bytedance.com/campus/position/7451809372411300103",
+      "source_quality": "trusted",
+      "full_text": "日常实习：面向全体在校生，为符合岗位要求的同学提供为期 3 个月及以上的项目实践机会。\n\n团队介绍：字节跳动开发者 AI 团队致力于探索 AI 技术在研发体系上应用和落地，覆盖场景包括 AI for Code、AI 在 DevOps 全流程中的落地。\n\n岗位职责：\n1. 负责代码场景的效果优化，深入研究 LLM 后训练等相关技术，提高算法准确率和效率\n2. 分析业务需求，设计并实现适用于不同场景的算法解决方案\n3. 持续跟进 LLM 前沿技术，基于 LLM 完成在代码领域中的复杂任务\n\n职位要求：\n1. 硕士及以上学位在读，计算机、软件工程、人工智能等专业优先\n2. 具有数据建设、指令微调和模型建设经验，具备优秀的代码能力\n3. 熟悉大模型训练、RL 算法者优先；在大模型领域发表过论文者优先\n4. 能连续实习 6 个月及以上，每周出勤 4 天及以上",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "字节官方招聘网站 2026 当季",
+        "quality": 38,
+        "quality_reason": "团队介绍 + 职责 3 项 + 任职要求 4 项",
+        "authenticity": 28,
+        "authenticity_reason": "字节官方招聘网站（recomId 来源）",
+        "total": 96,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 大模型算法实习生 - 开发者 AI 团队)"
+      ]
+    },
+    {
+      "id": "JD-B015",
+      "company": "字节跳动",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "字节跳动 质量技术团队 大模型算法实习生 - 智能交付",
+      "salary_range": "未披露",
+      "location": "北京 / 上海 / 深圳 / 杭州 / 成都",
+      "source_url": "https://jobs.bytedance.com/campus",
+      "source_quality": "trusted",
+      "full_text": "ByteIntern：面向 2027 届毕业生（2026 年 9 月 - 2027 年 8 月期间毕业）\n\n团队：字节跳动质量技术团队，聚焦质量领域前沿创新，打造稳定、高效、领先的质量技术，深度赋能抖音、今日头条、豆包、电商等亿级用户产品。我们通过 AI 来检测代码、架构、产品的缺陷、风险和效果。聚焦智能缺陷检测、GUI agent、AI 评测等前沿方向。\n\n岗位职责：\n1. 负责大模型技术在软件智能交付领域的相关应用技术研发，业务场景包括但不限于知识图谱、代码生成、智能交互、风险预测挖掘、智能归因、缺陷修复、故障自愈\n2. 洞察 AIGC 等前沿技术领域的最新研究成果，探索工业领域落地可行性\n3. 探索大模型技术在研发效能领域中的落地应用\n4. 深度参与项目研发，与产品和业务团队同学保持密切配合\n\n亮点：聚焦 AI 重构测试流程，提升研发效能，从\"自动化\"到\"智能化\"的质量保障新路径。",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2026 当季 ByteIntern",
+        "quality": 38,
+        "quality_reason": "团队介绍 + 职责 4 项",
+        "authenticity": 28,
+        "authenticity_reason": "字节官方招聘网站",
+        "total": 96,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 质量技术团队 大模型算法实习生 - 智能交付)"
+      ]
+    },
+    {
+      "id": "JD-A012",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "阿里巴巴 2027 届实习生招聘（AI 岗占 80%+）",
+      "salary_range": "未披露",
+      "location": "杭州 / 北京 / 上海 / 成都 / 广州 / 深圳",
+      "source_url": "https://new.qq.com/rain/a/20250318A07NQH00",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里巴巴 2027 届实习生招聘（含阿里云、淘天、阿里国际、通义实验室、平头哥等 16 个业务集团）\n\nAI 岗位占比：AI 相关岗位占比超八成\n新增七大 AI 校招岗位类型：\n1. AI 应用研发工程师\n2. AI 应用算法工程师\n3. AI Agent 优化工程师\n4. Agent Infra 工程师\n5. AI 数据工程师\n6. AI Infra 工程师\n7. AI SRE\n\n招聘规模：\n- 阿里云招聘 2000 人\n- 阿里国际招聘 900 人\n- 通义实验室新增七类 AI 岗位\n\n工作地点：杭州、北京、上海、成都、广州、深圳及新加坡、法兰克福等海外城市\n\n投递通道：campus-talent.alibaba.com",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "2025-03-18 蓝鲸新闻发布，面向 2027 届",
+        "quality": 42,
+        "quality_reason": "招聘规模 + 岗位类型 + 业务集团全列",
+        "authenticity": 25,
+        "authenticity_reason": "新闻媒体 + 官方校招通道",
+        "total": 95,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里巴巴 2027 届实习生招聘（AI 岗占 80%+）)"
+      ]
+    },
+    {
+      "id": "JD-A007",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "阿里通义实验室 LLM 研究实习生（AI Search 方向）",
+      "salary_range": "未披露",
+      "location": "北京 / 杭州 / 上海",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里巴巴通义实验室 LLM 研究团队\n\n研究项目主要面向 AI Search 方向的研究，具体工作包括基于文本检索、多模态搜索、检索增强，大模型 CPT、SFT、RewardModel 等工作\n\n职位亮点：\n1. 深度参与最前沿的预训练语言模型相关研究\n2. 与行业内顶尖人才共事，快速成长\n3. 参与国际顶级会议论文撰写与发表\n4. 充足的 GPU 计算资源\n5. 有校招转正机会\n\n任职要求：\n1. 熟练使用 PyTorch 框架进行深度学习模型训练与优化\n2. 拥有扎实的编程基础和出色的工程实现能力\n3. 在相关领域（自然语言处理、信息检索、预训练大模型）有顶会论文（ACL/EMNLP/ICLR/NeurIPS/ICML 等）发表者优先\n4. 实习时间不少于 6 个月",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "牛客网 2025-2026 当季实习专页",
+        "quality": 38,
+        "quality_reason": "职责 5 项亮点 + 任职要求 4 项 + 字段完整",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 94,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里通义实验室 LLM 研究实习生（AI Search 方向）)"
+      ]
+    },
+    {
+      "id": "JD-D006",
+      "company": "DeepSeek",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "DeepSeek 2026 大规模招聘 33 岗（实习同步开放）",
+      "salary_range": "500-1000 元/天（实习）",
+      "location": "北京 / 杭州",
+      "source_url": "https://new.qq.com/rain/a/20250625A05DFN00",
+      "source_quality": "trusted",
+      "full_text": "DeepSeek 在社交平台发布大规模招聘信息，覆盖 7 大类共 33 个岗位，工作地点包括北京和杭州，所有岗位均接受实习。\n\n技术端核心岗位：\n- 全栈开发 / 算法（8 个）\n- AI 搜索算法\n- Agent 底层架构（Harness 团队，对标 Anthropic Claude Code）\n- 超算集群\n- 高性能算子\n- 分布式存储\n- 大模型训推框架\n- AI 跨界技术人才（不设专业背景限制）\n\n产品序列：\n- 通用智能体\n- 多领域专业数据（医学/法律/小语种）\n- AI 创作\n- 情感智能\n- AGI 业务管培生\n\n运维板块：\n- AI 算力集群\n- IDC 机房（覆盖北京、杭州、内蒙古乌兰察布）\n- IT 基础设施\n\nDeepSeek 用人原则：让新人直接承担最核心、最重要的任务。\n\n福利：实习生日薪最高 1000 元，转正 14 薪，年薪百万级。",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2025-06-25 腾讯网最新报道",
+        "quality": 40,
+        "quality_reason": "7 大类 33 岗全列 + 福利",
+        "authenticity": 24,
+        "authenticity_reason": "腾讯网新闻报道",
+        "total": 94,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (DeepSeek 2026 大规模招聘 33 岗（实习同步开放）)"
+      ]
+    },
+    {
+      "id": "JD-T008",
+      "company": "腾讯",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "腾讯 多模态大模型日常算法实习生-2026 届",
+      "salary_range": "未披露",
+      "location": "上海",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "团队：腾讯游戏场景下的多模态大模型算法团队\n\n岗位职责：\n游戏场景下的多模态大模型算法模型构建，任务包括但不限于：游戏场景下的图像理解、多模态等领域的多模态大模型能力建设和工程落地\n\n岗位要求：\n1. 计算机、数学、统计等相关专业研究生及以上学历，或取得读研的本科生\n2. 在多模态大模型方面有一定研究基础，熟悉主流多模态大模型和算法\n3. 较强的工程实现能力，熟练掌握 Python、PyTorch\n4. 有相关项目、竞赛获奖、论文发表者优先\n5. 优秀者沟通表达能力、自驱学习能力\n6. 工作地为上海，实习时间 6 个月以上，长期实习者优先，优秀者可留用\n7. 面向 2026 年及以后毕业的同学",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 38,
+        "quality_reason": "职责 + 任职要求 7 项",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 94,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (腾讯 多模态大模型日常算法实习生-2026 届)"
+      ]
+    },
+    {
+      "id": "JD-H001",
+      "company": "华为云",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "华为云 大模型算法实习（AI 云服务方向）",
+      "salary_range": "300-500 元/天",
+      "location": "杭州",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "团队：华为云 AI 云服务团队\n\n岗位职责：\n1. 负责 AI 云服务上的核心 AI 算法设计和开发\n2. 负责 ML/LLM/AIGC 等某一个或多个方向上的算法优化\n3. 负责 AI 算法的前沿技术跟踪和创新方案设计、实现\n\n岗位要求：\n1. 熟悉 ML/LLM/AIGC 等某一个或多个方向的计算引擎/框架/平台/算法\n2. 掌握 Python/Go/C++ 中至少一种编程语言\n3. 掌握 AI 平台工程优化经历\n4. 模型加速、量化、分布式训练经验优先\n5. AutoML 经验优先\n6. 熟悉 AI 硬件（GPU，Davinci 芯片等）架构、AI 算子加速库、分布式 AI 系统优先\n\n时间要求：5 天/周，最少 2 个月",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 38,
+        "quality_reason": "职责 3 项 + 任职要求 6 项",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 94,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (华为云 大模型算法实习（AI 云服务方向）)"
+      ]
+    },
+    {
+      "id": "JD-A005",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "通义实验室 大模型和智能体算法工程师（实习）",
+      "salary_range": "300-500 元/天",
+      "location": "北京",
+      "source_url": "https://www.nowcoder.com/job/12260",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 跟进大模型前沿进展,负责大模型在百亿级流量搜索和信息流广告客户侧的应用和优化\n2. 跟进和研究前沿 AI Agent 技术,负责效果广告系统 AI Assistant、投放 AI Agent 的研究和落地\n3. 构建商业 Agent 生态基础技术平台能力,包括 Prompt、RAG、LLMs(预训练、微调、RLHF)、数据、评测、agent 框架\n\n任职要求：\n- 2025.11.1 - 2026.10.31 期间毕业的应届生\n- 计算机、数学或统计学相关专业硕士及以上\n- 熟练掌握 Python 和 PyTorch,熟悉 Docker/Linux 开发环境\n- 顶会发表经验(ACL/EMNLP/CVPR/ICCV/NeurIPS)优先\n",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "文本含 2026 校招毕业时间窗口",
+        "quality": 34,
+        "quality_reason": "职责 3 条(12)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网校招专页(一手)",
+        "total": 92,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (通义实验室 大模型和智能体算法工程师（实习）)"
+      ]
+    },
+    {
+      "id": "JD-D005",
+      "company": "DeepSeek",
+      "role_category": "data_annot",
+      "job_type": "ai_pm",
+      "title": "DeepSeek 数据百晓生实习生",
+      "salary_range": "500-550 元/天",
+      "location": "北京 / 杭州",
+      "source_url": "https://bbs.pku.edu.cn/v2/mobile/post-read-single.php?bid=896&postid=27888970",
+      "source_quality": "trusted",
+      "full_text": "团队：DeepSeek AGI 数据团队\n\n工作内容：\n1. 大模型安全：负责构建 LLM 内容安全的能力，比如回复干预、输入安全、输出安全等多层内容安全机制，保证大模型在单轮、多轮场景下的输出内容合规\n2. 数据集相关：根据数据集的设计需求和用途，为数据集标准环节制定详实、全面、可执行的标准；对数据集阶段性质检，迭代标注标准\n\n我们希望你是：\n- 对大模型有基本的了解，对数据集的优劣和评估方法有自己的认识\n- 涉猎广泛、博闻强识，对各行各业的知识都拥有强烈的兴趣\n- 会写简单 python 代码，擅长创作大模型 Prompt\n- 至少实习 6 个月，每周到岗 4 天及以上\n\n薪酬福利：\n- 工作地点/薪酬：北京，500 元/天，中饭公司提供，晚饭 80 元餐补\n- HR 邮箱：mm.han@high-flyer.cn\n- HR 微信：18895606352\n- 实习生和校招全职都有 hc，实习仅限可以长期留用的同学",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "北大 BBS 一手实习帖",
+        "quality": 36,
+        "quality_reason": "工作内容 2 项 + 任职要求 4 项 + 薪酬 4 项",
+        "authenticity": 28,
+        "authenticity_reason": "北大 BBS + HR 邮箱/微信",
+        "total": 92,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (DeepSeek 数据百晓生实习生)"
+      ]
+    },
+    {
+      "id": "JD-M013",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团 2027 届转正实习（3000+ 岗，北斗计划）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海 / 深圳 / 成都 / 广州 / 香港 / 迪拜",
+      "source_url": "https://campus.meituan.com",
+      "source_quality": "trusted",
+      "full_text": "美团 2026 年春季校园招聘：\n- 面向 2026 届毕业生补招至 6000 人\n- 面向 2027 届毕业生开放超过 3000 个转正实习岗位\n- 覆盖技术、产品、商业分析、运营等方向\n\n北斗计划（全年开放）：\n- 面向全球招募尖端校园科技人才\n- 重点聚焦于大模型基座、大模型应用、自动驾驶、无人机、智能决策等前沿技术方向\n\n食杂零售管培生计划：\n- 旨在培养高潜力零售管理人才",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "2025-03-04 美团官方启动 2026 春招",
+        "quality": 36,
+        "quality_reason": "招聘规模 + 北斗计划 + 食杂零售管培生",
+        "authenticity": 26,
+        "authenticity_reason": "美团官方招聘 + 每日经济新闻",
+        "total": 92,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (美团 2027 届转正实习（3000+ 岗，北斗计划）)"
+      ]
+    },
+    {
+      "id": "JD-M012",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "美团大模型基座团队 日常实习生",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/gongsir/c3c269e42b4ec7e00HB40969FQ.html",
+      "source_quality": "trusted",
+      "full_text": "团队：美团大模型基座团队\n\n岗位职责：\n1. 探索 LLM 前沿领域研究，包括但不限于数据建设、模型预训练、模型压缩、推理优化、逻辑推理、智能体、MoE、Scaling law 和模型评估\n2. 负责优化和提升 LLM 对齐效果，包括数据质量优化、指令微调、奖励模型优化、强化学习（RL）策略迭代\n\n岗位基本要求：\n1. 计算机科学、数学、统计学或相关领域的硕士或博士学位\n2. 熟悉 Python、Java 等至少一种编程语言与深度学习框架\n3. 具备 1 年以上 NLP 经验，熟悉 BERT、GPT 等模型\n4. 4 个月以上，每周到岗 4 天以上\n\n岗位亮点：\n1. 能够接触到丰富 GPU 算力和海量数据\n2. 能够触达丰富的业务",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "BOSS 直聘 2026 当季",
+        "quality": 38,
+        "quality_reason": "职责 2 项 + 任职要求 4 项 + 福利 2 项",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS 直聘一手",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (美团大模型基座团队 日常实习生)"
+      ]
+    },
+    {
+      "id": "JD-J007",
+      "company": "京东",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "京东 大模型算法工程师实习（RAG/Agent/Knowledge Graph）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "团队：京东 AI 平台\n\n岗位职责：\n1. 负责基于大模型的算法应用，持续优化 Agent 算法效率和准确性\n2. 研究并实现基于 RAG 的知识增强技术，以提高模型在特定领域的知识理解和生成能力\n3. 负责知识库的构建、维护和优化，包括知识抽取、知识融合、知识表示和知识检索\n4. 与产品团队紧密合作，将研发的技术成果应用于产品\n5. 跟踪最新的人工智能技术发展\n\n岗位要求：\n1. 26 届优先，计算机科学、人工智能或相关领域硕士及以上学历\n2. 熟练掌握 Python 编程语言，有良好的算法和数据结构基础\n3. 有 LangChain 框架经验、有大模型训练和调优经验者优先\n4. 对 Agent、RAG、知识图谱、自然语言处理等技术有深入理解和实践经验",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 38,
+        "quality_reason": "职责 5 项 + 任职要求 4 项",
+        "authenticity": 26,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (京东 大模型算法工程师实习（RAG/Agent/Knowledge Graph）)"
+      ]
+    },
+    {
+      "id": "JD-Q001",
+      "company": "启元世界",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "启元世界 大模型算法实习生（杭州）",
+      "salary_range": "未披露",
+      "location": "杭州",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "公司：启元世界\n\n职位描述：\n1. 积极跟进和探索大模型相关的前沿研究\n2. 参与大规模语言模型应用的算法研发与应用，针对多轮对话生成结果进行调优\n3. 模型预训练相关的数据处理\n\n职位要求：\n1. 机器学习、统计、数学、计算机科学相关专业硕士、博士，或优秀本科\n2. 深度学习方面具备扎实的理论基础和实践经验，熟练掌握 Python/C++/Java 中至少一门语言\n3. 熟悉深度学习框架的使用，包括 Pytorch、transformers 等；熟悉知识问答、搜索、知识图谱等\n4. 熟悉主流 LLM 模型，包括预训练、微调、RLHF 等阶段，发表过相关论文者优先\n5. 有线上对话系统，LLM 模型训练和部署经验者优先\n6. 有流畅的英文科学文献阅读能力",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 38,
+        "quality_reason": "职责 3 项 + 任职要求 6 项",
+        "authenticity": 26,
+        "authenticity_reason": "牛客网一手实习帖",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (启元世界 大模型算法实习生（杭州）)"
+      ]
+    },
+    {
+      "id": "JD-BD001",
+      "company": "BOSS 直聘",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "BOSS 直聘南北阁 大模型研发团队 大模型算法实习生",
+      "salary_range": "500 元/天起",
+      "location": "北京太阳宫冠捷大厦",
+      "source_url": "https://www.sohu.com/a/870948231_121119001",
+      "source_quality": "trusted",
+      "full_text": "公司：BOSS 直聘大模型研发团队\n团队核心成员均为北大毕业，从零自研南北阁系列模型在 Opencompass、FlagEval、AlpacaEval 等国内外知名 Leaderboard 中位于前列，相关成果发表于 NeurIPS/ICLR/NAACL 等顶会。\n\n岗位职责：\n1. 参与百 B 级参数大模型的架构设计与分布式训练优化\n2. 研发高效数据清洗 Pipeline，构建领域增强预训练语料库\n3. 创新模型结构及 KV 计算，优化 Prefill/Decode 两端\n4. 探索 SFT/RL 等对齐技术，提升模型指令遵循与专项能力\n\n岗位要求：\n1. 计算机/数学/EE 相关专业，熟练掌握 PyTorch/TensorFlow 框架\n2. 扎实的算法基础和编码能力\n3. 持续跟踪 LLM 领域进展，能复现最新论文算法\n4. 保证 3 天/周以上出勤，持续实习 6 个月+\n\n你将收获：\n1. 行业竞争力日薪：500 元/天起，优秀者可面议\n2. 深度参与 AGI 进程：从预训练到应用落地的全链路实战\n3. 顶会级资源支持：千卡算力集群 + 闭源数据 + 定期论文研讨会\n4. 高转正优先级：表现优异者直通 2025/2026 校招\n\n投递方式：nanbeige@kanzhun.com",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "搜狐 2025-03 内推帖",
+        "quality": 42,
+        "quality_reason": "团队介绍 + 职责 4 项 + 任职要求 4 项 + 福利 4 项",
+        "authenticity": 24,
+        "authenticity_reason": "搜狐转载内推（带 HR 邮箱）",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (BOSS 直聘南北阁 大模型研发团队 大模型算法实习生)"
+      ]
+    },
+    {
+      "id": "JD-AT001",
+      "company": "蚂蚁集团",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "蚂蚁集团 2026 春招（70%+ AI 岗，大模型/多模态/数据智能）",
+      "salary_range": "未披露",
+      "location": "杭州 / 上海 / 北京 / 香港 / 旧金山 / 伦敦",
+      "source_url": "https://talent.antgroup.com",
+      "source_quality": "trusted",
+      "full_text": "蚂蚁集团 2026 年度春季校园招聘\n\n招聘规模：\n- 技术类岗位占比 85%\n- 超过 70% 岗位与人工智能直接相关\n- 重点布局大模型算法、多模态生成、数据智能、基础平台研发及 AI 安全\n\n招聘对象：面向全球高校，工作地点覆盖 6 城\n\n多模态算法实习岗（智能引擎事业群）：\n- 250-300 元/天，5 天/周，3 个月以上\n- 解决蚂蚁集团中搜索、推荐、广告、安全等多模态场景下的技术难题\n- 硕士及以上学位，图像/NLP/语音识别/视频/CS 等相关领域",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "2026-03-10 蚂蚁官方启动春招",
+        "quality": 36,
+        "quality_reason": "招聘规模 + 重点领域 + 实习岗薪资",
+        "authenticity": 24,
+        "authenticity_reason": "蚂蚁官方招聘 + 牛客 + 观点网",
+        "total": 88,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "正文/薪资含 '实习岗'"
+      ]
+    },
+    {
+      "id": "JD-X001",
+      "company": "小米",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "小米 AI 人才专项（语音/Agent/VLA/端到端算法实习）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海 / 深圳 / 武汉 / 西安 / 南京",
+      "source_url": "https://campus.hr.xiaomi.com/",
+      "source_quality": "trusted",
+      "full_text": "小米集团 2027 届暑期实习招聘：\n- 面向 2027 届毕业生\n- 20 大职类——软件研发、算法、测试、运维、硬件研发、芯片、产品、运营、设计、市场、销售、职能、供应链、服务等\n\nAI 人才专项：\n- 大模型语音方向\n- AI Agent 开发\n- 具身基座 VLA 大模型研究员\n- 端到端算法研究员\n\n小米汽车专项：小米汽车 2027 届转正实习生火热招募\n\n网申截止：即日起至 2026 年 5 月 31 日（招满即止）\n\n投递通道：https://campus.hr.xiaomi.com/",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "2026 当季小米暑期实习",
+        "quality": 36,
+        "quality_reason": "20 大职类 + AI 人才专项 + 汽车专项",
+        "authenticity": 24,
+        "authenticity_reason": "小米官方招聘 + 搜狐报道",
+        "total": 88,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (小米 AI 人才专项（语音/Agent/VLA/端到端算法实习）)"
+      ]
+    },
+    {
+      "id": "JD-W001",
+      "company": "金山办公",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "金山办公（WPS）大模型算法实习（武汉）",
+      "salary_range": "未披露",
+      "location": "武汉",
+      "source_url": "https://www.nowcoder.com/jobs/detail/367875",
+      "source_quality": "trusted",
+      "full_text": "公司：金山办公（WPS）\n地址：武汉洪山区关山大道新发展中心 A 座\n\n实习内容：\n1. 负责文本数据清洗、数据分析等相关工作\n2. 负责模型微调相关任务设计与调优\n3. 负责 AIGC 在办公场景领域的应用的研究及研发，主要场景为 Agent 搭建、代码生成、意图和多轮 function-calling 等\n\n岗位要求：\n1. 硕士及以上学历，人工智能、计算机科学、数学、统计、自动化等相关专业优先\n2. 扎实的算法基础，熟悉 LLM、NLP 相关算法和模型\n3. 动手能力强，有一定的编码与实战能力\n4. 责任心强，有较强的自驱力\n5. 每周至少保证 4 天的全职实习，能实习 3-6 个月\n\n投递邮箱：lijingyi@wps.cn",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "牛客网一手实习帖",
+        "quality": 36,
+        "quality_reason": "公司介绍 + 实习内容 3 项 + 任职要求 5 项",
+        "authenticity": 26,
+        "authenticity_reason": "牛客网一手实习帖（带 HR 邮箱）",
+        "total": 88,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (金山办公（WPS）大模型算法实习（武汉）)"
+      ]
+    },
+    {
+      "id": "JD-S001",
+      "company": "深言科技",
+      "role_category": "data_annot",
+      "job_type": "ai_pm",
+      "title": "深言科技（清华 NLP 孵化） 大模型数据标注实习生",
+      "salary_range": "350-400 元/天",
+      "location": "北京海淀区东升大厦",
+      "source_url": "https://www.zhipin.com/job_pk/0f9cdba024c3b6541HJy2Nq5FlBZ.html",
+      "source_quality": "trusted",
+      "full_text": "公司：深言科技（DeepLang AI）—— 孵化自清华大学计算机系自然语言处理实验室（THUNLP）和北京智源人工智能研究院（BAAI），由欧洲科学院院士领衔担任首席科学家。\n\n职位：大模型数据标注实习生\n\n工作亮点：\n1. 背靠清华大学自然语言处理实验室，有国内顶尖 NLP 技术支持\n2. 目标远大：做国内最好的大规模中文预训练语言模型\n3. 团队有自研大规模中文预训练模型经验，有深厚的 NLP 知识积累\n4. 能与学术牛人一起交流讨论，探索最前沿的技术\n\n其它福利：\n1. 薪资：350-400 元/天，餐补 30 元/天\n2. 地点：北京市海淀区东升大厦 A 座 501\n3. 福利：Mac 笔记本电脑、高清显示器、人体工学椅、免费无限量零食车、免费健身房、下午茶、团建等等",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "BOSS 直聘 2026 当季",
+        "quality": 36,
+        "quality_reason": "公司背景 + 工作亮点 4 项 + 福利 3 项",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS 直聘一手实习帖",
+        "total": 88,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (深言科技（清华 NLP 孵化） 大模型数据标注实习生)"
+      ]
+    },
+    {
+      "id": "JD-A008",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "阿里通义对话智能团队 大模型研究实习生（多模态 Character/RL/Agent）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://blog.csdn.net/c9yv2cf9i06k2a9e/article/details/146330416",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里通义实验室对话智能团队，过去三年发表 60+ 篇国际顶会论文，业务场景包括通义晓蜜、通义星辰、通义灵码\n\n岗位职责：\n1. 多模态 Character 模型的算法研究，探索多模态表征学习与对齐技术\n2. Agentic Reinforcement Learning：研究具备自主决策与持续优化能力的大模型强化学习范式\n3. 可控与可信 AI Agent：研究具备指令跟随、风格与内容可控、安全可靠的通用智能体\n\n任职要求：\n1. 在读博士生，专注于机器学习、AI、智能控制等相关领域\n2. 在深度学习、强化学习、多智能体等领域有深入的研究经验\n3. 在相关研究领域的顶级期刊和会议上发表过论文，至少有一篇一作 CCF-A 级论文\n4. 熟练使用 pytorch/tensorflow 等至少一种主流深度学习框架\n5. 实习岗，wk258730@alibaba-inc.com",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "CSDN 转载内推帖，2026 春实习",
+        "quality": 42,
+        "quality_reason": "职责 3 项 + 任职要求 5 项 + 业务场景具体",
+        "authenticity": 22,
+        "authenticity_reason": "CSDN 转载（可信，有内推邮箱）",
+        "total": 86,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里通义对话智能团队 大模型研究实习生（多模态 Character/RL/Agent）)"
+      ]
+    },
+    {
+      "id": "JD-M009",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "美团基础研发平台 大模型算法实习生（评测）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海",
+      "source_url": "https://www.liepin.com",
+      "source_quality": "trusted",
+      "full_text": "团队：美团基础研发平台，核心是\"零售+科技\"的战略定位\n\n岗位职责：\n负责 LLM 大模型评测算法的研究以及评测模型的训练、优化：\n1. 深入理解大规模语言模型的模型结构、训练过程以及评测方案\n2. 构建 Data-Centric 的数据-训练-评测闭环\n3. 追踪大模型方向的前沿进展\n\n岗位基本需求：\n1. 硕士及以上学历，计算机、数学、统计学或相关专业\n2. 熟悉 Java/Python/C++ 等编程语言\n3. 具有机器学习或深度学习算法的基础知识\n4. 具备 Kaggle 等机器学习比赛获奖、NeurIPS/ACL/EMNLP 顶会论文者优先",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "猎聘 2026 当季",
+        "quality": 38,
+        "quality_reason": "职责 3 项 + 任职要求 4 项",
+        "authenticity": 24,
+        "authenticity_reason": "猎聘一手实习帖",
+        "total": 86,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (美团基础研发平台 大模型算法实习生（评测）)"
+      ]
+    },
+    {
+      "id": "JD-M010",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团到店广告 大模型算法实习生（大模型/因果推断方向）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_pk/016e2c9f9c5d02e51Hd539m9EltV.html",
+      "source_quality": "trusted",
+      "full_text": "团队：美团到店广告平台\n\n岗位职责（以下任一）：\n1. 参与到店广告业务智能问答机器人的研发与业务落地，优化主动拉新与维护场景的任务型对话能力\n2. 参与到店广告业务智能选商策略的迭代，基于因果推断、元学习、运筹优化等技术\n\n岗位要求：\n1. 硕士及以上学历，计算机、人工智能等相关专业背景\n2. 具备良好的编程能力，熟悉 tensorflow/pytorch/spark 至少一种计算框架\n3. 具备强烈的进取心、求知欲及团队合作精神\n4. 加分项：对大语言模型 prompt 工程与微调、因果推断、深度学习与运筹优化等其中一项技术有实践经验；国际顶级会议论文发表",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "BOSS 直聘 2026 当季",
+        "quality": 34,
+        "quality_reason": "职责 2 项 + 任职要求 4 项",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS 直聘一手",
+        "total": 86,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (美团到店广告 大模型算法实习生（大模型/因果推断方向）)"
+      ]
+    },
+    {
+      "id": "JD-A010",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "阿里通义实验室 多模态大模型与智能体研究实习生",
+      "salary_range": "未披露",
+      "location": "北京 / 杭州",
+      "source_url": "https://bbs.pku.edu.cn/v2/mobile/post-read.php?bid=896&threadid=18965892",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里通义实验室\n\n岗位职责：\n1. 探索研究多模态理解大模型的设计与开发，包括生成理解统一、多模态理解、强化学习/RLHF 后训练\n2. 参与研发多模态理解大模型开发等下一代人工智能核心技术\n3. 主要方向为多模态大模型与 GUI Agent\n4. 日常实习，以 project 和 paper 工作为主\n\n任职要求：\n1. 计算机科学、人工智能、机器学习或相关领域的硕士或博士在读\n2. 在自回归模型、多模态生成理解、计算机视觉、NLP、机器学习等一个或多个领域有较深入的研究\n3. 加分项：在 CVPR/ECCV/ICCV/NeurIPS/ICLR/ICML/SIGGRAPH 等顶会发表论文、ACM/ICPC 获奖、多模态/大模型/基础模型项目\n4. 工作地点北京/杭州，zjn271703@alibaba-inc.com",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "北大 BBS 实习帖",
+        "quality": 38,
+        "quality_reason": "职责 4 项 + 任职要求 3 项",
+        "authenticity": 24,
+        "authenticity_reason": "北大 BBS + 阿里邮箱一手投递",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里通义实验室 多模态大模型与智能体研究实习生)"
+      ]
+    },
+    {
+      "id": "JD-V001",
+      "company": "vivo AI Lab",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "vivo AI Lab 多模态大模型算法实习生",
+      "salary_range": "250-450 元/天",
+      "location": "深圳",
+      "source_url": "https://m.yupao.com/zhaogong/338947207.html",
+      "source_quality": "trusted",
+      "full_text": "团队：vivo AI Lab\n\n岗位职责：\n1. 掌握主流多模态大模型的架构与训练策略\n2. 探索前沿的端侧大模型方案，重点关注视觉模块的设计与优化\n3. 参与端侧多模态大模型的训练工作，评估新型结构的实际表现\n4. 整理研究成果，协助撰写并发表学术论文\n\n岗位要求：\n1. 可实习 6 个月及以上者优先考虑\n2. 本岗位拟招收 2 人，招满即止\n\n加分项：\n- 有顶会论文发表经历\n- 具备大型企业实习项目经验\n- 在机器学习相关竞赛中取得优异成绩\n- 拥有特殊的视觉语言模型（VLM）训练经验，例如 OCR 大模型训练背景",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "鱼泡直聘 2026 当季",
+        "quality": 36,
+        "quality_reason": "职责 4 项 + 加分项 4 项",
+        "authenticity": 22,
+        "authenticity_reason": "鱼泡直聘（可信，岗位描述详细）",
+        "total": 82,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (vivo AI Lab 多模态大模型算法实习生)"
+      ]
+    },
+    {
+      "id": "JD-K001",
+      "company": "Kimi 月之暗面",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "Kimi 月之暗面 穿越计划（顶尖人才校招实习）",
+      "salary_range": "未披露",
+      "location": "未披露",
+      "source_url": "https://mp.weixin.qq.com/s/PZ9Tj5OL0df9r2qpUSuSrA",
+      "source_quality": "trusted",
+      "full_text": "团队：Kimi（月之暗面）\n\n计划名称：\"穿越计划\"顶尖人才校招项目\n\n面向人群：2027 届毕业生\n\n首批名额：仅 16 人\n\n硬性门槛：几乎没有硬性条件限制，不限岗位类型，不限专业、学历和经验，核心只看候选人的天赋与潜力\n\n核心福利：\n1. 入选者在通过 3-6 个月的实习考察后，即便尚未正式毕业，也将被直接授予公司期权\n2. 公司将按 2026 年实习开始时的当期期权单价授予期权，股数锁定，归属期随即开始计算\n\n公司风格：\n- 极度扁平化管理\n- 没有职级和强制 OKR\n- 创始人曾为招揽一名核心技术人才专程从北京飞赴深圳长谈十个小时\n\n投递方式：https://mp.weixin.qq.com/s/PZ9Tj5OL0df9r2qpUSuSrA（目前以邮件投递为主）",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "Kimi 公众号 / 微信官方",
+        "quality": 36,
+        "quality_reason": "项目名 + 福利 + 公司风格",
+        "authenticity": 22,
+        "authenticity_reason": "Kimi 官方公众号",
+        "total": 82,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (Kimi 月之暗面 穿越计划（顶尖人才校招实习）)"
+      ]
+    },
+    {
+      "id": "JD-SH001",
+      "company": "MiniMax",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "MiniMax 大模型算法实习生（多模态/数据方向）",
+      "salary_range": "未披露",
+      "location": "上海",
+      "source_url": "https://www.zhipin.com/job_detail/9a20df9bfc480f3d03R60tS0ElBQ.html",
+      "source_quality": "trusted",
+      "full_text": "团队：MiniMax 大模型团队（自研 MiniMax / MiniMax-01 系列）\n\n岗位职责：\n1. 研发超大规模多模态模型，进行极致的系统优化\n2. 将多模态大模型应用于图像理解、逻辑推理等领域\n3. 大模型训练数据构建\n\n职位要求：\n1. 技术热情：相信 AGI 技术的潜力，会主动了解行业进展，敢于挑战技术边界\n2. 对数据有理解，有大规模数据处理经验\n3. 优秀的代码能力和机器学习基础\n4. 熟练使用 AI 工具（ChatGPT 等）\n5. 理解多模态视觉理解的原理，有实际研发经验者优先\n6. 能够独立解决复杂的技术问题，主导或者参与过具有影响力的项目优先",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "BOSS 直聘 2026 当季",
+        "quality": 34,
+        "quality_reason": "职责 3 项 + 任职要求 6 项",
+        "authenticity": 24,
+        "authenticity_reason": "BOSS 直聘一手",
+        "total": 82,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (MiniMax 大模型算法实习生（多模态/数据方向）)"
+      ]
+    },
+    {
+      "id": "JD-BD002",
+      "company": "百度",
+      "role_category": "data_annot",
+      "job_type": "ai_pm",
+      "title": "百度 AI 大模型理工科数据分析师实习生",
+      "salary_range": "300-360 元/天",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_pk/0f9cdba024c3b6541HJy2Nq5FlBZ.html",
+      "source_quality": "trusted",
+      "full_text": "公司：百度\n\n岗位职责：\n1. 负责大模型理工科相关的数据分析和规范制定\n2. 负责大模型理工科的数据标注管理和审核\n3. 负责统筹和协调项目进展等\n\n任职资格：\n1. 理工科如：物理、材料学、化学、生物等专业\n2. 计算能力强、会使用 LaTeX 语法者优先\n3. 在校专业成绩优秀者优先\n4. 对 AI 技术感兴趣，积极主动，善于沟通\n5. 知识面广，爱好广泛，有好奇心\n6. 学习能力和抗压能力强，认真细心、踏实负责者优先\n\n附加 AI 大模型数据标注实习：\n- 500-550 元/天\n- 主要负责根据客户/PM 提供的项目信息，通过试标数据完善内容标准\n- 研究生及以上（985、211），专业为汉语言文学、中国古典文献学、新媒体专业相关者优先",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "BOSS 直聘 2026 当季",
+        "quality": 34,
+        "quality_reason": "岗位职责 3 项 + 任职资格 6 项",
+        "authenticity": 24,
+        "authenticity_reason": "BOSS 直聘一手",
+        "total": 82,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (百度 AI 大模型理工科数据分析师实习生)"
+      ]
+    },
+    {
+      "id": "JD-B012",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节跳动 Seed-大模型应用算法实习生/校招",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://bbs.pku.edu.cn/v2/mobile/post-read.php?bid=896&threadid=18969570",
+      "source_quality": "trusted",
+      "full_text": "团队：字节跳动 Seed 团队\n\n实习、校招、社招都有\n\n岗位职责：\n1. 利用大模型优化搜索相关性、权威性、时效性等模型，解决各种复杂长尾查询的 Ranking 问题\n2. 利用大模型做 DOC 理解，筛选优质 DOC 以及更好支持在线检索\n3. 大模型在搜索召回和粗排等阶段的应用\n\n任职要求：\n1. 优秀的代码能力、数据结构和基础算法功底，熟练掌握 C/C++ 或 Python\n2. 熟悉深度学习和 LLM 相关的算法和技术，有一定的算法应用实习经验\n3. 良好的沟通协作能力，有出色的数据和问题分析能力\n4. 搜索算法经验以及 ACM/ICPC/NOI/IOI/Top Coder/Kaggle 等比赛获奖者优先\n\n投递邮箱：357152862@qq.com",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "北大 BBS 实习帖",
+        "quality": 36,
+        "quality_reason": "职责 3 项 + 任职要求 4 项",
+        "authenticity": 22,
+        "authenticity_reason": "北大 BBS（团队直推）",
+        "total": 80,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 Seed-大模型应用算法实习生/校招)"
+      ]
+    },
+    {
+      "id": "JD-B013",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节跳动 Data 电商团队 大模型算法实习生",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.sohu.com/a/841375193_121119001",
+      "source_quality": "trusted",
+      "full_text": "团队：字节跳动 Data-电商团队\n\n岗位职责：\n1. 电商场景下多模态大模型的技术探索，包括多模态大模型的 CPT、SFT、RLHF，并实现业务落地\n2. 电商场景下的机器审核场景 Benchmark 构建、大模型预训练与微调、Agent 搭建\n\n岗位要求：\n1. 代码能力、深度模型工程能力优秀，有相关论文、比赛、项目经历者优先\n2. 能实习 6 个月以上，2026 届应届生优先\n3. 有大模型/多模态大模型（包括不限于 llama/llava/Qwen 等）学习基础、模型训练基础（SFT 等）、相关项目比赛经历优先\n4. 有基础模型（包括不限于 CLIP/Beit 等）大规模预训练经验（预训练/下游微调等）、项目比赛经历优先\n\n福利待遇：\n1. 实习工资待遇好、福利待遇完善\n2. 业务场景核心，项目完成度好的同学未来有机会转正留用\n\n投递方式：chenhaobo.1013@bytedance.com",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "搜狐 2024 内推帖（持续）",
+        "quality": 36,
+        "quality_reason": "职责 2 项 + 任职要求 4 项 + 福利 2 项",
+        "authenticity": 22,
+        "authenticity_reason": "搜狐转载内推（带 HR 邮箱）",
+        "total": 80,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 Data 电商团队 大模型算法实习生)"
+      ]
+    },
+    {
+      "id": "JD-B016",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节跳动 豆包大模型 机器学习方向算法实习生",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.sohu.com/a/878735180_121956424",
+      "source_quality": "trusted",
+      "full_text": "团队：字节跳动豆包大模型团队（2023 年成立）\n\n研究方向：自然语言处理（NLP）、计算机视觉（CV）、语音识别等多个领域，分布于中国、新加坡和美国等地\n\n具体的岗位职责：\n1. 参与字节跳动机器学习平台的开发与维护\n2. 参与设计和实现机器学习基础设施、框架及工具链\n3. 共同开发和优化自动评估大模型的技术\n4. 探索最新的机器学习技术\n\n岗位要求：\n1. 能够保证至少 3 个月的实习时间\n2. 扎实掌握计算机数据结构、操作系统和网络等基础知识\n3. 熟练使用 Python 或 Golang 编程语言\n4. 加分项：了解大模型、多模态大模型、智能代理；MySQL、Redis、Kafka、Ray、HDFS、Spark、Flink 等服务端和大数据开发经验",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "搜狐 2025 内推帖",
+        "quality": 36,
+        "quality_reason": "职责 4 项 + 任职要求 4 项",
+        "authenticity": 22,
+        "authenticity_reason": "搜狐转载内推",
+        "total": 80,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (字节跳动 豆包大模型 机器学习方向算法实习生)"
+      ]
+    },
+    {
+      "id": "JD-A014",
+      "company": "AMD",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "AMD 大模型压缩算法实习生（量化/剪枝/蒸馏）",
+      "salary_range": "未披露",
+      "location": "北京朝阳安贞门",
+      "source_url": "https://bbs.pku.edu.cn/v2/mobile/post-read.php?bid=896&threadid=18975065",
+      "source_quality": "trusted",
+      "full_text": "团队：AMD AI 研究团队\n\n实习时间：2026.01 - 2026.06\n\n职位描述：负责 LLM 量化（INT4/INT8/FP8）、剪枝、蒸馏等技术的算法研究或工程落地\n\n任职要求：\n1. 掌握 Python/C++ 编程，具备扎实的算法与数据结构基础\n2. 熟悉常见模型结构：如 Transformer、Resnet 等，了解大模型（如 LLaMA、QWEN、GPT 系列）的结构特点\n3. 掌握至少 1 种模型压缩技术（如量化、剪枝、蒸馏），有实际工程落地优先\n4. 发表过 ICML、NIPS、ACL、CVPR 等顶会优先\n\n其他：\n1. base 在北京市朝阳区安贞门地铁站附近，可远程\n2. 有转正名额给前 mentor 招人，组内氛围极其 nice\n3. mentor 人非常好，做的方向属于 LLM 落地很火的方向，能学到很多\n\n简历收件邮箱：larryli2@amd.com",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "北大 BBS 实习帖",
+        "quality": 36,
+        "quality_reason": "职位描述 + 任职要求 4 项 + 其他福利 3 项",
+        "authenticity": 22,
+        "authenticity_reason": "北大 BBS（团队直推）",
+        "total": 80,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (AMD 大模型压缩算法实习生（量化/剪枝/蒸馏）)"
+      ]
+    },
+    {
+      "id": "JD-A011",
+      "company": "阿里巴巴",
+      "role_category": "data_annot",
+      "job_type": "ai_pm",
+      "title": "阿里智能信息 大模型 AI 数据工程实习生（夸克/UC）",
+      "salary_range": "未披露",
+      "location": "北京 / 杭州",
+      "source_url": "https://www.163.com/dy/article/JM7PLH9G0514CESC.html",
+      "source_quality": "trusted",
+      "full_text": "团队：阿里智能信息事业群（夸克 App、UC 浏览器、书旗小说、超级汇川）\n\n岗位：大模型 AI 数据工程实习生\n\n我们希望你是：\n1. 不限专业、不限毕业时间，只要你对 AI 充满兴趣，那就有机会加入我们！\n2. 对 AGI 时代充满热情，积极看待变化、差距，对未知的可能性充满信心\n3. 具备较好的表达能力，对复杂任务的统筹和优化能力\n4. 对大模型有基本了解，有产品设计、交互界面设计或数据标注经验者优先\n5. 具备充足的实习时间，每周到岗 4 天及以上\n\n收获：\n1. 全球顶级 AI 专家指导，直接参与业内领先大模型的构建\n2. 深度业务场景参与，为亿级用户提供智能服务\n3. 通过深入理解数据与模型的交互，提升跨学科思维能力\n4. 校招转正直通卡\n\n投递链接：https://talent.quark.cn/campus/qrcode/home",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "Hi 实习 2026 春招专页",
+        "quality": 32,
+        "quality_reason": "资格要求 5 项 + 收获 4 项",
+        "authenticity": 22,
+        "authenticity_reason": "网易订阅转载 + 官方校招官网投递",
+        "total": 76,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (阿里智能信息 大模型 AI 数据工程实习生（夸克/UC）)"
+      ]
+    },
+    {
+      "id": "JD-M011",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团 语音大模型算法实习生",
+      "salary_range": "3000-4000 元/月",
+      "location": "北京 / 上海",
+      "source_url": "https://www.liepin.com",
+      "source_quality": "trusted",
+      "full_text": "团队：美团语音相关业务\n\n岗位职责：\n1. 参与美团语音相关产品的 TTS、ASR、多模态交互模型等场景的效果评估\n2. 深入业务结合业务需求痛点，设计完备的算法效果质量保障、评测方案\n3. 推动通用人工智能评测方案的升级迭代\n\n任职要求：\n- 硕士及以上学历\n- 熟悉深度学习、语音算法相关知识",
+      "scores": {
+        "timeliness": 24,
+        "timeliness_reason": "猎聘 2026 当季",
+        "quality": 28,
+        "quality_reason": "职责 3 项 + 任职要求 2 项",
+        "authenticity": 24,
+        "authenticity_reason": "猎聘一手实习帖",
+        "total": 76,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (美团 语音大模型算法实习生)"
+      ]
+    },
+    {
+      "id": "JD-G001",
+      "company": "广汽集团",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "广汽集团 多模态大模型算法研发实习生",
+      "salary_range": "120 元/天",
+      "location": "广州",
+      "source_url": "https://m.yingjiesheng.com/jobdetail/171993852",
+      "source_quality": "trusted",
+      "full_text": "公司：广州汽车集团股份有限公司\n\n岗位职责：\n1. 多模态大模型技术调研、代码复现和微调\n2. 基于多模态大模型的应用开发，包括但不限于多模态内容生成、车内外多模态感知等\n3. 多模态大模型的小型化开发、车端/云端部署等\n4. 大模型相关工具化、数据处理需求\n\n岗位要求：\n1. 硕士在校学生，计算机、人工智能、数学等相关专业背景\n2. 熟练使用 Python、C/C++ 编程\n3. 有视觉、机器人、智能化平台开发经验者优先，如 Pytorch、DeepSpeed、OpenCV 等\n4. 执行力强，有良好的沟通和团队协作能力\n5. 表现优秀会酌情考虑获得转正机会",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "应届生求职网 2024 实习帖",
+        "quality": 32,
+        "quality_reason": "职责 4 项 + 任职要求 5 项",
+        "authenticity": 22,
+        "authenticity_reason": "应届生求职网转载",
+        "total": 76,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (广汽集团 多模态大模型算法研发实习生)"
+      ]
+    },
+    {
+      "id": "JD-SQ001",
+      "company": "商汤科技",
+      "role_category": "algorithm",
+      "job_type": "ai_research",
+      "title": "商汤科技 AI 先锋顶尖实习生（生成式 AI / 智能汽车）",
+      "salary_range": "未披露",
+      "location": "上海 / 北京",
+      "source_url": "https://hr.sensetime.com/SU60fa3bdabef57c1023fc1cbc/pb/interns.html",
+      "source_quality": "trusted",
+      "full_text": "公司：商汤科技\n\n招聘项目：商汤「AI 先锋」顶尖实习生全球招募，面向 2027 届毕业生\n\n业务方向：\n1. 生成式 AI\n2. 传统 AI\n3. 智能汽车\n\n工作地点：上海、北京\n\n投递方式：https://hr.sensetime.com/SU60fa3bdabef57c1023fc1cbc/pb/interns.html",
+      "scores": {
+        "timeliness": 26,
+        "timeliness_reason": "商汤官方招聘 2026 当季",
+        "quality": 24,
+        "quality_reason": "招聘项目 + 业务方向 + 工作地点",
+        "authenticity": 26,
+        "authenticity_reason": "商汤官方招聘",
+        "total": 76,
+        "grade": "A"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "标题含 '实习'/'Intern' (商汤科技 AI 先锋顶尖实习生（生成式 AI / 智能汽车）)"
+      ]
+    },
+    {
+      "id": "JD-D002",
+      "company": "DeepSeek",
+      "role_category": "data_annot",
+      "job_type": "ai_pm",
+      "title": "DeepSeek AGI 数据百晓生（数据产品）",
+      "salary_range": "15-30K · 14 薪",
+      "location": "北京 / 杭州",
+      "source_url": "https://blog.csdn.net/2401_85373396/article/details/145502330",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 大模型安全:构建 LLM 内容安全能力(回复干预、输入安全、输出安全等多层内容安全机制)\n2. 数据集相关:根据数据集的设计需求和用途制定详实、全面、可执行的标准\n3. 大模型评估:测评 AGI 模型的能力边界,实时跟进大模型发布进展,设计模型评估维度\n\n任职要求：\n- 对大模型有基本了解,对数据集的优劣和评估方法有自己的认识\n- 涉猎广泛、博闻强识,对各行各业的知识都拥有强烈兴趣\n- 实习生和校招全职都有 HC\n",
+      "scores": {
+        "timeliness": 20,
+        "timeliness_reason": "CSDN 转载,推断 6-12 月内",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 20,
+        "authenticity_reason": "CSDN 转载(可信,但非一手)",
+        "total": 71,
+        "grade": "B"
+      },
+      "intern_match": "strong",
+      "intern_match_reasons": [
+        "正文/薪资含 '实习生'"
+      ]
+    },
+    {
+      "id": "JD-P003",
+      "company": "拼多多",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "拼多多 大模型算法工程师（电商 LLM 底座）",
+      "salary_range": "50-80K · 18 薪",
+      "location": "上海长宁区",
+      "source_url": "https://www.nowcoder.com/job/12260",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 构建电商领域的大模型基座模型,持续优化预训练、后训练算法,利用 RAG、Long Context、RL、多模态等技术,提升模型的理解、推理能力\n2. 针对大模型 Reasoning、Perception 等多个方向,研究以 RL 算法为核心的训练范式\n3. 设计和开发、优化由大模型驱动的电商业务 Agent,利用 RL 等技术,提升 Agent 的规划、推理能力\n4. 使用大模型/多模态大模型技术,改进用户行为理解、商品检索、商品排序、商品创意生成、商品内容理解等环节的效率\n5. 设计和实施大模型算法评估框架,对模型性能进行监测和评估\n\n任职要求：\n- 熟悉大模型的训练和微调流程、Prompt Engineering\n- 熟悉相关训练和部署工具:Transformers、DeepSpeed、Megatron-LM 等\n- 熟悉深度学习框架:TensorFlow、PyTorch\n\n加分项：\n- 发表 NeurIPS/CVPR 等顶会论文\n- ACM/ICPC 等编程比赛获奖\n- 大规模的大模型/多模态大模型训练和算法优化经验\n- 熟悉分布式训练、熟悉硬件架构\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "牛客网一手校招页,推断近 1 年内",
+        "quality": 45,
+        "quality_reason": "职责 5 条(20)+ 要求 7 条(15) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "牛客网校招专页(一手)",
+        "total": 98,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "URL 为牛客网校招专页(默认校招)"
+      ]
+    },
+    {
+      "id": "JD-T010",
+      "company": "腾讯",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "腾讯 2026 校招 + AI 产品经理培训生项目",
+      "salary_range": "未披露",
+      "location": "深圳 / 北京 / 上海 / 广州 / 杭州 / 成都",
+      "source_url": "https://careers.tencent.com",
+      "source_quality": "trusted",
+      "full_text": "腾讯 2026 校园招聘正式启动。本次招聘面向 2025 年 1 月至 2026 年 12 月期间毕业的大学生，开放技术类、产品类、设计类、市场类、职能类等五大类 70 余种岗位。\n\nAI 人才布局：\n1. 2026 青云计划（已 6 月初启动）\n2. AI 产品经理培训生项目（8 月上旬启动）\n\n岗位亮点：\n- 重点放在 AI 领域\n- 后台开发、PC 客户端开发、移动客户端开发、游戏客户端开发等软件开发类岗位\n- 自然语言处理方向、计算机视觉方向、高性能计算方向、基础架构方向等技术研究岗位\n\nAI 产培生项目：是腾讯产品经理培训生项目的\"升级版\"，面向全球招聘顶尖 AI 产品人才，通过系统培养、专项训练、跨界学习等方式，助力优秀 AI 产品经理快速成长。\n\n海外校招遍布全球，覆盖 20 多个国家和地区，包括新加坡、美国、英国、日本、荷兰等。",
+      "scores": {
+        "timeliness": 28,
+        "timeliness_reason": "2025-08-06 腾讯官方启动",
+        "quality": 36,
+        "quality_reason": "AI 人才布局 + 岗位亮点",
+        "authenticity": 26,
+        "authenticity_reason": "腾讯官方招聘 + 潮新闻报道",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "标题含 '校招'"
+      ]
+    },
+    {
+      "id": "JD-A006",
+      "company": "阿里巴巴",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "阿里通义 大模型测开（25 届校招）",
+      "salary_range": "25-30K · 15 薪",
+      "location": "杭州 / 北京",
+      "source_url": "https://www.zhipin.com/job_detail/c081439351b916b603Rz3d2-EVtQ.html",
+      "source_quality": "trusted",
+      "full_text": "团队：通义团队聚焦 AIGC、大模型基础研究和行业应用探索,覆盖视觉、语音、自然语言处理、机器学习等多个领域;Modelscope 开源生态平台、DashScope 灵积模型服务平台、通义 AI 产品\n\n岗位职责：\n1. 参与 AI 产品(ToC、ToB、AI 基础平台)测试的全流程\n2. 参与 AI 产品评测体系建设,如大模型的效果&体验评测以及对应工具、自动化流程的规划建设\n3. 参与并推动产品全生命周期的质量体系建设\n4. 测试平台/工具的规划、设计、开发和推广\n\n任职要求：\n- 熟悉 Java/Python 等编程语言中的一种或几种,熟悉网络和多线程编程\n- 熟悉 Linux 环境下配置操作,熟悉 MySQL、Redis 等数据库\n- 熟悉软件研发流程,掌握软件测试理论和方法\n- 加分项:有互联网公司实习经验 / AI 领域模型服务化开发、效果体验评估调优、算法研究经验 / 分布式微服务开发、云原生 K8S 实操经验\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 38,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 89,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "标题含 '校招'",
+        "标题含 '届'",
+        "文本含届次标识 '25 届'"
+      ]
+    },
+    {
+      "id": "JD-A002",
+      "company": "阿里巴巴",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "钉钉 AI 产品经理（知识学习方向）",
+      "salary_range": "经验不限",
+      "location": "杭州",
+      "source_url": "https://blog.csdn.net/2408_89348881/article/details/151354096",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责 AI 相关产品的规划、设计与迭代\n2. 结合用户需求与市场动态,设计并优化产品功能体验\n3. 与研发、设计、运营团队紧密合作,确保产品按时高质量交付\n4. 关注内容产品形态与用户使用场景,探索 AI 在知识获取、传播与沉淀方面的应用\n5. 基于用户反馈与数据分析,持续优化产品迭代\n\n任职要求：\n- 对新技术、新趋势有敏锐洞察力,热衷探索 AI 在各类场景的应用\n- 有内容类产品或运营经验,理解用户内容消费和知识传播的核心逻辑\n- 具备较强的产品思维和数据驱动意识\n- 跨团队沟通协作与项目推进能力强\n",
+      "scores": {
+        "timeliness": 20,
+        "timeliness_reason": "CSDN 转载,推断 6-12 月内",
+        "quality": 45,
+        "quality_reason": "职责 5 条(20)+ 要求 5 条(15) + 字段(10)",
+        "authenticity": 20,
+        "authenticity_reason": "CSDN 转载(可信,但非一手)",
+        "total": 85,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "经验不限"
+      ]
+    },
+    {
+      "id": "JD-B008",
+      "company": "字节跳动",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "字节 AI 应用测试开发工程师（移动 OS, 26 届春招）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.cnblogs.com/hogwarts/p/19014905",
+      "source_quality": "trusted",
+      "full_text": "团队：产品研发与工程架构部 - 字节跳动智能硬件领域软件技术攻坚团队\n\n岗位职责：\n1. 负责 AI 应用相关的项目测试及前后端系统质量保障\n2. 编写测试用例,制定合理高效的测试方案\n3. 基于现有测试工具和平台,建立并优化 AI 交互等测试工具和自动化测试开发\n4. 探索创新型模型评测方法,训练评测模型\n\n任职要求：\n- 2026 届本科及以上\n- 熟练掌握 Python/Go/C++/Java 中至少一种\n- 熟悉 Linux 环境下配置操作,熟悉 Git 版本管理\n- 加分项:有移动端开发、语音算法开发、大模型评测等经验者优先;熟练掌握机器学习、深度学习概念和主流框架\n",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "文本含 26/27 届校招标识(2026 季)",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 20,
+        "authenticity_reason": "博客园转载(可信,但非一手)",
+        "total": 83,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "标题含 '届'",
+        "文本含届次标识 '26 届'"
+      ]
+    },
+    {
+      "id": "JD-B009",
+      "company": "字节跳动",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "字节 测试开发工程师（开发者 AI）",
+      "salary_range": "未披露",
+      "location": "北京 / 上海",
+      "source_url": "https://www.cnblogs.com/hogwarts/p/19014905",
+      "source_quality": "trusted",
+      "full_text": "团队：字节跳动开发者 AI 团队 - AI for Code、AI 在 DevOps 全流程中的落地\n\n岗位职责：\n1. 参与字节跳动 AI Coding 产品的智能化测试工具开发\n2. 调研业界最新的 LLM、Agent 相关技术,并探索在当前业务产品测试开发工作中的落地应用\n\n任职要求：\n- 2026 届本科及以上\n- 对 AIGC 技术有一定理解和实践经验\n- 扎实的编程基础,熟练 Python/Go/Java\n- 熟悉 Docker/Linux 开发环境与 Git 版本管理\n- 有 AI 相关应用测试开发和评测经验者优先\n",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "文本含 26/27 届校招标识(2026 季)",
+        "quality": 28,
+        "quality_reason": "职责 2 条(8)+ 要求 5 条(15) + 字段(5)",
+        "authenticity": 20,
+        "authenticity_reason": "博客园转载(可信,但非一手)",
+        "total": 78,
+        "grade": "A"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "文本含届次标识 '2026 届'"
+      ]
+    },
+    {
+      "id": "JD-B006",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节 Seed 团队 大语言模型算法工程师（Top Seed）",
+      "salary_range": "未披露",
+      "location": "杭州 / 北京",
+      "source_url": "https://www.w3cschool.cn/devjobs/devjobs-qur33zz0.html",
+      "source_quality": "trusted",
+      "full_text": "团队：Seed 团队成立于 2023 年,研究方向涵盖 LLM、语音、视觉、世界模型、基础架构、AI Infra、下一代 AI 交互等\n\n主要工作方向：\n1. 研究 AI 大模型的关键能力(大模型的学习、记忆、推理、规划、感知等长期话题)\n2. 探索超大规模模型,致力于实现极致的系统优化\n3. 深入参与数据建设、大规模预训练、指令微调、偏好对齐、模型优化等关键工作\n4. 大力推动大模型应用落地\n\n任职要求：\n- 2026 届博士学位,计算机/数学等相关专业\n- 扎实的机器学习、NLP、RL 基础\n- 熟悉 Python 和 PyTorch,熟悉 Docker/Linux 开发环境\n- 在 ACL/EMNLP/NAACL/NeurIPS/ICML/ICLR 等顶会发表论文者优先\n",
+      "scores": {
+        "timeliness": 30,
+        "timeliness_reason": "文本含 26/27 届校招标识(2026 季)",
+        "quality": 17,
+        "quality_reason": "职责 0 条(0)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 20,
+        "authenticity_reason": "w3cschool 转载(可信,但非一手)",
+        "total": 67,
+        "grade": "B"
+      },
+      "intern_match": "campus_to_intern",
+      "intern_match_reasons": [
+        "文本含届次标识 '2026 届'"
+      ]
+    },
+    {
+      "id": "JD-T002",
+      "company": "腾讯",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "腾讯 元宝大模型评测产品经理",
+      "salary_range": "25-50K · 15 薪",
+      "location": "深圳 / 北京",
+      "source_url": "https://www.liepin.com/job/1971787353.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 自动评估体系建设:设计并搭建大模型自动评估体系,覆盖通用能力及专项能力(推理、写作、语音、VLM 等)\n2. 构建评测指标体系与自动化评测流程,推动评估标准化\n3. 探索前沿模型能力边界,持续优化评估方法\n\n任职要求：\n- 3 年以上智能产品经验\n- 熟悉 LLM 评测方法,了解 LLM-as-Judge 与人工评测\n- 具备敏锐的市场洞察力、较强的数据分析能力\n- 探索欲强,善于发现问题解决问题\n- 聪明且自驱,具备清晰的逻辑思维和团队协作精神\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 37,
+        "quality_reason": "职责 3 条(12)+ 要求 5 条(15) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 90,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "经验要求 3 年(1-3 年区间,初级社招,实习一般不开放)"
+      ]
+    },
+    {
+      "id": "JD-T004",
+      "company": "腾讯",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "腾讯混元 大模型算法工程师",
+      "salary_range": "40-70K · 15 薪",
+      "location": "北京海淀",
+      "source_url": "https://www.zhipin.com/job_detail/277ce05987fad2fc1H142t-1E1RQ.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 负责面向热点领域大模型的构建,包括预训练、指令微调、训练和推理加速、模型评测等技术\n2. 探索大语言模型技术在热点事件发现、理解与生成方向的应用\n3. 优化现有热点算法:文本生成、文本分类、摘要生成、热点事件图谱、检索问答等\n4. 探索大语言模型的前沿技术与应用落地\n\n任职要求：\n- 计算机、数学、机器学习或相关专业硕士及以上\n- 熟练掌握 Python、PyTorch;熟悉 Spark、ClickHouse 等大数据计算框架\n- 深入理解 NLP 领域理论基础(文本分类、文本生成、摘要、知识图谱)\n- 熟悉大语言模型(GPT 系列、LLaMA、ChatGLM 等)的原理、预训练、调优等技术\n- 熟悉 Docker / Linux 开发环境与 Git 版本管理\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 41,
+        "quality_reason": "职责 4 条(16)+ 要求 5 条(15) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 88,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-J006",
+      "company": "京东",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "京东 大模型测试开发工程师（零售客服）",
+      "salary_range": "25-50K",
+      "location": "成都 / 北京",
+      "source_url": "https://www.yupao.com/zhaogong/344464400.html",
+      "source_quality": "trusted",
+      "full_text": "工作内容：\n1. 负责京东零售客服业务系统全生命周期的质量保障体系建设\n2. 面向客服业务的复杂技术架构与百万级商家场景,构建商家客服全链路质量防护体系\n3. 主导客服质量相关的质效平台及自动化工具开发,持续优化研发流程效率\n\n岗位要求：\n- 本科及以上,计算机相关专业,3 年以上互联网复杂产品测试开发经验\n- 熟悉 Python/Java 等至少一种编程语言\n- 熟悉 Linux 环境下配置操作\n- 有大模型测试开发背景者优先\n- 具备扎实的客户端与服务端分层测试实践\n- 工作地:成都,北京\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "鱼泡直聘一手,推断近 1 年内",
+        "quality": 37,
+        "quality_reason": "职责 3 条(12)+ 要求 6 条(15) + 字段(10)",
+        "authenticity": 24,
+        "authenticity_reason": "鱼泡直聘(一手,但用户基数小)",
+        "total": 86,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-T001",
+      "company": "腾讯",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "腾讯元宝 AI 产品经理",
+      "salary_range": "20-40K · 16 薪",
+      "location": "深圳南山区",
+      "source_url": "https://www.zhipin.com/job_detail/277ce05987fad2fc1H142t-1E1RQ.html",
+      "source_quality": "placeholder_url",
+      "full_text": "团队：CSIG 云与智慧产业事业群 - 元宝产品部\n\n岗位职责：\n1. 负责产品从需求收集、规划、设计、开发到上线的各个阶段\n2. 与用户增长、运营、商业化团队紧密合作,确保产品功能卓越、用户体验优秀\n3. 与产品经理/工程团队密切协作,将算法模型应用于软件研发的多个场景,实现研发流程的架构升级\n4. 关注学术界和工业界的最新进展和最佳实践\n\n岗位亮点：腾讯 2025 产品经理培训生全球招聘升级版\n\n任职要求：\n- 3 年以上产品经理经验,有 AI/算法产品经验者优先\n- 熟悉大语言模型(LLM)原理,具备 Prompt 工程实践经验\n- 具备敏锐的市场洞察力、较强的数据分析能力\n- 熟悉 SQL 与 Python 数据分析工具\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 38,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 85,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-T005",
+      "company": "腾讯",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "腾讯 大模型应用算法工程师（智能客服方向）",
+      "salary_range": "未披露",
+      "location": "深圳",
+      "source_url": "https://www.zhipin.com/job_pk/2778a6b01b8e564a1HN_2du0EFpW/875dc60d54fa86a81HN409-5ElNQ.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责智能客服相关的 NLP 算法研究与探索,主要包括语义理解、文本生成、信息抽取、智能问答、TaskBot 等方向\n2. 参与公司智能客服产品(AI 外呼、客服智能助手、机器质检等)NLP 应用项目的研发\n3. 参与基于大语言模型 LLM 的开发和调优工作,包括训练流程搭建、指令微调\n\n任职要求：\n- 硕士及以上,计算机相关专业,3 年以上自然语言处理研究经历\n- 具备大语言模型研发经验或多模态大模型项目经验\n- 熟悉 TensorFlow、PyTorch、Keras 等 AI 框架\n- 熟悉 LTP、StanfordNLP、NLTK、scikit-learn 等 NLP 开源库\n- 在 NIPS、ICML、AAAI、KDD、PAMI、ACL 等顶会发表论文优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 PK 页,推断近 1 年内发布",
+        "quality": 32,
+        "quality_reason": "职责 3 条(12)+ 要求 5 条(15) + 字段(5)",
+        "authenticity": 28,
+        "authenticity_reason": "BOSS PK 页(一手)",
+        "total": 85,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-D001",
+      "company": "DeepSeek",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "DeepSeek Agent Harness 产品经理",
+      "salary_range": "面议",
+      "location": "北京 / 杭州",
+      "source_url": "https://blog.csdn.net/2401_85373396/article/details/145502330",
+      "source_quality": "trusted",
+      "full_text": "团队使命：Model + Harness = Agent - \"我们正在把 DeepSeek 的前沿模型能力,转化为领先的 Agent 产品。除模型本身以外的所有工作,都属于 Harness 的范畴。\"\n\n主要职责：\n1. 规划 DeepSeek Harness 产品路线图,连接研究员、工程师、开源社区和广大用户\n2. 理解判断用户最真实需求,定义与衡量\"Agent 是否真的在更多场景下更深入地帮助到更多的人\"的指标\n3. 与模型训练团队的研究员深度沟通与合作,实现模型与 Harness 的共同进化\n4. 维护 Harness 产品用户社群,从潜在海量用户群体中获取反馈、提取信号,指导产品迭代\n5. 协助项目管理相关工作\n\n任职要求：\n- 2 年以上产品经理经验(特别优秀可放宽)\n- 本科及以上学历\n- 能够使用 vibe coding 写代码(不一定需要技术背景)\n- 能够设计系统性的收集数据的方法(问卷、访谈、A/B 测试、灰度测试等)\n- 是 Agent 产品的高强度用户:深度使用过 Claude Code、Cowork、Codex、Cursor、OpenCode、GitHub Copilot、Manus、OpenClaw、Hermes 等类似产品\n- 理解 LLM 以及 Agent 基本机制(LLM API、KV Cache、Agent Loop、Tool Use、Reasoning、Planning、Skills、MCP、Memory、Subagent、Multi-Agent)\n- 对 Prompt Engineering、Context Engineering、Harness Engineering 等课题有第一手实践\n\n加分项：\n- AI 行业从业经验、AI 相关产品经验\n- 作为小团队中的产品经理主导产品路线的经验\n- 与研究员深度协作的经验\n- 深度参与开源社区或维护开源社区关系的经验\n",
+      "scores": {
+        "timeliness": 20,
+        "timeliness_reason": "CSDN 转载,推断 6-12 月内",
+        "quality": 45,
+        "quality_reason": "职责 5 条(20)+ 要求 11 条(15) + 字段(10)",
+        "authenticity": 20,
+        "authenticity_reason": "CSDN 转载(可信,但非一手)",
+        "total": 85,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-B001",
+      "company": "字节跳动",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "字节 飞书多维表格 Agent 产品经理",
+      "salary_range": "30-50K · 15 薪",
+      "location": "北京-海淀区",
+      "source_url": "https://www.liepin.com/job/1971787353.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责多维表格 Agent 功能的规划与落地,以降低用户使用门槛、提升多维表格的 AI 能力\n2. 调研主流 Agent 产品,跟踪 Agent 技术趋势,制定产品方案与设计\n3. 主导并协同研发、算法与评测团队,定义评测指标,对 Agent 效果负责\n\n任职要求：\n- 本科及以上,3 年以上 LLM 产品经验\n- 对 LLM 与 Agent 技术有深入理解,熟悉 Agent 能力边界、产品架构、技术实现与评测方法\n- 持续关注技术趋势\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-B002",
+      "company": "字节跳动",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "字节 AI 产品经理（智能对话方向）",
+      "salary_range": "30-50K · 15 薪",
+      "location": "北京-朝阳区",
+      "source_url": "https://www.liepin.com/job/1971787353.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 探索 LLM+AIGC 在字节商业化的规模化应用,围绕线索行业的经营+广告场景,建设覆盖线索行业全链路的智能对话产品\n2. 持续攻坚智能对话体验提升、多轮会话能力、拟人化等前沿领域\n3. 建立会话质量和效果的评估体系,持续跟踪和优化效率\n\n任职要求：\n- 3 年以上智能产品经验,有语音、NLP 等策略产品经验者优先\n- 具备敏锐的市场洞察力、较强的数据分析能力\n- 有广告经验优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "经验要求 3 年(1-3 年区间,初级社招,实习一般不开放)"
+      ]
+    },
+    {
+      "id": "JD-B003",
+      "company": "字节跳动",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "字节 AI 产品经理（智能对话机器人方向）",
+      "salary_range": "25-35K · 15 薪",
+      "location": "北京-海淀区",
+      "source_url": "https://www.liepin.com/job/1968572223.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责智能对话机器人相关产品(智能客服机器人、VOIP、客服策略平台等)\n2. 调研客户服务应用场景和关键痛点,规划产品功能、撰写需求文档\n3. 探索 AI 在对话领域的新方向\n\n任职要求：\n- 2 年以上 AI 产品经验,具备智能客服或对话系统产品实践经验优先\n- 深入理解大语言模型原理及应用场景,熟悉多轮对话、RAG、知识推理\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-J002",
+      "company": "京东",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "京东 AIGC 产品运营经理",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_detail/651b390eacf2c7a71H1-2dW_FVJS.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 运营 AIGC 产品内容生成和分发策略(智能体、内容、主题和风格)\n2. 管理 AIGC 平台的用户增长和参与度(用户留存率、活跃度、转化率)\n3. 与产品开发团队紧密合作,优化机器人对话剧本和内容\n4. 构建 AI 内容社区,维护用户消费和创作者激励\n\n任职要求：\n- 熟悉内容型平台用户运营、社群运营、内容社区运营\n- 对 AIGC 有热情,思维活跃\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-M001",
+      "company": "美团",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "美团 AI 应用产品经理（闪购业务）",
+      "salary_range": "未披露",
+      "location": "北京朝阳区",
+      "source_url": "https://www.zhipin.com/job_detail/f8ed6ed26754a7e903V60925GFpS.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 深入研究美团闪购业务场景,挖掘用户需求痛点,利用大模型能力设计并优化产品及服务方案\n2. 负责大模型在美团闪购业务中的应用开发与迭代\n3. 与跨部门团队(技术研发、产品设计、运营)紧密合作\n4. 收集和分析用户反馈数据,评估大模型应用效果\n\n任职要求：\n- 3 年以上产品经理经验,有 LLM/AIGC 应用产品经验者优先\n- 熟悉大语言模型(LLM)能力边界,有 Prompt 工程实践经验\n- 对大模型方向充满信心,热衷于在该领域进行创新与突破\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-M004",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团 大模型应用算法工程师（智能客服方向）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "http://www.zhaopin.com/jobdetail/CC383625320J40552738609.htm",
+      "source_quality": "trusted",
+      "full_text": "团队：基础研发平台 - 立足于\"零售+科技\"战略\n\n岗位职责：\n1. 负责大模型在客服业务场景下关键能力的应用研发(知识和指令遵循、深度推理、反思和评估)\n2. 负责多模态大模型的应用实践,特别是语音文本融合的多模态大模型\n3. 研发和优化智能体的 function call、多智能体间协调\n4. 深入理解本地生活服务业务场景,抽象业务所需的大模型基础能力\n\n任职要求：\n- 计算机、人工智能、数学等相关专业硕士及以上,2 年以上大模型/智能体研发经验\n- 熟悉主流大语言模型(Deepseek、Qwen、Llama 等)及其他开源模型\n- 精通至少一种深度学习框架(TensorFlow、PyTorch)\n- 在智能客服大模型 / 复杂指令遵循、逻辑和数学推理等至少一个领域有深入研究\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "智联招聘一手,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "智联招聘(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-A003",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "淘天 大模型算法工程师",
+      "salary_range": "未披露",
+      "location": "北京朝阳 / 杭州余杭",
+      "source_url": "https://www.zhipin.com/job_detail/782972b13b48bbb503R-2NW-EFVT.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 跟进和研发大规模语言模型(LLM)的预训练、持续训练、SFT、RLHF 等技术\n2. 跟进多模态的大模型(vLLM)预训练、SFT、RLHF 等技术\n3. 研发基于大模型的淘宝问问助手、ChatBot、检索增强、Code、Long chain 等下游应用\n4. 结合探索和研究撰写发表论文,和业界、学术界保持交流\n\n任职要求：\n- 自然语言处理 / 机器学习 / 大模型 / 计算机相关专业硕士及以上\n- 熟练 Python、Java、C/C++ 中至少一种,熟悉 TensorFlow/PyTorch 框架\n- 有大模型预训练、SFT、RLHF 经验者优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 80,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-J001",
+      "company": "京东",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "京东 AI 用户产品经理",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_detail/c8e41d75b92b893503R42tm1ElZR.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 参与 LLM 应用产品建设,包括产品理想态、产品效果、功能体验等\n2. 用户场景驱动,参与基础体验产品设计,协同 LLM 算法拓展产品的能力边界\n3. 负责跨多职能团队合作,推动关键用户体验的实现和交付\n4. 负责业务诉求、用户反馈、模型评测等,并持续优化产品效果\n\n任职要求：\n- 计算机、人工智能、电子信息相关专业硕士及以上\n- 3 年以上相关经验,熟悉大模型相关应用场景\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 80,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-J003",
+      "company": "京东",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "京东 大模型应用算法工程师（搜推方向）",
+      "salary_range": "未披露",
+      "location": "北京通州区",
+      "source_url": "https://www.zhipin.com/job_detail/c8e41d75b92b893503R42tm1ElZR.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 针对搜推业务需求,设计和实现基于大语言模型的技术方案,典型场景:Document QA、结构化信息抽取、知识生成\n2. 负责大语言模型技术方案的端到端研发(语料采集和数据制作、prompt tuning、指令跟随微调、领域知识注入、模型性能提升、模型效果评测)\n3. 熟悉提示词工程,设计并不断优化精进模型的 prompt\n4. 跟踪业内最新研究成果(如 tool augmented LLM)\n\n任职要求：\n- 在大模型方向有高质量论文(ACL、EMNLP、AAAI)或开源项目产出者优先\n- 有应用 LangChain/LlamaIndex 框架的项目落地者优先\n- 熟悉 Python 和 PyTorch,具备 Prompt 工程实践经验\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 33,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 80,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-T003",
+      "company": "腾讯",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "腾讯 AIGC 产品经理（多模态方向）",
+      "salary_range": "30-60K · 15 薪",
+      "location": "深圳南山区",
+      "source_url": "https://www.zhipin.com/job_detail/277ce05987fad2fc1H142t-1E1RQ.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 负责生成式游戏引擎多模态大模型方向的产品规划与全生命周期管理\n2. 深度洞察用户需求与技术趋势,定义具有竞争力的产品能力矩阵和发展路线图\n3. 建设 AIGC 内容创作工具链\n\n任职要求：\n- 3-5 年产品经理经验,有 AI/AIGC 产品经验者优先\n- 熟悉大模型(LLM)能力边界,有 AIGC 工具或游戏引擎相关经验加分\n- 具备出色的跨团队协作和数据分析能力\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 78,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-B007",
+      "company": "字节跳动",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "字节 AI 测试开发工程师（智能体安全）",
+      "salary_range": "30-60K · 15 薪",
+      "location": "北京海淀区学院路",
+      "source_url": "https://www.zhipin.com/job_detail/c8e41d75b92b893503R42tm1ElZR.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 主导终端安全产品及大模型安全产品的全生命周期测试(需求评审、测试方案设计、测试用例开发、测试执行、缺陷管理及回归验证)\n2. 探索大模型安全评测方法,构建评测体系\n\n任职要求：\n- 3 年以上测试开发经验\n- 熟悉 Python/Java 中至少一种编程语言\n- 熟悉 Docker/Linux 开发环境与 Git 版本管理\n- 有大模型评测、安全测试经验优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 30,
+        "quality_reason": "职责 2 条(8)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 77,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-M007",
+      "company": "美团",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "美团 测试开发工程师（出海/大模型方向）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_detail/782972b13b48bbb503R-2NW-EFVT.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 构建适合服体太平洋的测试保障体系(服务端、WEB 端、大模型方向质量保障),制定和推进相关专项技术方案落地实施\n2. 快速掌握系统架构与业务逻辑,审核测试方案与测试设计并给出指导意见\n3. 解决测试过程中的复杂技术问题(服务端质量建设、性能优化、可测性建设、稳定性建设)\n\n任职要求：\n- 4 年及以上服务端测试经验\n- 熟练掌握测试设计方法\n- 熟悉 Java/Python 等至少一种编程语言\n- 熟悉 Linux 环境下配置操作\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 29,
+        "quality_reason": "职责 3 条(12)+ 要求 4 条(12) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 76,
+        "grade": "A",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-J005",
+      "company": "京东",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "京东 NLP 算法工程师（跨境电商 Joybuy）",
+      "salary_range": "30-60K · 20 薪",
+      "location": "北京",
+      "source_url": "https://www.zhipin.com/job_detail/0e195c20959bf81f1Hd52dS9F1JR.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 跨境场景 NLP 技术落地与业务赋能:聚焦 Joybuy 跨境电商核心场景,负责 LLM 技术的实战落地与效果闭环\n2. 深度结合内容理解能力解决业务痛点,涵盖多语言文本理解\n\n任职要求：\n- 硕士及以上,计算机/数学相关专业,2 年以上 NLP 相关经验\n- 熟悉 Python、PyTorch,有跨境电商 NLP 项目经验者优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 24,
+        "quality_reason": "职责 2 条(8)+ 要求 2 条(6) + 字段(10)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 75,
+        "grade": "A"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-P005",
+      "company": "拼多多",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "拼多多 多模态大模型算法工程师",
+      "salary_range": "未披露",
+      "location": "上海",
+      "source_url": "https://www.zhipin.com/job_detail/782972b13b48bbb503R-2NW-EFVT.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 负责 NLP 技术在搜索场景的应用:query 类目识别、意图理解、搜索相关性等\n2. 负责 NLP 技术在商品信息提取的应用\n3. 深入研究和探索多模态算法在跨境电商的使用场景和应用落地(商品理解、属性识别、AIGC 等场景)\n\n任职要求：\n- 硕士及以上,计算机/数学相关专业\n- 熟练 Python、PyTorch,有 NLP/CV 项目经验\n- 熟悉 Transformer 架构与主流深度学习模型\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 26,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 73,
+        "grade": "B",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-A004",
+      "company": "阿里巴巴",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "夸克 大模型算法工程师（文本大模型应用方向）",
+      "salary_range": "未披露",
+      "location": "杭州",
+      "source_url": "https://www.zhipin.com/job_detail/782972b13b48bbb503R-2NW-EFVT.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 从事大模型底座的研发与应用,包括预训练、下游迁移等阶段的内容理解、知识对齐、训练优化、多模态方向\n2. 面向搜索和问答业务场景,在大数据环境下,落地适配真实场景,服务夸克亿万用户,包括多模态、RAG 等方向\n\n任职要求：\n- 计算机、数学或统计学相关专业硕士及以上,2 年以上 NLP/多模相关工作经验\n- 熟悉大模型发展脉络,熟悉 PyTorch 深度学习框架,具备 Transformer 模型实战经验\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 19,
+        "quality_reason": "职责 2 条(8)+ 要求 2 条(6) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 66,
+        "grade": "B",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-M003",
+      "company": "美团",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "美团 视觉 AI 产品经理",
+      "salary_range": "未披露",
+      "location": "北京朝阳区",
+      "source_url": "https://www.zhipin.com/job_detail/782972b13b48bbb503R-2NW-EFVT.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 负责将 AI 能力、智能硬件能力落地到业务场景中\n2. 负责分析相关行业发展动向,为公司提供产品发展策略\n\n任职要求：\n- 本科及以上,3 年以上 AI 产品、智能硬件、解决方案经验\n- 熟悉 LLM/计算机视觉能力边界\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 19,
+        "quality_reason": "职责 2 条(8)+ 要求 2 条(6) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 66,
+        "grade": "B",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-D004",
+      "company": "DeepSeek",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "DeepSeek Agent Harness 研发工程师",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://www.cnblogs.com/itech/articles/19500",
+      "source_quality": "trusted",
+      "full_text": "核心职责：\n1. 参与 DeepSeek Harness 产品的技术架构设计和开发\n2. 与研究员紧密合作定义前沿创新\n3. 和模型训练团队深度沟通实现\"模型与 Harness 共同进化\"\n4. 以内部真实任务为反馈源持续迭代\n\n硬性要求：\n- 2 年以上软件开发经验(特别优秀可放宽)\n- 知名高校本科及以上学历\n- 熟练使用 AI Agent 工具进行开发\n- 必须是 Agent 产品的高强度用户\n- 熟悉 LLM/Agent 技术原理(LLM API、KV Cache、Agent Loop、Tool Use、Reasoning、Planning、Skills、MCP、Memory、Subagent、Multi-Agent)\n- 对 Prompt Engineering、Context Engineering、Harness Engineering 有较深入了解\n\n加分项：个人开源作品及社区深度贡献、能用英文与开源社区沟通\n",
+      "scores": {
+        "timeliness": 20,
+        "timeliness_reason": "博客园转载,推断 6-12 月内",
+        "quality": 20,
+        "quality_reason": "职责 0 条(0)+ 要求 6 条(15) + 字段(5)",
+        "authenticity": 20,
+        "authenticity_reason": "博客园转载(可信,但非一手)",
+        "total": 60,
+        "grade": "B"
+      },
+      "intern_match": "weak",
+      "intern_match_reasons": [
+        "未明说年限,但也无校招/应届标识(默认初级社招)"
+      ]
+    },
+    {
+      "id": "JD-A001",
+      "company": "阿里巴巴",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "阿里云 AI Coding 产品经理",
+      "salary_range": "55-85K · 14 薪",
+      "location": "杭州 / 北京",
+      "source_url": "https://www.yupao.com/zhaogong/338640820.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 领导阿里云 AI Coding 产品的全生命周期管理,包括市场研究、产品战略制定、功能设计、用户体验优化及产品运营\n2. 洞察行业趋势和技术发展,制定有竞争力的产品路线图\n3. 设计创新的 AI 辅助编程交互模式,优化信息架构和界面布局\n4. 与 UI/UX、工程和模型算法团队紧密协作,持续提升产品的视觉、交互和智能化体验\n5. 通过深度用户研究、数据分析和实验,持续优化产品功能和用户体验\n6. 探索 AI 技术在软件开发领域的创新应用,提出并实施前瞻性的产品理念\n\n任职要求：\n- 本科及以上,计算机/设计相关专业;1 年以上产品经理经验\n- 具备基础的编程知识,能与技术团队高效沟通\n- 深入理解软件开发生命周期、工具链和最佳实践\n- 熟悉开发者工作流程和痛点,有实际软件开发经验者优先\n- 具备出色的分析能力和创新思维\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "鱼泡直聘一手,推断近 1 年内",
+        "quality": 45,
+        "quality_reason": "职责 6 条(20)+ 要求 6 条(15) + 字段(10)",
+        "authenticity": 24,
+        "authenticity_reason": "鱼泡直聘(一手,但用户基数小)",
+        "total": 94,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "薪资 55-85K 偏高(资深级)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-M002",
+      "company": "美团",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "美团 AI 产品专家（广告素材）",
+      "salary_range": "25-40K · 15 薪",
+      "location": "北京",
+      "source_url": "https://www.liepin.com/job/1971915347.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责信息流广告素材智能化、自动化生产的能力建设(平台工具和投放策略能力),提升 AIGC 素材在广告投放中的消耗占比\n2. 利用行业先进的 AIGC 能力进行营销场景下的内容化生产(承接页动态商品卡内容、AI 短剧、AI 图文笔记)\n3. 负责创意平台的产品建设(创意外部采买、内部自研生产、审核管理等产品能力设计)\n4. 探索 AI 在营销增长中的深度应用\n\n任职要求：\n- 3-5 年产品经验,有广告/创意平台经验者优先\n- 熟悉 AIGC 能力边界,有大模型应用实践经验\n- 平台大、空间广、核心业务\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 38,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 91,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['专家']",
+        "经验要求 5 年(3+ 年,明确社招)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-M005",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团 大模型应用算法工程师（金融场景）",
+      "salary_range": "50-70K · 15 薪",
+      "location": "上海",
+      "source_url": "https://www.liepin.com/job/1971772559.shtml",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责大模型在金融场景中的交互式对话应用,例如 AI 电销,提升场景的自动化与智能化水平\n2. 负责大型语言模型的微调、偏好对齐、知识增强等技术探索(RLHF、Long context、RAG、Agent 等方向)\n3. 与业务、产品团队合作,基于业务需求设计产品、解决方案\n\n任职要求：\n- 本科及以上,计算机科学、人工智能、自然语言处理或相关专业\n- 熟练掌握 PyTorch、TensorFlow 等深度学习框架\n- 具有生成式模型训练及开发经验(大模型数据处理、模型微调、预训练、强化学习、AI Agent 等)\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "猎聘一手 JD 页,推断近 1 年内发布",
+        "quality": 31,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 28,
+        "authenticity_reason": "猎聘 JD 页(一手)",
+        "total": 84,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "薪资 50-70K 偏高(资深级)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-T007",
+      "company": "腾讯",
+      "role_category": "product",
+      "job_type": "ai_pm",
+      "title": "腾讯 AI 大模型产品专家（地图方向）",
+      "salary_range": "35-65K · 15 薪",
+      "location": "北京",
+      "source_url": "https://www.cda.cn/view/206806.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 大模型场景落地:基于用户出行场景(导航/搜索/推荐),拆解大模型技术可赋能的业务价值点,设计可落地的 AI 功能模块\n2. 主导需求优先级评估,建立「技术可行性 × 用户价值 × 实现成本」三维决策模型\n3. 制定大模型效果评估标准,通过 AB 测试持续优化关键指标\n4. 构建从用户反馈到模型迭代的完整闭环\n\n任职要求：\n- 6 年以上互联网产品经验,2 年以上 AI/推荐/搜索相关领域经验\n- 完整经历过至少 1 个大中型 AI 项目落地\n- 深度参与过大模型应用项目,熟悉 Fine-tuning、RAG 等关键技术路径\n- 具备强数据驱动意识,能独立完成 SQL 取数、Python 数据分析\n",
+      "scores": {
+        "timeliness": 22,
+        "timeliness_reason": "CDA 转载(可信),推断近 1 年",
+        "quality": 38,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "CDA 转载(可信但非一手)",
+        "total": 82,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['专家']",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-M008",
+      "company": "美团",
+      "role_category": "test_qa",
+      "job_type": "ai_test",
+      "title": "美团 高级测试开发工程师（快驴, 含 AI Coding）",
+      "salary_range": "20-40K · 15 薪",
+      "location": "北京",
+      "source_url": "https://www.cnblogs.com/hogwarts/p/19014905",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责美团 to B 业务系统产品质量保障工作\n2. 参与需求及技术评审,制定测试计划,设计测试用例\n3. 优化产品研发测试上线流程\n4. 参与开发自动化测试 case、测试工具\n\n岗位要求：\n- 1-3 年测试开发经验\n- 熟悉 Python/Java 等至少一种编程语言\n- 有白盒测试、自动化测试经验优先\n- 加分项:具有分布式系统/网络/安全/人工智能等相关测试开发经验;对 CI/CD、DevOps 有一定认知\n",
+      "scores": {
+        "timeliness": 20,
+        "timeliness_reason": "博客园转载,推断 6-12 月内",
+        "quality": 38,
+        "quality_reason": "职责 4 条(16)+ 要求 4 条(12) + 字段(10)",
+        "authenticity": 20,
+        "authenticity_reason": "博客园转载(可信,但非一手)",
+        "total": 78,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['高级']",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-T006",
+      "company": "腾讯",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "腾讯 机器学习平台高级算法研究员（大模型应用）",
+      "salary_range": "未披露",
+      "location": "深圳",
+      "source_url": "https://www.zhipin.com/job_detail/fdc41227573b3aeb1Hxy0ti6FVRV.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责大语言模型在搜广推场景应用相关核心能力研发,包括大模型微调能力、相关模型算法调优以及性能优化\n2. 负责大语言模型在搜广推场景应用时在线推理性能优化和推理策略调优\n3. 负责大语言模型在推荐场景应用的前沿算法研究和优化\n\n任职要求：\n- 计算机相关专业本科及以上,4 年以上工作经验\n- 熟悉 C/C++/Python 等编程语言\n- 熟悉 TensorFlow/Pytorch 等框架,有机器学习平台相关算法开发经验\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 26,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 77,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['高级']",
+        "经验要求 4 年(3+ 年,明确社招)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-B005",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节 NLP & 大模型算法工程师/专家",
+      "salary_range": "未披露",
+      "location": "北京海淀区",
+      "source_url": "https://www.zhipin.com/job_detail/0e195c20959bf81f1Hd52dS9F1JR.html",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责生成式智能对话场景的算法研发,基于大模型技术建设智能化的对话机器人系统\n2. 探索生成式 Agent 对话算法(领域知识融入、对齐、逻辑推理、SFT 等任务)\n3. 建设基于 RAG 框架的智能问答系统,优化文本&多模态理解、召回、相关性、问答生成等算法\n\n任职要求：\n- 熟悉 Pytorch 或 TF 等框架\n- 掌握分布式训练、并行计算\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 26,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "BOSS JD 页(一手)",
+        "total": 77,
+        "grade": "A"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['专家']",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-J004",
+      "company": "京东",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "京东 大模型算法工程师（医疗方向）",
+      "salary_range": "55-85K · 17 薪",
+      "location": "北京大兴区亦庄",
+      "source_url": "https://www.zhipin.com/job_detail/c8e41d75b92b893503R42tm1ElZR.html",
+      "source_quality": "placeholder_url",
+      "full_text": "工作职责：\n1. 医疗大模型后训练:通过持续预训练、指令微调、RLHF 技术手段,提升大模型在指令遵循、医学推理能力、长文本、角色扮演等核心任务上的能力\n2. 技术包括 SFT、DPO、RLHF、DPO 等\n\n任职要求：\n- 硕士及以上学历,计算机相关专业\n- 3-5 年自然语言处理相关工作经验\n- 熟悉 Python、PyTorch,有医疗 NLP 经验者优先\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 27,
+        "quality_reason": "职责 2 条(8)+ 要求 3 条(9) + 字段(10)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 74,
+        "grade": "B",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "薪资 55-85K 偏高(资深级)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-B004",
+      "company": "字节跳动",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "字节 NLP 算法专家（深圳）",
+      "salary_range": "未披露",
+      "location": "深圳南山区",
+      "source_url": "https://www.zhipin.com/job_detail/c8e41d75b92b893503R42tm1ElZR.html",
+      "source_quality": "placeholder_url",
+      "full_text": "岗位职责：\n1. 负责字节跳动泛体验、泛安全和泛质量领域各业务场景下 LLM 算法应用研究与算法落地工作\n2. 业务场景:风险挖掘 / 问题发现 / 信息检索 / 知识图谱 / 智能对话 / 信息总结\n3. 跟踪 LLM 领域最新研究成果,研究方向包括语言 LLM、多模态 LLM,Prompt 工程/RAG/Agents/SFT/RLHF 等\n\n任职要求：\n- 计算机相关专业本科及以上,3 年以上深度学习算法研究与开发经验\n- 具有 LLM 开发和实际落地经验\n- 熟悉 PyTorch/TensorFlow 框架与 Docker/Linux 开发环境\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "BOSS 一手 JD 页,推断近 1 年内发布",
+        "quality": 26,
+        "quality_reason": "职责 3 条(12)+ 要求 3 条(9) + 字段(5)",
+        "authenticity": 22,
+        "authenticity_reason": "URL 占位,2026-06-26 web_search 二次验证为真实 JD",
+        "total": 73,
+        "grade": "B",
+        "verified_at": "2026-06-26",
+        "verified_method": "web_search cross-check",
+        "verified_result": "real_jd_url_replaced_or_closed"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['专家']",
+        "经验要求 3 年(3+ 年,明确社招)",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-M006",
+      "company": "美团",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "美团 大模型算法专家（基础研发）",
+      "salary_range": "未披露",
+      "location": "北京",
+      "source_url": "https://jobs.zhaopin.com/CC383625320J40641704409.htm",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 负责参与 Scaling law、MoE、RLHF、Long context、RAG 等方向的研究\n2. 负责参与训练新的模型,在效果、规模和推理速度方面迭代到先进的技术水平\n\n任职要求：\n- 3+ 年使用深度学习框架(Pytorch、Tensorflow、Jax)经验\n- Python 能力优秀\n- 加分项:训练过多模态 generative models;在设计、训练机器学习模型(尤其是 LLM)方面有深刻的理解\n",
+      "scores": {
+        "timeliness": 25,
+        "timeliness_reason": "智联招聘一手,推断近 1 年内发布",
+        "quality": 22,
+        "quality_reason": "职责 2 条(8)+ 要求 3 条(9) + 字段(5)",
+        "authenticity": 26,
+        "authenticity_reason": "智联招聘(一手)",
+        "total": 73,
+        "grade": "B"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "标题含资深关键词: ['专家']",
+        "资深岗/高级岗"
+      ]
+    },
+    {
+      "id": "JD-D003",
+      "company": "DeepSeek",
+      "role_category": "algorithm",
+      "job_type": "ai_eng",
+      "title": "DeepSeek 深度学习研究员（AGI）",
+      "salary_range": "80-110K · 14 薪(最高年薪 154 万)",
+      "location": "北京 / 杭州",
+      "source_url": "https://www.toutiao.com/",
+      "source_quality": "trusted",
+      "full_text": "岗位职责：\n1. 从事 AGI 前沿研究,涵盖大模型预训练、后训练、对齐与推理加速\n2. 探索模型架构与训练范式创新(Scaling law、MoE、Long context、RLHF 等)\n3. 发表高水平学术论文,推动开源社区技术进步\n\n任职要求：\n- 至少熟练掌握 Python 和 C++ 两种编程语言\n- 在国际顶会或期刊(NeurIPS、ICML、ICLR、ACL、EMNLP 等)发表过相关论文\n- 或有知名比赛成绩(Kaggle/IMO/ACM 等)\n- 强调学术研究和编程能力\n- 加分:深度学习背景、强化学习、NLP 经验\n",
+      "scores": {
+        "timeliness": 18,
+        "timeliness_reason": "今日头条转载,推断 12-18 月内",
+        "quality": 37,
+        "quality_reason": "职责 3 条(12)+ 要求 5 条(15) + 字段(10)",
+        "authenticity": 15,
+        "authenticity_reason": "今日头条转载(信息密度低,可能含过时数字)",
+        "total": 70,
+        "grade": "B"
+      },
+      "intern_match": "none",
+      "intern_match_reasons": [
+        "薪资 80-110K 偏高(资深级)",
+        "资深岗/高级岗"
+      ]
+    }
+  ]
+}

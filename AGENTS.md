@@ -61,11 +61,12 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 3-J 收尾后有 **88 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts），全绿
+- 后端 `pytest`：Round 3-I 收尾后有 **113 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + **25 generator_jd_aware**），全绿
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余
   - **bugfix 必须加回归测试**：覆盖每个 score 区间 + 每个死代码删除点,防止回潮
+  - **R3-I 起：6 role 字节级 hash baseline 锁死** —— 不传 JD 时 `build_sections(target_role)` 输出必须与固化 hash 一致,任何 baseline 漂移立刻 fail,防止后续 round 不小心改默认排序路径
 - 后端冒烟：`python main.py` 启动后访问 `http://127.0.0.1:8000/api/health` 应返回 `{"status":"ok"}`
 - 前端类型检查：`cd frontend && npx vue-tsc --noEmit` 必须 0 error
 - 前端构建：`cd frontend && npm run build` 必须成功

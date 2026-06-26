@@ -15,6 +15,7 @@
 - **2026-06-26**：清理 `backend/output/` 6 个含真实 PII 的产物（陈佳豪 docx ×3 + audit_test + test_audit + preview_audit.json）— A 任务收尾
 - **2026-06-26**：Round 3-J 完成 — 简历模板库（5 套排版 `classic` / `single_column` / `two_column` / `minimal` / `technical`），**88 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter + **16 generator_layouts**），前端 radio 选模板 + 后端 `_LAYOUT_DISPATCH` 渲染分发 + 日志记 template
 - **2026-06-26**：Round 3-E 完成 — pre-push hook（`scripts/verify.ps1` 全量 pytest + vue-tsc + build + `scripts/hooks/pre-push` 自动挡 push + `scripts/install-hooks.ps1` 一键 setup），用 `git config core.hooksPath scripts/hooks` 把 hook 目录指向仓库内可版本控制位置，Windows only（PowerShell 5.1），跳过用 `git push --no-verify`
+- **2026-06-26**：Round 3-I 完成 — JD-driven generation（让评分卡的"准"真正落到生成结果里）。**新 `core/jd_ranker.py` 纯规则排序**（命中数倒序 + tie 维持原顺序，3 函数 `rank_projects` / `rank_highlights` / `rank_skill_groups`）；`generator.py` / `preview_resume` / `generate_resume_docx` 加可选 `jd_context` / `jd_text` 关键字参数（默认 None → 字节级一致）；`llm_rewriter.py` system prompt 加 matched 识别 + missing 不编造 + tier 引导（jd_focus=None 时 user message schema 完全不变）；`api/resume.py` PreviewRequest / GenerateRequest 加 jd_text 字段 + 422 校验（>50k 字符）；前端 `App.vue` 加 jdAware 复选框 + section 命中关键词角标。**113 个 pytest 全绿**（88 baseline + 25 新增），6 role 字节级 baseline hash 在 test 里固化锁死 jd_context=None 路径。**coder 在 wrap-up 阶段被 15min cap kill 但实施 100% 完成 + commit 已就位**；owner 接手 merge + 文档同步（coder 在 deliverable.md 标好 merge commit message 模板）
 
 ## 技术栈定型
 

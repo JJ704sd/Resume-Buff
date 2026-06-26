@@ -8,6 +8,7 @@ Round 1 流程(带人工确认):
   4. GET  /api/resume/download/{filename} -> 下载文件
 
 Round 3 J: 5 套排版模板(template: classic/single_column/two_column/minimal/technical)
+Round 3 I: 可选 jd_text 触发 JD-driven 排序(空 → 走原路径,字节级一致)
 """
 from datetime import datetime
 from pathlib import Path
@@ -31,12 +32,16 @@ router = APIRouter()
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Round 3 I: 与 api/jd.py 保持一致的输入上限
+_MAX_JD_TEXT_LEN = 50_000
+
 
 class PreviewRequest(BaseModel):
     target_role: str
     intention: str | None = None
     custom_project_ids: list[str] | None = None
     template: str = "classic"  # Round 3 J
+    jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
 
 
 class GenerateRequest(BaseModel):
@@ -44,6 +49,7 @@ class GenerateRequest(BaseModel):
     intention: str | None = None
     custom_project_ids: list[str] | None = None
     template: str = "classic"  # Round 3 J
+    jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -55,6 +61,26 @@ ROLE_DISPLAY = {
     "test_qa":     ("AI 测试 / QA",  "指标体系 / Badcase 归因"),
     "general":     ("日常实习(通用)", "全面展示 / 不偏科"),
 }
+
+
+def _normalize_jd_text(jd_text: str | None) -> str | None:
+    """
+    校验 + 规范化 jd_text:
+      - None / 空字符串 / 全空白 → None(走原路径,字节级一致)
+      - 长度 > 50_000 → 422
+      - 其他 → strip 后返回
+    """
+    if jd_text is None:
+        return None
+    stripped = jd_text.strip()
+    if not stripped:
+        return None
+    if len(jd_text) > _MAX_JD_TEXT_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"jd_text 长度 {len(jd_text)} 超过上限 {_MAX_JD_TEXT_LEN}",
+        )
+    return stripped
 
 
 @router.get("/roles")
@@ -86,12 +112,14 @@ def preview(req: PreviewRequest):
     预览接口: 返回结构化 sections,前端按模块渲染。
     调用 preview 不写日志(只是浏览)。
     """
+    jd_text = _normalize_jd_text(req.jd_text)
     try:
         data = preview_resume(
             target_role=req.target_role,
             intention=req.intention,
             custom_project_ids=req.custom_project_ids,
             template=req.template,
+            jd_text=jd_text,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -104,6 +132,7 @@ def generate(req: GenerateRequest):
     生成 .docx(用户在预览页确认后调用)。
     会写一行 generation.log。
     """
+    jd_text = _normalize_jd_text(req.jd_text)
     try:
         out_path = generate_resume_docx(
             target_role=req.target_role,
@@ -111,6 +140,7 @@ def generate(req: GenerateRequest):
             custom_project_ids=req.custom_project_ids,
             output_dir=OUTPUT_DIR,
             template=req.template,
+            jd_text=jd_text,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

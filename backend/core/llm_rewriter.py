@@ -27,6 +27,11 @@ SYSTEM_PROMPT = (
     "改写后的句子必须能在原文找到对应事实点。"
     "每条 bullet 一句话,中文,20-50 字。"
     "返回 JSON 数组,顺序与输入一致。"
+    "若提供了 jd_focus 字段:"
+    "- matched 关键词在改写后必须仍可被识别(术语不要替换为同义但不等价的词)"
+    "- **不要**为凑 missing 关键词而编造事实;missing 仅作为措辞倾斜方向参考,无事实不补"
+    "- tier_required 的关键词在 bullet 中应至少出现一次(无事实依据则不改写为该关键词)"
+    "- tier_preferred 关键词为加分项,尽量靠拢,做不到不强求"
 )
 
 
@@ -54,8 +59,24 @@ def _build_request_payload(
     target_role: str,
     jd_text: str,
     model: str,
+    jd_focus: Optional[dict] = None,
 ) -> dict:
-    """构造 chat/completions 请求体"""
+    """
+    构造 chat/completions 请求体。
+
+    Round 3 I: jd_focus 非 None 时,user message 注入 jd_focus 字段
+    (matched / missing / tier_required / tier_preferred),
+    引导 LLM 改写方向聚焦 JD 实际关心的关键词。
+    jd_focus=None 时(老调用路径 / LLM 未启用焦点)→ user message 跟原 schema 完全一致。
+    """
+    user_payload: dict = {
+        "target_role": target_role,
+        "jd_context": jd_text or "",
+        "bullets": highlights,
+    }
+    if jd_focus is not None:
+        user_payload["jd_focus"] = jd_focus
+
     return {
         "model": model,
         "temperature": 0.3,
@@ -64,14 +85,7 @@ def _build_request_payload(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": json.dumps(
-                    {
-                        "target_role": target_role,
-                        "jd_context": jd_text or "",
-                        "bullets": highlights,
-                    },
-                    ensure_ascii=False,
-                ),
+                "content": json.dumps(user_payload, ensure_ascii=False),
             },
         ],
     }
@@ -173,12 +187,17 @@ def rewrite_highlights(
     target_role: str,
     jd_text: str = "",
     max_per_call: int = 6,
+    jd_focus: Optional[dict] = None,
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
     - 输入输出长度一致。
     - 没启用 / 调用失败 / 超时 / JSON 解析失败 / 长度对不上 → 返回原 highlights (不抛)。
     - 每次最多处理 max_per_call 条,剩余保持原样。
+
+    Round 3 I: jd_focus(可选)注入 user message 引导改写方向。
+    - jd_focus=None(默认)→ user message schema 跟原版完全一致(向后兼容,字节级一致)
+    - jd_focus=dict → 注入到 user message(供 LLM 倾斜方向)
     """
     if not highlights:
         return highlights
@@ -196,7 +215,7 @@ def rewrite_highlights(
 
     for start in range(0, n, chunk_size):
         chunk = highlights[start : start + chunk_size]
-        payload = _build_request_payload(chunk, target_role, jd_text, model)
+        payload = _build_request_payload(chunk, target_role, jd_text, model, jd_focus=jd_focus)
         try:
             resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
             got = _extract_rewritten(resp, len(chunk))

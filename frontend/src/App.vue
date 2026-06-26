@@ -31,6 +31,11 @@ const jdText = ref<string>('')
 const jdLoading = ref(false)
 const jdResult = ref<JdMatchResult | null>(null)
 
+// Round 3 I: 按 JD 智能排序(checkbox) — 默认 unchecked,unchecked 时不传 jd_text
+const jdAware = ref(false)
+// 角标总开关(预览页"命中 N 关键词"chip) — 默认开
+const jdAwareBadgeEnabled = ref(true)
+
 // Round 2 #3: LLM 改写 toggle (UI 提示,实际启用需后端 LLM_API_KEY)
 const llmHintShown = ref(true)
 
@@ -66,12 +71,19 @@ async function onPreview() {
     ElMessage.warning('请先选择目标岗位')
     return
   }
+  // Round 3 I: 勾上 jdAware 时要求 jdText 非空
+  if (jdAware.value && !jdText.value.trim()) {
+    ElMessage.warning('勾选「按 JD 智能排序」需要先在下方粘贴 JD 文本')
+    return
+  }
   loading.value = true
   try {
+    const jdForBackend = jdAware.value ? jdText.value.trim() : null
     previewData.value = await resumeApi.preview(
       selectedRole.value,
       customIntention.value.trim() || undefined,
-      selectedTemplate.value
+      selectedTemplate.value,
+      jdForBackend
     )
     stage.value = 'preview'
     ElMessage.success('预览已生成,请 review 每个模块内容')
@@ -159,10 +171,12 @@ async function onConfirmDownload() {
 
   loading.value = true
   try {
+    const jdForBackend = jdAware.value ? jdText.value.trim() : null
     const blob = await resumeApi.generate(
       selectedRole.value,
       customIntention.value.trim() || undefined,
-      selectedTemplate.value
+      selectedTemplate.value,
+      jdForBackend
     )
     const roleName = currentRole.value?.name ?? '简历'
     const filename = `${summary.value?.name ?? '简历'}_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
@@ -198,6 +212,26 @@ function isProjectGroup(s: Section) { return s.type === 'project_group' }
 function isHeader(s: Section) { return s.type === 'header' }
 function isSkills(s: Section) { return s.type === 'skills' }
 function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eval' }
+
+// Round 3 I: 角标辅助 — 仅在 jdAware + BadgeEnabled + 后端真返回 jd_match_counts 时显示
+function showProjectBadge(projectIndex: number): boolean {
+  if (!jdAware.value || !jdAwareBadgeEnabled.value) return false
+  const counts = previewData.value?.jd_match_counts
+  if (!counts) return false
+  return projectIndex >= 0 && projectIndex < counts.projects.length
+}
+function showSkillBadge(groupIndex: number): boolean {
+  if (!jdAware.value || !jdAwareBadgeEnabled.value) return false
+  const counts = previewData.value?.jd_match_counts
+  if (!counts) return false
+  return groupIndex >= 0 && groupIndex < counts.skill_groups.length
+}
+function projectMatchCount(projectIndex: number): number {
+  return previewData.value?.jd_match_counts?.projects[projectIndex] ?? 0
+}
+function skillMatchCount(groupIndex: number): number {
+  return previewData.value?.jd_match_counts?.skill_groups[groupIndex] ?? 0
+}
 </script>
 
 <template>
@@ -272,6 +306,25 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                       templates.find(t => t.id === selectedTemplate)?.description
                         ?? ''
                     }}
+                  </div>
+                </el-form-item>
+
+                <!-- Round 3 I: 按 JD 智能排序 -->
+                <el-form-item label="智能排序">
+                  <el-checkbox v-model="jdAware" size="default">
+                    按 JD 智能排序(项目 / highlight / 技能组按命中数倒序)
+                  </el-checkbox>
+                  <div class="hint">
+                    {{
+                      jdAware
+                        ? '将使用下方 JD 文本触发后端排序,预览显示「命中 N 关键词」角标'
+                        : '不勾选则按 ROLE_CONFIG 原顺序生成(与之前一致)'
+                    }}
+                  </div>
+                  <div class="hint" style="margin-top: 4px">
+                    <el-checkbox v-model="jdAwareBadgeEnabled" :disabled="!jdAware" size="small">
+                      显示「命中 N 关键词」角标(预览页)
+                    </el-checkbox>
                   </div>
                 </el-form-item>
 
@@ -499,6 +552,10 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                 <div v-for="(p, pi) in s.content.projects" :key="pi" class="preview-project">
                   <div class="preview-line-bold">
                     {{ p.title }} <span class="role">| {{ p.content.role }}</span>
+                    <span
+                      v-if="showProjectBadge(pi)"
+                      class="match-badge"
+                    >命中 {{ projectMatchCount(pi) }} 关键词</span>
                   </div>
                   <div class="preview-meta">{{ p.content.period }}</div>
                   <div v-if="p.content.summary" class="preview-line">{{ p.content.summary }}</div>
@@ -513,6 +570,10 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
                 <div v-for="(g, gi) in s.content.groups" :key="gi" class="preview-line">
                   <span class="lbl">{{ g.label }}:</span>
                   <span v-for="(item, ii) in g.items" :key="ii" class="skill-chip">{{ item }}</span>
+                  <span
+                    v-if="showSkillBadge(gi)"
+                    class="match-badge"
+                  >命中 {{ skillMatchCount(gi) }} 关键词</span>
                 </div>
               </template>
 
@@ -736,5 +797,19 @@ body {
   background: #fef0f0;
   color: #f56c6c;
   border: 1px solid #fde2e2;
+}
+
+/* ===== Round 3 I: JD 命中角标 ===== */
+.match-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #fdf6ec;
+  color: #e6a23c;
+  border: 1px solid #faecd8;
+  vertical-align: middle;
 }
 </style>

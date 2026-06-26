@@ -32,25 +32,28 @@
 - `.harness/` — 多 agent 协作脚手架（`agent.md` = orchestrator；`reins/{developer,tester}/` = 两个 rein；`docs/` = 架构/流程/隐私；`memory/` = 团队共享记忆）
 - `简历帮知识库/` — 个人素材草稿（`.gitignore`，不进库）
 
-## AI 岗位 JD 资料库（v4 实习岗筛选版，2026-06-26）
+## AI 岗位 JD 资料库（v4 实习岗筛选版，2026-06-26，最近更新 2026-06-26 Round 3.5）
 
 > 个人用的 AI 行业 JD 池子，与 `backend/core/jd_parser.py` 的 `match_score` 联动 — 投递前先把目标 JD 全文跑 `match_score(text, role, materials)`，看素材库匹配度。
 
 顶层 3 个文件（**只保留最新版**，旧版本已清理到回收站）：
-- `AI岗位JD库_v4_intern.json` — **主库**：82 份 JD（v3 42 + 补搜实习岗 40），每份带 `intern_match` 4 级标签（strong / campus_to_intern / weak / none）
-- `AI岗位JD库_v4_intern_筛选报告.md` — **筛选报告**：4 级规则 + 47 份实习可投清单 + 公司维度统计
+- `AI岗位JD库_v4_intern.json` — **主库**：86 份 JD（v3 42 + 补搜实习岗 40 + Round 3.5 百运网 4），每份带 `intern_match` 4 级标签（strong / campus_to_intern / weak / none）
+- `AI岗位JD库_v4_intern_筛选报告.md` — **筛选报告**：4 级规则 + 52 份实习可投清单 + 公司维度统计
 - `AI岗位JD库_v4_黄金标的match报告.md` — **match_score 实测**：JD-B010 字节 / JD-D007 DeepSeek / JD-A012 阿里 3 份黄金 × 6 role = 18 次匹配对比 + 局限性说明
 
+> R3.5 阈值调优 ground truth 如需独立保存,后续可在 `简历帮知识库/jd_samples.json` 单独建文件(含 label / label_note),不污染主库
+
 关联 `scripts/`：
-- `scripts/build_v4.py` — v4 入库脚本（v3 + 补搜 JD，含 ID 去重）
+- `scripts/build_v4.py` — v4 入库脚本（v3 + 补搜 JD + 后续扩库，含 ID 去重）
 - `scripts/score_intern_match.py` — 4 级实习匹配打标 + Markdown 报告生成
 - `scripts/match_golden_targets.py` — 黄金 JD × 6 role 的 match_score 实测
 
 扩库流程：
-1. 在 `build_v4.py` 的 `NEW_JDS` 列表追加新 JD（注意 ID 不能跟 v3 重复）
+1. 在 `build_v4.py` 的 `NEW_JDS` 列表追加新 JD（注意 ID 不能跟现有 86 个重复，命名沿用 `JD-X###`，公司用首字母缩写如 BY=百运网）
 2. `python scripts/build_v4.py` → 重建 `AI岗位JD库_v4_intern.json`
 3. `python scripts/score_intern_match.py` → 重打 4 级标签 + 生成筛选报告
 4. 旧版本文件直接 trash，**不保留 v1/v2/v3 历史**（避免目录冗余）
+5. 如果是手工抄录的 JD（非网上抓），`source_url` 填 `"user_provided:<来源描述>"`、`source_quality` 用 `"unverified"`、`authenticity` 分打低分（如 18 分）
 
 ## Code style
 

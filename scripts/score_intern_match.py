@@ -183,7 +183,7 @@ def main():
     md.append("# AI 岗位 JD 库 v4 — 实习岗筛选报告（补搜版）\n")
     md.append(f"> 筛选日期: 2026-06-26  \n")
     md.append(f"> 筛选维度: **实习岗匹配度** (用户需求: 校招岗位为主, 搜索目标 = **实习岗**)  \n")
-    md.append(f"> 数据基础: v4.0 (72 份 JD, = v3 42 份 + 补搜 30 份)  \n")
+    md.append(f"> 数据基础: v4.0 ({len(intern_jds)} 份 JD, = v3 42 份 + 补搜 {len(intern_jds) - 42} 份)  \n")
     md.append(f"> 输出: AI岗位JD库_v4_intern.json\n\n")
 
     md.append("## 一、判定规则\n\n")

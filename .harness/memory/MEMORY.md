@@ -13,6 +13,7 @@
 - **2026-06-25**：Round 3-A 完成 — JD 加权 score + tier 分组（required/preferred/bonus）+ 业务阈值 banner（高≥80 / 中 60-79 / 低<60），**72 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter）
 - **2026-06-26**：Round 3-G（外部简历实时读取 + JD 评分联动）**cancelled** — 用户选完 scope 后主动叫停，coder session attempt=0，未浪费 token
 - **2026-06-26**：清理 `backend/output/` 6 个含真实 PII 的产物（陈佳豪 docx ×3 + audit_test + test_audit + preview_audit.json）— A 任务收尾
+- **2026-06-26**：Round 3-J 完成 — 简历模板库（5 套排版 `classic` / `single_column` / `two_column` / `minimal` / `technical`），**88 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter + **16 generator_layouts**），前端 radio 选模板 + 后端 `_LAYOUT_DISPATCH` 渲染分发 + 日志记 template
 
 ## 技术栈定型
 
@@ -57,7 +58,7 @@
 | P1 | Round 3-A：JD 加权 score / tier / 业务阈值 banner | ✅ 完成（72 测试全绿，2026-06-25） |
 | P2 | Round 3.5：阈值调优 | ⏸️ 等用户在 `简历帮知识库/jd_samples.json` 补 ≥10 份 JD |
 | P2 | Round 3-G：外部简历实时读取 + JD 评分联动 | ⏸️ Cancelled（2026-06-26） |
-| P2 | Round 3-J：简历模板库（默认/单栏/双栏/简洁/技术） | 待启动 |
+| P2 | Round 3-J：简历模板库（默认/单栏/双栏/简洁/技术） | ✅ 完成（5 套排版 + 16 测试，2026-06-26） |
 | P2 | Round 3-K：求职信（规则版，基于素材库 + role + JD） | 待启动 |
 | P2 | Round 3-M：简历导出多格式（docx → pdf / md / html） | 待启动 |
 | P3 | 云端部署 / 多端同步 | 暂停（等用户明确启动） |
@@ -79,3 +80,4 @@
 - **2026-06-25**：决定强制两段式（preview → generate）— 防止用户投错简历
 - **2026-06-25**：**推翻"不引入 pytest"决策** — R3-A 加权 score / tier 涉及边界多（72 个测试），手测无法覆盖，引入 pytest（53 jd_parser + 3 api_jd + 16 llm_rewriter），仅后端，前端不引入 Vitest
 - **2026-06-26**：R3-G scope 选定（"解析 + JD 评分联动"）后用户主动 cancel — 验证"GUI 实施任务默认暂停"偏好依然有效，后续 round 必须用户明确指令才启动
+- **2026-06-26**：R3-J 决定 5 套排版（`classic` / `single_column` / `two_column` / `minimal` / `technical`）由 `LAYOUT_CONFIG` dict 统一驱动视觉差异（颜色/字号/行距/margin/header 对齐/skills 前缀/项目底纹/双栏 table），4 个 layout 复用 `_render_classic` 仅改 layout_cfg，`two_column` 走 table 结构差异 — 避免重复渲染逻辑，便于以后加新模板只需加一行 config

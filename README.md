@@ -26,7 +26,7 @@
 
 ---
 
-## Round 3 A 当前能力(2026-06-25)
+## Round 3 J 当前能力(2026-06-26)
 
 | 功能 | 状态 |
 |---|---|
@@ -36,6 +36,7 @@
 | 本地日志 `backend/logs/generation.log` | ✅ |
 | JD 解析(关键词 + 经验 + 学历 + **tier 分组**) + 加权 0-100 匹配度评分 + **业务阈值 banner (高≥80 / 中 60-79 / 低<60)** | ✅ Round 2 #2 + R3-A |
 | LLM 智能改写项目描述(无 key 静默降级,OpenAI 兼容 HTTP) | ✅ Round 2 #3 |
+| **简历模板库**(5 套排版:`classic` / `single_column` / `two_column` / `minimal` / `technical`,前端 radio 切换 + 后端 layout dispatcher + docx 视觉差异) | ✅ Round 3 J |
 
 ---
 
@@ -48,7 +49,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 72 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 88 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + **16 generator_layouts**),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 
@@ -98,7 +99,8 @@ npm run dev                       # http://127.0.0.1:5173
 │   │   ├── conftest.py
 │   │   ├── test_jd_parser.py       # 53 pytest 用例(R2#2 关键词 + R3-A 加权/tier/recommendation + bugfix 回归)
 │   │   ├── test_api_jd.py          # 3 pytest 用例(R3-A FastAPI TestClient 集成)
-│   │   └── test_llm_rewriter.py    # 16 pytest 用例(含 R2#1 baseline 锁死)
+│   │   ├── test_llm_rewriter.py    # 16 pytest 用例(含 R2#1 baseline 锁死)
+│   │   └── test_generator_layouts.py # 16 pytest 用例(R3-J 5 套 layout dispatcher + 视觉差异 + invalid + backward-compat)
 │   ├── data/
 │   │   └── materials.json     # 素材库(单人唯一真源,脱敏版)
 │   ├── .env.example           # Round 2 #3: LLM_API_KEY / LLM_BASE_URL / LLM_MODEL / LLM_ENABLED 模板
@@ -135,6 +137,8 @@ npm run dev                       # http://127.0.0.1:5173
   - 远端: https://github.com/JJ704sd/Resume-Buff
 - **Round 3-A**: JD 解析 MVP 升级 — KEYWORD_GROUPS weight 三元组 (必选 1.0 / 加分 0.5) + tier 上下文窗口识别(必选/优先/加分)+ 加权 score + 业务阈值 banner(≥80 高 / 60-79 中 / <60 低)+ bugfix(UI 阈值一致 + 死代码清理 + 签名修正)
   - R3-A 收尾 commit: `931da41 chore(round3#a): gitignore orchestrator scratch` + `9ceeaf6 fix(round3#a): bug hunt — UI 阈值一致 + 死代码清理 + 注释对齐`
+- **Round 3-J**: 简历模板库 — 5 套排版 (`classic` / `single_column` / `two_column` / `minimal` / `technical`) 由 `LAYOUT_CONFIG` 驱动视觉差异(颜色/字号/行距/margin/header 对齐/skills 前缀/项目底纹/双栏 table),前端 radio 选模板,API `template` 字段透传到 `render_docx` 的 `_LAYOUT_DISPATCH`,日志记录 template。
+  - R3-J 收尾 commit: `30bbd36 merge: Round 3-J — 简历模板库 (5 套排版)` + `ed346d8 feat(round3#j): 简历模板库`
 
 ### 🎯 Round 3 后续候选(等用户拍)
 - **R3-B**: LLM prompt 模板库 — 按 role 区分 system prompt(产品/算法/度量风格差异)

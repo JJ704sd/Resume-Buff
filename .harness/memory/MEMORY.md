@@ -11,7 +11,7 @@
 - **2026-06-25**：Round 2 #1 — 启用全部 6 个 role 方向（commit `14fc0eb`）
 - **2026-06-25**：README 当前能力表同步（commit `0467b29`）
 - **2026-06-25**：Round 3-A 完成 — JD 加权 score + tier 分组（required/preferred/bonus）+ 业务阈值 banner（高≥80 / 中 60-79 / 低<60），**72 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter）
-- **2026-06-26**：Round 3-G（外部简历实时读取 + JD 评分联动）**cancelled** — 用户选完 scope 后主动叫停，coder session attempt=0，未浪费 token
+- **2026-06-26**：Round 3-G（外部简历实时读取 + JD 评分联动）**cancelled** — 用户选完 scope 后主动叫停；worker 仍落地完整 MVP（**1467 行新增**），按 2026-06-26 hygiene 决策 **commit 到 `feat/r3g-resume-upload` 分支保留**（不 merge 不 push），重启时直接 cherry-pick
 - **2026-06-26**：清理 `backend/output/` 6 个含真实 PII 的产物（陈佳豪 docx ×3 + audit_test + test_audit + preview_audit.json）— A 任务收尾
 - **2026-06-26**：Round 3-J 完成 — 简历模板库（5 套排版 `classic` / `single_column` / `two_column` / `minimal` / `technical`），**88 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter + **16 generator_layouts**），前端 radio 选模板 + 后端 `_LAYOUT_DISPATCH` 渲染分发 + 日志记 template
 
@@ -57,7 +57,7 @@
 | P1 | Round 2 #3：LLM 智能改写项目描述 | ✅ 完成（`core/llm_rewriter.py`，无 key 静默降级） |
 | P1 | Round 3-A：JD 加权 score / tier / 业务阈值 banner | ✅ 完成（72 测试全绿，2026-06-25） |
 | P2 | Round 3.5：阈值调优 | ⏸️ 等用户在 `简历帮知识库/jd_samples.json` 补 ≥10 份 JD |
-| P2 | Round 3-G：外部简历实时读取 + JD 评分联动 | ⏸️ Cancelled（2026-06-26） |
+| P2 | Round 3-G：外部简历实时读取 + JD 评分联动 | ⏸️ Cancelled（2026-06-26；**MVP 1467 行 commit 在 `feat/r3g-resume-upload` 分支保留**） |
 | P2 | Round 3-J：简历模板库（默认/单栏/双栏/简洁/技术） | ✅ 完成（5 套排版 + 16 测试，2026-06-26） |
 | P2 | Round 3-K：求职信（规则版，基于素材库 + role + JD） | 待启动 |
 | P2 | Round 3-M：简历导出多格式（docx → pdf / md / html） | 待启动 |
@@ -81,3 +81,4 @@
 - **2026-06-25**：**推翻"不引入 pytest"决策** — R3-A 加权 score / tier 涉及边界多（72 个测试），手测无法覆盖，引入 pytest（53 jd_parser + 3 api_jd + 16 llm_rewriter），仅后端，前端不引入 Vitest
 - **2026-06-26**：R3-G scope 选定（"解析 + JD 评分联动"）后用户主动 cancel — 验证"GUI 实施任务默认暂停"偏好依然有效，后续 round 必须用户明确指令才启动
 - **2026-06-26**：R3-J 决定 5 套排版（`classic` / `single_column` / `two_column` / `minimal` / `technical`）由 `LAYOUT_CONFIG` dict 统一驱动视觉差异（颜色/字号/行距/margin/header 对齐/skills 前缀/项目底纹/双栏 table），4 个 layout 复用 `_render_classic` 仅改 layout_cfg，`two_column` 走 table 结构差异 — 避免重复渲染逻辑，便于以后加新模板只需加一行 config
+- **2026-06-26**：Hygiene 决策 — R3-G cancelled 后**保留分支而非 trash 代码**（用户偏好"commit 由用户决定何时推"≠"禁止 commit"；1467 行 MVP 含 pytest 覆盖有重启价值，留作未来 round 备料）；`feat/r3j-templates` 已 merge 后直接删；`scripts/` 目录本次核实时**不存在**，无需加 .gitignore（防过度约束）

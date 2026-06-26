@@ -9,6 +9,10 @@ from core.generator import load_materials, ENABLED_ROLES  # noqa: E402
 
 SAMPLES = Path(r"D:/简历帮/简历帮知识库/jd_samples.json")
 
+# 强制覆盖 user 复核的 label. 默认 False (只推断 label=None 的样本).
+# 命令行用法: python label_samples.py --force
+FORCE_OVERWRITE = "--force" in sys.argv
+
 
 def infer_label(top_score: int, top_role: str, coverage: dict, matched: list, missing: list) -> tuple[str, str]:
     """
@@ -81,10 +85,15 @@ def main():
         s["top_role"] = role_hint
         s["top_coverage"] = cov  # dict[group_name -> float]
         s["all_role_scores"] = {role_hint: sc}
-        s["label"], s["label_note"] = infer_label(sc, role_hint, cov, matched, missing)
-
         cov_pct = ", ".join(f"{k}={v:.0%}" for k, v in cov.items()) if isinstance(cov, dict) else "n/a"
-        print(f"  -> {role_hint} = {sc} (cov {cov_pct}), label={s['label']}")
+        # 只对未标注的样本推断 label (保留 user 复核)
+        # 强制覆盖用 --force (命令行)
+        if s.get("label") is None or FORCE_OVERWRITE:
+            s["label"], s["label_note"] = infer_label(sc, role_hint, cov, matched, missing)
+            print(f"  -> {role_hint} = {sc} (cov {cov_pct}), label={s['label']} [推断]")
+        else:
+            print(f"  -> {role_hint} = {sc} (cov {cov_pct}), label={s['label']} [保留]")
+
         print(f"     matched: {matched[:5]}")
         print(f"     missing: {missing[:5]}")
         print()

@@ -26,7 +26,7 @@
 
 ---
 
-## Round 3 J 当前能力(2026-06-26)
+## Round 3 E 当前能力(2026-06-26)
 
 | 功能 | 状态 |
 |---|---|
@@ -37,6 +37,7 @@
 | JD 解析(关键词 + 经验 + 学历 + **tier 分组**) + 加权 0-100 匹配度评分 + **业务阈值 banner (高≥80 / 中 60-79 / 低<60)** | ✅ Round 2 #2 + R3-A |
 | LLM 智能改写项目描述(无 key 静默降级,OpenAI 兼容 HTTP) | ✅ Round 2 #3 |
 | **简历模板库**(5 套排版:`classic` / `single_column` / `two_column` / `minimal` / `technical`,前端 radio 切换 + 后端 layout dispatcher + docx 视觉差异) | ✅ Round 3 J |
+| **CI 验证(pre-push hook 自动 pytest + vue-tsc + build)** | ✅ Round 3 E |
 
 ---
 
@@ -139,12 +140,13 @@ npm run dev                       # http://127.0.0.1:5173
   - R3-A 收尾 commit: `931da41 chore(round3#a): gitignore orchestrator scratch` + `9ceeaf6 fix(round3#a): bug hunt — UI 阈值一致 + 死代码清理 + 注释对齐`
 - **Round 3-J**: 简历模板库 — 5 套排版 (`classic` / `single_column` / `two_column` / `minimal` / `technical`) 由 `LAYOUT_CONFIG` 驱动视觉差异(颜色/字号/行距/margin/header 对齐/skills 前缀/项目底纹/双栏 table),前端 radio 选模板,API `template` 字段透传到 `render_docx` 的 `_LAYOUT_DISPATCH`,日志记录 template。
   - R3-J 收尾 commit: `30bbd36 merge: Round 3-J — 简历模板库 (5 套排版)` + `ed346d8 feat(round3#j): 简历模板库`
+- **Round 3-E**: CI 验证(`scripts/verify.ps1` 全量 pytest + vue-tsc + build + `scripts/hooks/pre-push` 自动挡 push + `scripts/install-hooks.ps1` 一键 setup) — 用 `git config core.hooksPath scripts/hooks` 把 hook 目录指向仓库内可版本控制位置,Windows only(PowerShell 5.1),跳过用 `git push --no-verify`。
+  - 启用: `powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1`
 
 ### 🎯 Round 3 后续候选(等用户拍)
 - **R3-B**: LLM prompt 模板库 — 按 role 区分 system prompt(产品/算法/度量风格差异)
 - **R3-C**: LLM 缓存层 — 同 role+intention+bullet 复用上次改写,省 token
 - **R3-D**: 求职信 / 自我介绍生成 — README 之前提的能力,`.docx` 多一份输出
-- **R3-E**: CI / pre-push hook — pytest + vue-tsc + build 自动拦
 - **R3-F**: 异步化 + 评测强化 — Round 2 #3 已知限制 + 8 要素 #6
 - **R3.5**: 阈值调优 — 用真实 JD 数据校准 80/60 阈值(R3-A 当前是占位)
 

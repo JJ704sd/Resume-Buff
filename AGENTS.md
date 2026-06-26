@@ -11,6 +11,8 @@
 - 前端安装依赖：`cd frontend && npm install`
 - 前端启动：     `cd frontend && npm run dev` （http://127.0.0.1:5173）
 - 前端构建：     `cd frontend && npm run build` （产物到 `frontend/dist/`，已在 .gitignore）
+- 安装 pre-push hook：`powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1`
+- 跳过 hook：`git push --no-verify`（紧急情况）
 - 前端类型检查： `cd frontend && npx vue-tsc --noEmit`
 
 ## Project layout

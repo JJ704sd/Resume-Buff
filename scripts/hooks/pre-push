@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# .git/hooks/pre-push（或 core.hooksPath 指向的 scripts/hooks/pre-push）
+# =============================================================================
+# 简历帮 — pre-push hook
+#
+# 在 git push 之前自动跑全量验证（pytest + vue-tsc + build）。
+# 验证脚本：scripts/verify.ps1
+# 失败时 exit 1 挡 push，紧急情况可用 `git push --no-verify` 跳过。
+#
+# 本 round 仅支持 Windows（PowerShell）。macOS / Linux 暂未实现，
+# 后续 round 可加 scripts/verify.sh 扩展。
+# =============================================================================
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VERIFY_PS1="$REPO_ROOT/scripts/verify.ps1"
+
+# --- OS 检测 -----------------------------------------------------------------
+case "$(uname -s 2>/dev/null || echo Windows)" in
+    MINGW*|MSYS*|CYGWIN*|Windows*)
+        # Git Bash on Windows — 调 PowerShell 跑 verify.ps1
+        if [ ! -f "$VERIFY_PS1" ]; then
+            echo "[pre-push] 找不到 $VERIFY_PS1" >&2
+            echo "           请确认 scripts/verify.ps1 在仓库根目录" >&2
+            exit 1
+        fi
+        echo ""
+        echo "==============================================================================" >&2
+        echo "  [pre-push] 启动全量验证（pytest + vue-tsc + build）" >&2
+        echo "==============================================================================" >&2
+        powershell -ExecutionPolicy Bypass -File "$VERIFY_PS1"
+        exit $?
+        ;;
+    Darwin|Linux)
+        echo "[pre-push] 暂不支持 macOS / Linux" >&2
+        echo "           本 round 仅实现 Windows（PowerShell）。" >&2
+        echo "           跳过验证直接 push：git push --no-verify" >&2
+        exit 1
+        ;;
+    *)
+        echo "[pre-push] 未识别的 OS：$(uname -s)" >&2
+        exit 1
+        ;;
+esac

@@ -10,12 +10,15 @@
 - **2026-06-24**：README 隐私/部署边界声明（commit `4e3f1e9`）
 - **2026-06-25**：Round 2 #1 — 启用全部 6 个 role 方向（commit `14fc0eb`）
 - **2026-06-25**：README 当前能力表同步（commit `0467b29`）
+- **2026-06-25**：Round 3-A 完成 — JD 加权 score + tier 分组（required/preferred/bonus）+ 业务阈值 banner（高≥80 / 中 60-79 / 低<60），**72 个 pytest 用例全绿**（53 jd_parser + 3 api_jd + 16 llm_rewriter）
+- **2026-06-26**：Round 3-G（外部简历实时读取 + JD 评分联动）**cancelled** — 用户选完 scope 后主动叫停，coder session attempt=0，未浪费 token
+- **2026-06-26**：清理 `backend/output/` 6 个含真实 PII 的产物（陈佳豪 docx ×3 + audit_test + test_audit + preview_audit.json）— A 任务收尾
 
 ## 技术栈定型
 
-- 后端：Python + FastAPI + python-docx + pymupdf
+- 后端：Python + FastAPI + python-docx + pymupdf + **pytest（2026-06-25 推翻先前"不引入"决策，见改动记录）**
 - 前端：Vue 3 + TypeScript + Vite + Element Plus + axios
-- 不引入：ESLint / Prettier / Vitest / pytest（**用户偏好**：保持栈精简，避免配置膨胀）
+- 不引入：ESLint / Prettier / Vitest（**用户偏好**：保持栈精简，避免配置膨胀）
 - 不加：账号系统 / 鉴权 / 公网部署（**用户偏好**：本地单用户）
 
 ## 角色清单（稳定）
@@ -49,9 +52,14 @@
 
 | 优先级 | 项 | 状态 |
 |---|---|---|
-| P1 | Round 2 #2：JD 解析 / 匹配度评分 | 待启动 |
-| P1 | Round 2 #3：LLM 智能改写项目描述 | 待启动 |
-| P2 | Round 3：求职信 / 模板库 / 历史偏好 | 远期 |
+| P1 | Round 2 #2：JD 解析 / 匹配度评分 | ✅ 完成（R3-A 落地） |
+| P1 | Round 2 #3：LLM 智能改写项目描述 | ✅ 完成（`core/llm_rewriter.py`，无 key 静默降级） |
+| P1 | Round 3-A：JD 加权 score / tier / 业务阈值 banner | ✅ 完成（72 测试全绿，2026-06-25） |
+| P2 | Round 3.5：阈值调优 | ⏸️ 等用户在 `简历帮知识库/jd_samples.json` 补 ≥10 份 JD |
+| P2 | Round 3-G：外部简历实时读取 + JD 评分联动 | ⏸️ Cancelled（2026-06-26） |
+| P2 | Round 3-J：简历模板库（默认/单栏/双栏/简洁/技术） | 待启动 |
+| P2 | Round 3-K：求职信（规则版，基于素材库 + role + JD） | 待启动 |
+| P2 | Round 3-M：简历导出多格式（docx → pdf / md / html） | 待启动 |
 | P3 | 云端部署 / 多端同步 | 暂停（等用户明确启动） |
 
 ## 已知陷阱
@@ -60,6 +68,7 @@
 - `ROLE_DISPLAY` 在 `backend/api/resume.py` 顶部，与 `ROLE_CONFIG` 分离 — 加新 role 时**两处都要改**
 - `materials.json._meta.source_files` 是历史简历文件名（脱敏版用了占位符），改 schema 时记得保持这个字段
 - 前端 `axios` 报错信息走 `e?.response?.data?.detail ?? e?.message ?? '未知错误'` — 后端 HTTPException 的 `detail` 会原样展示，不要在那里塞 PII
+- `backend/output/` 容易堆积含真实姓名的 docx / json — 每次跑完生成记得用 mavis-trash 清 PII 文件（参考 2026-06-26 A 任务）
 
 ## 改动记录（重要决策）
 
@@ -68,3 +77,5 @@
 - **2026-06-24**：决定 `materials.json` 公开脱敏 + 真实数据走 `_private_backup.json`（`.gitignore`）
 - **2026-06-25**：决定 frontend 用 Element Plus 而不是自研组件 — 节省 UI 工作量
 - **2026-06-25**：决定强制两段式（preview → generate）— 防止用户投错简历
+- **2026-06-25**：**推翻"不引入 pytest"决策** — R3-A 加权 score / tier 涉及边界多（72 个测试），手测无法覆盖，引入 pytest（53 jd_parser + 3 api_jd + 16 llm_rewriter），仅后端，前端不引入 Vitest
+- **2026-06-26**：R3-G scope 选定（"解析 + JD 评分联动"）后用户主动 cancel — 验证"GUI 实施任务默认暂停"偏好依然有效，后续 round 必须用户明确指令才启动

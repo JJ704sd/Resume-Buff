@@ -38,6 +38,7 @@
 | LLM 智能改写项目描述(无 key 静默降级,OpenAI 兼容 HTTP) | ✅ Round 2 #3 |
 | **简历模板库**(5 套排版:`classic` / `single_column` / `two_column` / `minimal` / `technical`,前端 radio 切换 + 后端 layout dispatcher + docx 视觉差异) | ✅ Round 3 J |
 | **CI 验证(pre-push hook 自动 pytest + vue-tsc + build)** | ✅ Round 3 E |
+| **JD-driven 生成**(粘贴 JD 后:项目/highlight/skill 按命中数倒序 + 前端每 section 命中关键词角标 + LLM 改写 prompt 注入 matched/missing 关键词 + 不传 JD 时字节级一致) | ✅ Round 3 I |
 
 ---
 
@@ -50,7 +51,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 88 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + **16 generator_layouts**),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 113 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + **25 generator_jd_aware**),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 

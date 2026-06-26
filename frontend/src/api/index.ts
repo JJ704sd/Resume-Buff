@@ -22,6 +22,13 @@ export interface Role {
   tone: string
 }
 
+// ----- Round 3 J: 5 套排版模板 -----
+export interface Template {
+  id: string
+  name: string
+  description: string
+}
+
 export interface Section {
   type: string  // "header" | "education" | "project_group" | "skills" | "honors" | "self_eval"
   title: string
@@ -30,6 +37,7 @@ export interface Section {
 
 export interface PreviewResponse {
   target_role: string
+  template: string  // Round 3 J
   intention: string
   sections: Section[]
 }
@@ -64,12 +72,19 @@ export const materialsApi = {
 }
 
 export const resumeApi = {
-  listRoles: () => api.get<{ enabled: string[]; roles: Role[]; note: string }>('/resume/roles').then(r => r.data),
-  preview: (target_role: string, intention?: string) =>
-    api.post<PreviewResponse>('/resume/preview', { target_role, intention }).then(r => r.data),
-  generate: (target_role: string, intention?: string) =>
+  listRoles: () =>
     api
-      .post('/resume/generate', { target_role, intention }, { responseType: 'blob' })
+      .get<{ enabled: string[]; roles: Role[]; templates: Template[]; note: string }>(
+        '/resume/roles'
+      )
+      .then(r => r.data),
+  preview: (target_role: string, intention?: string, template?: string) =>
+    api
+      .post<PreviewResponse>('/resume/preview', { target_role, intention, template })
+      .then(r => r.data),
+  generate: (target_role: string, intention?: string, template?: string) =>
+    api
+      .post('/resume/generate', { target_role, intention, template }, { responseType: 'blob' })
       .then(r => r.data as Blob),
 }
 

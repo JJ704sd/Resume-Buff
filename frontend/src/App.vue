@@ -8,6 +8,7 @@ import {
   downloadBlob,
   type MaterialSummary,
   type Role,
+  type Template,
   type PreviewResponse,
   type JdMatchResult,
   type Section,
@@ -17,8 +18,12 @@ const summary = ref<MaterialSummary | null>(null)
 const roles = ref<Role[]>([])
 const enabledRoles = ref<string[]>([])
 
+// Round 3 J: 模板库
+const templates = ref<Template[]>([])
+
 // 表单
 const selectedRole = ref<string>('tech_metric')
+const selectedTemplate = ref<string>('classic')
 const customIntention = ref<string>('')
 
 // Round 2 #2: JD 解析 + 匹配度评分
@@ -45,6 +50,7 @@ onMounted(async () => {
     summary.value = s
     roles.value = r.roles
     enabledRoles.value = r.enabled
+    templates.value = r.templates ?? []
     if (r.roles.length > 0) selectedRole.value = r.roles[0].id
   } catch (e) {
     ElMessage.error('加载失败:请确认后端已启动 (python backend/main.py)')
@@ -64,7 +70,8 @@ async function onPreview() {
   try {
     previewData.value = await resumeApi.preview(
       selectedRole.value,
-      customIntention.value.trim() || undefined
+      customIntention.value.trim() || undefined,
+      selectedTemplate.value
     )
     stage.value = 'preview'
     ElMessage.success('预览已生成,请 review 每个模块内容')
@@ -154,7 +161,8 @@ async function onConfirmDownload() {
   try {
     const blob = await resumeApi.generate(
       selectedRole.value,
-      customIntention.value.trim() || undefined
+      customIntention.value.trim() || undefined,
+      selectedTemplate.value
     )
     const roleName = currentRole.value?.name ?? '简历'
     const filename = `${summary.value?.name ?? '简历'}_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
@@ -246,6 +254,25 @@ function isList(s: Section) { return s.type === 'honors' || s.type === 'self_eva
 
                 <el-form-item label="自定义求职意向(可选)">
                   <el-input v-model="customIntention" placeholder="留空则使用岗位默认值" clearable />
+                </el-form-item>
+
+                <!-- Round 3 J: 简历模板库 -->
+                <el-form-item label="简历排版">
+                  <el-radio-group v-model="selectedTemplate" size="small">
+                    <el-radio-button
+                      v-for="t in templates"
+                      :key="t.id"
+                      :value="t.id"
+                    >
+                      {{ t.name }}
+                    </el-radio-button>
+                  </el-radio-group>
+                  <div class="hint" v-if="templates.length">
+                    {{
+                      templates.find(t => t.id === selectedTemplate)?.description
+                        ?? ''
+                    }}
+                  </div>
                 </el-form-item>
 
                 <el-form-item>

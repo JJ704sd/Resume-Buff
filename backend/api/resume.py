@@ -6,6 +6,8 @@ Round 1 流程(带人工确认):
   2. 用户 review 后点"确认下载"
   3. POST /api/resume/generate -> 真正生成 .docx
   4. GET  /api/resume/download/{filename} -> 下载文件
+
+Round 3 J: 5 套排版模板(template: classic/single_column/two_column/minimal/technical)
 """
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,7 @@ from core.generator import (
     generate_resume_docx,
     ENABLED_ROLES,
     ROLE_CONFIG,
+    LAYOUT_CONFIG,
 )
 from core.logger import log_generation
 
@@ -33,12 +36,14 @@ class PreviewRequest(BaseModel):
     target_role: str
     intention: str | None = None
     custom_project_ids: list[str] | None = None
+    template: str = "classic"  # Round 3 J
 
 
 class GenerateRequest(BaseModel):
     target_role: str
     intention: str | None = None
     custom_project_ids: list[str] | None = None
+    template: str = "classic"  # Round 3 J
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -54,7 +59,7 @@ ROLE_DISPLAY = {
 
 @router.get("/roles")
 def list_roles():
-    """返回当前启用的岗位方向"""
+    """返回当前启用的岗位方向 + Round 3 J 模板列表"""
     return {
         "enabled": ENABLED_ROLES,
         "roles": [
@@ -65,6 +70,11 @@ def list_roles():
                 "tone": ROLE_DISPLAY.get(rid, (rid, ""))[1],
             }
             for rid in ENABLED_ROLES
+        ],
+        # Round 3 J: 前端选模板 radio 直接读这个列表
+        "templates": [
+            {"id": tid, "name": cfg["name"], "description": cfg["description"]}
+            for tid, cfg in LAYOUT_CONFIG.items()
         ],
         "note": "Round 2 启用全部 6 个岗位方向",
     }
@@ -81,6 +91,7 @@ def preview(req: PreviewRequest):
             target_role=req.target_role,
             intention=req.intention,
             custom_project_ids=req.custom_project_ids,
+            template=req.template,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -99,6 +110,7 @@ def generate(req: GenerateRequest):
             intention=req.intention,
             custom_project_ids=req.custom_project_ids,
             output_dir=OUTPUT_DIR,
+            template=req.template,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -111,6 +123,7 @@ def generate(req: GenerateRequest):
         filename=out_path.name,
         size_bytes=out_path.stat().st_size,
         status="success",
+        template=req.template,
     )
 
     return FileResponse(

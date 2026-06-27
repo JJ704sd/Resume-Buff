@@ -464,7 +464,7 @@ preview 响应可选增加:
 - JD-driven preview 中能返回 evidence summary。
 - match_score ground truth 准确率不回退。
 
-### Phase 4: Agent eval 报告
+### Phase 4: Agent eval 报告 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -477,6 +477,14 @@ preview 响应可选增加:
 - 报告包含 schema pass rate、fallback rate、latency、score 档位变化。
 - eval 脚本不读取或输出真实私有素材。
 - 可作为每轮收尾验证的一部分手动运行。
+
+**落地证据**:
+
+- `scripts/evaluate_agent_workflow.py`: 加载固定 eval set 12 JD(jd_samples 8 份非公告型 + v4_strong 4 份),跑 4 组开关对照 (FC × AW 笛卡尔积),记录 jd_id / role_id / expected_label / score / recommendation / schema_pass / fallback_used / tools_used / latency_ms / error_type / pii_safe 11 字段,输出 markdown 报告含 8 节
+- 报告: `AI岗位JD库_agent_eval报告.md`(本机实测 schema pass 48/48 = 100%, fallback 0/48 = 0%, score 一致 12/12, AW 路径 +4ms overhead)
+- 隐私: 仅读 `materials.json` (公开脱敏版),不读 `_private_backup.json`;PII 扫描用 placeholder 白名单 (`13800000000` / `your_email@example.com`);**安全审查无 P0/P1 阻塞**
+- 不挂 pre-push hook (spec §12 #3)
+- 测试: `backend/tests/test_agent_eval.py` 11 case (TestEvalSetLoading 3 + TestSingleEvaluation 4 + TestPiiScanner 2 + TestPrivacyGuarantee 2),416 → 427 全绿,416 老测试零回退
 
 ---
 

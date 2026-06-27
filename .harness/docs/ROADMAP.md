@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R5-A Phase 4 收尾)
+## 0. 当前项目快照(2026-06-27 R5-A closeout 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -32,7 +32,7 @@
   - **Phase 3** — 轻量 RAG evidence(`core/evidence.py` 新增 `EvidenceSnippet` frozen dataclass + `build_evidence_snippets` 切 projects/skills/honors/certs 4 类 snippets + `retrieve_evidence` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 排序稳定 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤 + `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限);**零向量数据库 / 零 embedding API / 零新依赖**(`SPEC §5.3`);`enable_agent_workflow=True` 时任务图插入 retrieve_evidence step(match_score 之后 retrieve_materials 之前),失败 `use_default` 降级不阻断主流程,evidence 透传到 `rewrite_highlights` + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写";evidence=None 字节级一致
   - **Phase 4** — Agent 离线评测报告(scripts/evaluate_agent_workflow.py 跑固定 eval set 12 JD = jd_samples 8 份非公告型 + v4_strong 4 份 × 4 组开关对照 (FC × AW 笛卡尔积);输出 AI岗位JD库_agent_eval报告.md 含 8 节;不挂 pre-push hook (SPEC §12 #3 默认手动脚本);不修改既有 match_score / score_thresholds.py / match_golden_targets.py / replay_agent_trace.py;无 LLM key 时全部走原文 fallback;PII 用 placeholder 白名单
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **427 个 pytest 全绿 + 0 skipped**(283 R4 baseline + **20 R5-A Phase 1: 6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee** + **32 R5-A Phase 2: 4 TestLogAgentTraceJsonlSchema + 3 TestLogAgentTraceJsonlTypes + 2 TestLogAgentTraceJsonlPrivacy + 3 TestLogAgentTraceJsonlRobustness + 9 TestWorkflowJsonlTrace + 3 TestReplayFilter + 3 TestReplayMarkdown + 3 TestReplayScript + 2 TestReplayRobustness** + **62 R5-A Phase 3: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 TestEvidencePhase3 + 8 TestEvidenceIntegration** + **11 R5-A Phase 4: 3 TestEvalSetLoading + 4 TestSingleEvaluation + 2 TestPiiScanner + 2 TestPrivacyGuarantee**)
+- **441 个 pytest 全绿 + 0 skipped**(283 R4 baseline + **20 R5-A Phase 1: 6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee** + **32 R5-A Phase 2: 4 TestLogAgentTraceJsonlSchema + 3 TestLogAgentTraceJsonlTypes + 2 TestLogAgentTraceJsonlPrivacy + 3 TestLogAgentTraceJsonlRobustness + 9 TestWorkflowJsonlTrace + 3 TestReplayFilter + 3 TestReplayMarkdown + 3 TestReplayScript + 2 TestReplayRobustness** + **62 R5-A Phase 3: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 TestEvidencePhase3 + 8 TestEvidenceIntegration** + **11 R5-A Phase 4: 3 TestEvalSetLoading + 4 TestSingleEvaluation + 2 TestPiiScanner + 2 TestPrivacyGuarantee** + **14 R5-A closeout: 3 TestEnableExternalResumePassthrough + 7 TestAgentSummaryField + 4 TestAgentToolArgsValidation**)
 
 **最近 7 个 commit** (本地 ahead of origin, 待 push):
 - `380906f` feat(round5-a phase3): 轻量 RAG evidence + 62 新 pytest
@@ -308,4 +308,4 @@
 
 ---
 
-_最后更新:2026-06-27 R5-A Phase 4 收尾(本地未 commit, 含 scripts/evaluate_agent_workflow.py + AI岗位JD库_agent_eval报告.md + 11 test_agent_eval pytest),由 orchestrator 维护;R5-A 4 phase 全部完成 (Phase 1+2+3+4),后续按需启动_
+_最后更新:2026-06-27 R5-A closeout 收尾(commit b60a215 + 503005e + 0c6b057 推送至 origin/feat/round5-a-agent-phase1;427 → 441 全绿含 14 closeout 新 pytest),由 orchestrator 维护;R5-A 4 phase + closeout bug fix 全部完成,Round 5-B spec 已落地待启动,后续按需推进_

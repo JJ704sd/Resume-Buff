@@ -1084,6 +1084,7 @@ def preview_resume(
     session_id: Optional[str] = None,
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
     evidence: Optional[list] = None,  # R5-A Phase 3: evidence 透传, None 字节级一致
+    enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1132,6 +1133,7 @@ def preview_resume(
                 session_id=session_id,
                 output_dir=None,  # preview 模式
                 evidence=evidence,  # R5-A Phase 3
+                enable_external_resume=enable_external_resume,  # R5-A closeout
             )
             # workflow 内部失败已 fallback 到旧路径, 这里无需再 try/except
             return result
@@ -1174,6 +1176,7 @@ def generate_resume_docx(
     session_id: Optional[str] = None,
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
     evidence: Optional[list] = None,  # R5-A Phase 3: 透传, None 字节级一致
+    enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
@@ -1203,6 +1206,7 @@ def generate_resume_docx(
                 session_id=session_id,
                 output_dir=output_dir,
                 evidence=evidence,  # R5-A Phase 3
+                enable_external_resume=enable_external_resume,  # R5-A closeout
             )
             return result
         except Exception:

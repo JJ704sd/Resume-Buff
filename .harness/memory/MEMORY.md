@@ -50,7 +50,8 @@
   6. Phase 3 `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限是为了避免 evidence 注入 LLM context 后超 token 上限;截断标记 `(N more)` 提示 LLM 还有更多 evidence 但当前 summary 已截断。`(N more)` 写在 summary 末尾而不是开头,避免 LLM 先看截断提示跳过看 evidence
 - **效果**：**427 passed + 0 skipped**(283 R4 baseline + 20 Phase 1 + 32 Phase 2 + 62 Phase 3 + 11 Phase 4);**R5-A 整体增量 +144 pytest**,四轮迭代零回退,字节级一致;`evidence_summary` 是新字段仅 `enable_agent_workflow=True` 时返回,默认 False 不污染老路径;`agent_trace.jsonl` 跟 `agent_trace.log` 并存,R4-A 老格式用户数据兼容;**默认 disable 全部新能力**(enable_agent_workflow=False + evidence=None + enable_function_calling=False + session_id=None),**零行为变更**,等用户明确启用才走新路径
 - **已写 AGENTS.md 锁点**:R5-A Phase 1 (Agent 编排层 + 工具注册) / Phase 2 (结构化 JSONL trace + 会话回放) / Phase 3 (轻量 RAG evidence) / Phase 4 (Agent 离线评测 4 组开关对照 + 报告 markdown 8 节 + placeholder 白名单)
-- **Phase 4 (Agent eval 报告)** ✅ 已完成(2026-06-27,本地未 commit):**无需真实 LLM key** 即可产出 schema pass rate / fallback rate 等指标 — 评测时无 LLM key 时所有 FC/AW 路径走原文 fallback 仍输出报告,只是 latency 数据反映 fallback 路径表现;有真实 key 时 latency 反映真实 HTTP RTT;Phase 4 收尾时 4 phase 全部完成,R5-A 整体闭环
+- **Phase 4 (Agent eval 报告)** ✅ 已完成(2026-06-27,commit `503005e`):12 JD × 4 组开关对照跑通;MiniMax-Text-01 真实 LLM 跑出 baseline 63s / AW 83s / FC+AW 83s (LLM 一次过 schema 未触发 retry);schema pass 48/48 = 100%, fallback 0/48 = 0%, score 一致性 12/12
+- **R5-A closeout** ✅ 已完成(2026-06-27,commit `b60a215`):基于 `.planning/agent-architecture-audit/findings.md` 修 4 个 bug — (A) `enable_external_resume` 字段透传 (api/generator/workflow 整链); (B) workflow preview 返回值新增 `agent_summary` 字典 (5 字段, spec §8.2 对齐); (C) `_validate_required_args` 加主动 schema 校验; (D) **隐性 bug**: `match_score` schema 字段名 `role` → `target_role` 对齐 `jd_parser.match_score` 函数签名 — 旧代码三方不一致, workflow 调 match_score 抛 TypeError 被兜底成 TOOL_ARGS_INVALID 但 build_sections 仍用本地变量独立算 score, 输出正确但工具日志始终 error; 14 个新 pytest 锁 4 个 fix (含 `test_match_score_schema_uses_target_role` 防回归); 416 baseline 零回退, 427 → **441 全绿**
 
 ## 技术栈定型
 

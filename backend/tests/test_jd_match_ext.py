@@ -237,6 +237,33 @@ class TestBuildResumePerspective:
         assert "Python" in rp["have_keywords"]
         assert "PyTorch" in rp["have_keywords"]
 
+    def test_special_chars_emoji_fullwidth_normalized(self):
+        """emoji / 圆圈数字 / 全角分号 ／ ｜ / 全角逗号 ， 等不影响匹配。
+        现实简历常混 emoji (★★★🚀) + 圆圈项目编号 (①②) + 全角符号 (／｜，)。
+        _normalize_text 应能归一化掉,让关键词在简历里被正确识别。
+        """
+        mats = _minimal_materials()
+        result = match_score(
+            "需要 Python / PyTorch / Docker / LLM / Transformer / NLP 经验",
+            "tech_metric",
+            materials=mats,
+            external_resume_text=(
+                "陈七 ★★★\n"
+                "项目:① LLM 评测平台 【Python, PyTorch】 (Docker)\n"
+                "技能:Python／PyTorch／Docker;LLM｜Transformer｜NLP"
+            ),
+        )
+        rp = result["resume_perspective"]
+        assert rp is not None
+        # 所有 JD 关键词都应能在简历里命中
+        assert "Python" in rp["have_keywords"]
+        assert "PyTorch" in rp["have_keywords"]
+        assert "Docker" in rp["have_keywords"]
+        assert "LLM" in rp["have_keywords"]
+        assert "Transformer" in rp["have_keywords"]
+        assert "NLP" in rp["have_keywords"]
+        assert rp["need_count"] == 0
+
 
 # ======================================================================
 # match_score 端到端 + 已有字段不变

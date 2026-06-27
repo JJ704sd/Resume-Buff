@@ -329,6 +329,20 @@ class TestErrorPaths:
         assert ".pdf" in msg
         assert ".txt" in msg
 
+    def test_exe_format_raises_unsupported_with_supported_types_in_message(self):
+        """R3-G bug hunt: .exe 等可执行文件格式应抛 UnsupportedFormatError 且错误消息
+        含支持的 3 种格式(.docx / .pdf / .txt),让用户知道该怎么重新上传。
+        API 层在 endpoint 里把 UnsupportedFormatError 转成 415 (RFC 7231 Unsupported Media Type)。
+        """
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            parse_resume_bytes("malware.exe", b"MZ\x90\x00\x03\x00")
+        msg = str(exc_info.value)
+        assert ".docx" in msg
+        assert ".pdf" in msg
+        assert ".txt" in msg
+        # 后缀应在错误消息中明示
+        assert ".exe" in msg or "exe" in msg
+
     def test_corrupt_docx_raises_value_error(self):
         """格式坏(docx 文件但内容损坏)→ ValueError(API 层会包成 422)。"""
         with pytest.raises(ValueError):

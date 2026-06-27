@@ -23,7 +23,7 @@
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **181 个 pytest 全绿 + 0 skipped**(137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext`, 全移植自 R3-G worktree `eb7e841` + 当前 main 的 R3.5+ borrowed pool / KEYWORD_GROUPS 适配)
+- **183 个 pytest 全绿 + 0 skipped**(137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext` + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError, 全移植自 R3-G worktree `eb7e841` + 当前 main 的 R3.5+ borrowed pool / KEYWORD_GROUPS 适配 + R3-G bug hunt 加 2 个边界回归)
 
 **最近 5 个 commit**:
 - `c3b2807` feat(round3-g#3): 前端集成 ResumeUploader + resume_perspective 展示

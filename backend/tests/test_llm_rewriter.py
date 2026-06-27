@@ -1180,3 +1180,119 @@ class TestAgentLoop:
         result = llm._execute_tool_call(tc, chunk=["x"], jd_focus=None)
         assert "error" in result
         assert "magic_universe_tool" in result["error"]
+
+
+# ======================================================================
+# R4-M: Session 记忆 (进程内 deque,上限 10) + 隐私隔离 — 集成测试
+# ======================================================================
+@pytest.fixture
+def reset_sessions(monkeypatch):
+    """重置 _SESSIONS 全局 state, 防止测试间污染"""
+    from core import session as session_mod
+    session_mod._SESSIONS.clear()
+    yield
+    session_mod._SESSIONS.clear()
+
+
+class TestSessionIntegration:
+    """R4-M: session_id 拼接到 LLM messages — 3 case 锁死集成行为"""
+
+    def test_session_id_prepends_history_to_messages(
+        self, enable_llm, monkeypatch, reset_sessions
+    ):
+        """session_id 非空时, LLM payload 的 messages 应包含 session 历史
+        (从 session.get_messages 拉出来, prepend 到 system 之后, current user 之前)
+        """
+        from core import session as session_mod
+
+        # 准备 session: 先 append 2 条历史
+        sid = session_mod.create_session()
+        session_mod.append_message(sid, "user", "上一轮的提问")
+        session_mod.append_message(sid, "assistant", "上一轮的回答")
+
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            session_id=sid,
+        )
+
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 应该有 4 条: system + 2 session history + current user
+        assert len(messages) == 4, f"应 4 条消息, 实际: {len(messages)}"
+        # 第 0 条 system (固定 SYSTEM_PROMPT)
+        assert messages[0]["role"] == "system"
+        # 第 1, 2 条 session 历史
+        assert messages[1] == {"role": "user", "content": "上一轮的提问"}
+        assert messages[2] == {"role": "assistant", "content": "上一轮的回答"}
+        # 第 3 条 current user (含 bullets)
+        assert messages[3]["role"] == "user"
+        user_payload = json.loads(messages[3]["content"])
+        assert user_payload["bullets"] == ["原文 0", "原文 1"]
+
+    def test_session_id_none_does_not_prepend(self, enable_llm, monkeypatch):
+        """session_id=None(默认)→ 走无 session 路径, payload 不含额外 messages(字节级一致)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            # session_id 默认 None
+        )
+
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 老路径: 只有 2 条 (system + current user)
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    def test_multiround_session_accumulates(
+        self, enable_llm, monkeypatch, reset_sessions
+    ):
+        """同 session 连续 2 次 rewrite → 第 2 次 LLM payload 应含前 1 次的历史
+        (注: rewrite_highlights 本身不写 session, 这里手动 append 模拟"前端维护 session")
+        """
+        from core import session as session_mod
+
+        sid = session_mod.create_session()
+        # 第 1 轮: 模拟"前端"在拿到改写后, 写 user 原文 + assistant 改写到 session
+        session_mod.append_message(sid, "user", "原文 bullets 0,1")
+        session_mod.append_message(sid, "assistant", json.dumps(
+            {"rewritten": [{"index": 0, "text": "改写 0"}, {"index": 1, "text": "改写 1"}]},
+            ensure_ascii=False,
+        ))
+
+        # 第 2 轮: rewrite_highlights 带同一个 sid
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 2", "改写 3"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["新原文 0", "新原文 1"], target_role="tech_metric",
+            session_id=sid,
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 第 2 轮: 4 条 (system + 2 历史 + current user)
+        assert len(messages) == 4
+        # 第 1, 2 条是上一轮的 user + assistant
+        assert messages[1] == {"role": "user", "content": "原文 bullets 0,1"}
+        # assistant 消息含改写 JSON 字符串
+        assert messages[2]["role"] == "assistant"
+        assert "改写 0" in messages[2]["content"]
+        # 第 3 条是当前 new user
+        user_payload = json.loads(messages[3]["content"])
+        assert user_payload["bullets"] == ["新原文 0", "新原文 1"]

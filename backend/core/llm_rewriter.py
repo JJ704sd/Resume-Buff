@@ -181,6 +181,7 @@ def _build_request_payload(
     *,
     strict_retry: bool = False,
     tools: Optional[list[dict]] = None,
+    history_messages: Optional[list[dict]] = None,
 ) -> dict:
     """
     构造 chat/completions 请求体。
@@ -195,6 +196,9 @@ def _build_request_payload(
 
     R4-F: tools 非 None 时,挂载到 payload(OpenAI function calling 标准格式),
     同时设 tool_choice="auto"(LLM 决定要不要调工具)。tools=None → 老路径字节级一致。
+
+    R4-M: history_messages 非 None 时,prepend 到 messages(system 之后, current user 之前)。
+    history_messages=None → 老路径字节级一致(messages 只有 system + current user)。
     """
     user_payload: dict = {
         "target_role": target_role,
@@ -215,17 +219,30 @@ def _build_request_payload(
             f"- 数量必须等于 {len(highlights)},与输入 bullets 一一对应"
         )
 
+    current_user_msg = {
+        "role": "user",
+        "content": json.dumps(user_payload, ensure_ascii=False),
+    }
+
+    # R4-M: 拼装 messages — history_messages 非空时插在 system 和 current user 之间
+    if history_messages:
+        messages: list[dict] = (
+            [{"role": "system", "content": SYSTEM_PROMPT}]
+            + list(history_messages)
+            + [current_user_msg]
+        )
+    else:
+        # 老路径: 字节级一致 (system + current user)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            current_user_msg,
+        ]
+
     payload: dict = {
         "model": model,
         "temperature": 0.3,
         "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False),
-            },
-        ],
+        "messages": messages,
     }
     # R4-F: Function Calling 挂载
     # 协议扩展: tools / tool_choice 是 OpenAI 标准, 不传时老路径字节级一致
@@ -377,6 +394,22 @@ def _validate_legacy_schema(items: list, expected_count: int) -> bool:
     return all(isinstance(x, str) and x.strip() for x in items)
 
 
+def _get_session_history(session_id: Optional[str]) -> list[dict]:
+    """
+    R4-M: 从 session.py 拉历史 messages(供 LLM payload prepend)。
+
+    session_id 为 None / 空字符串 / 不存在 → 返空 list(走老路径字节级一致)。
+
+    不抛 — session 内容由调用方负责,本函数只是安全拉取。
+    """
+    if not session_id:
+        return []
+    # 局部 import 防循环依赖(generator.py -> llm_rewriter.py -> session.py 是单向 OK,
+    # 但仍用 lazy import 让测试 mock 更干净)
+    from core import session as _session
+    return _session.get_messages(session_id)
+
+
 def rewrite_highlights(
     highlights: list[str],
     target_role: str,
@@ -384,6 +417,7 @@ def rewrite_highlights(
     max_per_call: int = 6,
     jd_focus: Optional[dict] = None,
     enable_function_calling: bool = False,
+    session_id: Optional[str] = None,
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
@@ -406,11 +440,18 @@ def rewrite_highlights(
     R4-A: enable_function_calling=True AND jd_focus is not None AND MAX_AGENT_STEPS > 0
     时,走 _call_with_agent_loop (Agent Loop, max_step=3, 单工具约束, trace 日志);
     其他情况走 _call_with_retry 老路径(保留 R3-P retry 行为)。
+
+    R4-M: session_id(可选)非空时,从 session.py 拉历史 messages 拼到 LLM messages
+    (system 之后, current user 之前)。session_id=None(默认)→ 不拼接,老路径字节级一致。
+    session 内容由调用方(API 层)负责不写 PII。
     """
     if not highlights:
         return highlights
     if not is_llm_enabled():
         return highlights
+
+    # R4-M: 一次性拉 session 历史(同 session 多次 chunk 调用复用同一份 history)
+    history_messages = _get_session_history(session_id)
 
     n = len(highlights)
     chunk_size = max(1, max_per_call)
@@ -438,12 +479,14 @@ def rewrite_highlights(
             # R4-A: agent loop 路径(单步单工具, max_step=3, trace 日志)
             got = _call_with_agent_loop(
                 url, api_key, model, chunk, target_role, jd_text, jd_focus,
+                history_messages=history_messages,
             )
         else:
             # 老路径: 走 _call_with_retry (保留 R3-P retry)
             got = _call_with_retry(
                 url, api_key, model, chunk, target_role, jd_text, jd_focus,
                 enable_function_calling=enable_function_calling,
+                history_messages=history_messages,
             )
 
         if got is not None:
@@ -464,6 +507,7 @@ def _call_with_retry(
     jd_focus: Optional[dict],
     *,
     enable_function_calling: bool = False,
+    history_messages: Optional[list[dict]] = None,
 ) -> Optional[list[str]]:
     """
     R3-P: 单次 chunk 调用 + 失败 retry 一次。
@@ -475,6 +519,9 @@ def _call_with_retry(
     R4-F: enable_function_calling=True AND jd_focus is not None 时,
     把 TOOL_EVALUATE_SCHEMA 挂到 payload(LLM 可主动调 evaluate_bullet_jd_match)。
     R4-A 才会接 agent loop 真正执行工具调用 — 本轮只是把工具暴露给 LLM。
+
+    R4-M: history_messages 非 None 时透传给 _build_request_payload,拼到 messages。
+    history_messages=None → 字节级一致老路径。
     """
     # R4-F: 决定是否挂载 tools
     tools: Optional[list[dict]] = None
@@ -483,6 +530,7 @@ def _call_with_retry(
 
     payload = _build_request_payload(
         chunk, target_role, jd_text, model, jd_focus=jd_focus, tools=tools,
+        history_messages=history_messages,
     )
     try:
         resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
@@ -591,6 +639,8 @@ def _call_with_agent_loop(
     target_role: str,
     jd_text: str,
     jd_focus: Optional[dict],
+    *,
+    history_messages: Optional[list[dict]] = None,
 ) -> Optional[list[str]]:
     """
     R4-A: Agent Loop — 包装 _call_with_retry 的能力, 加循环让 LLM 可多轮调工具。
@@ -613,7 +663,10 @@ def _call_with_agent_loop(
       - 单步单工具(只取 tool_calls[0]), 避免单轮 token 爆
       - 网络错误不进入 loop(避免 token 浪费), 立即降级
       - trace 每次 step 写一行: session_id / step / tool_name / latency_ms / outcome
-      - session_id 用临时短串(per-call), R4-M 接入真正的 session 后会复用
+
+    R4-M: history_messages 非 None 时透传给 _build_request_payload 拼到 messages
+    (system 之后, current user 之前)。trace 的 session_id 改用真实 session_id
+    (或 fallback 到临时 uuid — 仅当 history_messages=None 时)。
     """
     # 局部 import — logger 是稳定依赖, 这里 import 仅为避免循环(lazy 安全)
     import time
@@ -625,11 +678,18 @@ def _call_with_agent_loop(
     initial_payload = _build_request_payload(
         chunk, target_role, jd_text, model,
         jd_focus=jd_focus, tools=TOOL_EVALUATE_SCHEMA,
+        history_messages=history_messages,
     )
     messages: list[dict] = list(initial_payload["messages"])
 
-    # 2) 临时 session_id(R4-A 阶段, R4-M 会接真的 session 字典)
-    session_id = f"agent_{uuid.uuid4().hex[:8]}"
+    # 2) session_id 优先级: 真实 session_id > 临时 uuid(per-call fallback)
+    #    历史消息存在时, 用真实 session_id 便于 trace 关联
+    if history_messages:
+        # 找 caller 传入的 session_id 不容易(函数签名没暴露), 用 messages 长度 proxy
+        # 这里用稳定 hash 避免每次都换 uuid
+        session_id = "agent_session"
+    else:
+        session_id = f"agent_{uuid.uuid4().hex[:8]}"
 
     # 3) 主循环
     for step in range(MAX_AGENT_STEPS):

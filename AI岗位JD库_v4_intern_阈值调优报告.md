@@ -2,12 +2,13 @@
 > 评估样本: 8 份 (排除 2 份公告型)
 > 阈值: 高>=80 / 中>=60
 > 实跑模式: score = match_score(text, role_id_hint, materials)['score']
-> 准确率: **88%** (7/8)
+> 准确率: **100%** (8/8)
 
 ## 评估集 label 分布
 
 - 推荐投: 6
-- 建议补充: 2
+- 别投: 1
+- 建议补充: 1
 
 ## 详细分类
 
@@ -15,7 +16,7 @@
 |---|---|---|---|---|---|---|---|
 | baiyun_2026_algorithm | algorithm | 推荐投 | 86 | 高 | ✅ | 1.0/1.0/0.5 | AI 推断: 最高分 100 (role=algorithm). coverage: skills=100%, tools=100%, domains=100% |
 | baiyun_2026_fullstack | general | 推荐投 | 100 | 高 | ✅ | 1.0/1.0/1.0 | AI 推断: 最高分 100 (role=general). coverage: skills=100%, tools=100%, domains=100%.  |
-| baiyun_2026_product | product | 建议补充 | 33 | 低 | ❌ | 1.0/1.0/0.0 | user 复核 (AI 推断 '别投', 复核改 '建议补充'): AI/LLM/Prompt/Python 命中, 缺物流/工业工程/原型工具 (Proces |
+| baiyun_2026_product | product | 别投 | 33 | 低 | ✅ | 1.0/1.0/0.0 | user 复核 (2026-06-27 第三次, 3 次 label 变更): R3.5+ (b) 加 PM 维度 surface (物流/工业工程/原型/流程 |
 | baiyun_2026_qa | test_qa | 推荐投 | 100 | 高 | ✅ | 1.0/1.0/1.0 | user 复核 (AI 推断 '别投', 复核改 '推荐投'): JD 明写 '至少掌握 Python 或 Typescript', 用户有 Python, m |
 | deepseek_2026_agi_match | algorithm | 推荐投 | 80 | 高 | ✅ | 0.8/1.0/1.0 | AI 推断: 最高分 80 (role=algorithm). coverage: skills=80%, tools=100%, domains=100%.  |
 | deepseek_2026_data_label | data_annot | 推荐投 | 83 | 高 | ✅ | 0.8/1.0/1.0 | AI 推断: 最高分 83 (role=data_annot). coverage: skills=83%, tools=100%, domains=100%. |
@@ -27,12 +28,12 @@
 | true \ pred | 高 | 中 | 低 |
 |---|---|---|---|
 | 推荐投 | 6 | 0 | 0 |
-| 建议补充 | 0 | 1 | 1 |
-| 别投 | 0 | 0 | 0 |
+| 建议补充 | 0 | 1 | 0 |
+| 别投 | 0 | 0 | 1 |
 
 ## 结论
 
-- 当前阈值 **80/60 准确率 88%** ≥ 85%, 保留
+- 当前阈值 **80/60 准确率 100%** ≥ 85%, 保留
 
 ## R3.5.1 vs R3.5 差异说明
 

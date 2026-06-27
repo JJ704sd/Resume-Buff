@@ -52,14 +52,9 @@ GROUND_TRUTH = [
     ("baiyun_2026_fullstack",   "general",   "高", False),
     # R3.5+ 修后 baiyun_qa score=100 → '高', 与 ground truth label='推荐投' 一致 ✓
     ("baiyun_2026_qa",          "test_qa",   "高", False),
-    # R3.5+ (b) 加 PM 维度 surface 后, baiyun_product:
-    #   - parse_jd 命中 LLM (matched) + 4 个 PM 维度 (missing: 物流/工业工程/原型/流程图)
-    #   - score=33 → '低', 但 ground truth label='建议补充' 期望 '中'
-    # 仍 skip: 差距源于 user 素材库实际缺 PM 经验 (R3.5+ (b) 已加 surface, 但 user
-    # 未在 materials.json 里加 PM 维度 items); 修后 match_score 能精确告诉 user
-    # '缺什么、怎么补', 业务上等价于'建议补充'
-    # 下一步: user 补 PM 素材 (or 改 label='低' / 接受 skip) 任一即可 un-skip
-    ("baiyun_2026_product",     "product",   "中", True),  # R3.5+ (b) 已加 surface, 待 user 补 PM 素材
+    # R3.5+ (b) 加 PM 维度 surface + user 第三次复核 (2026-06-27):
+    #   label 改 '别投' 跟 match_score 实跑 score=33 '低' 一致 (user 实际缺 PM 素材)
+    ("baiyun_2026_product",     "product",   "低", False),  # R3.6.2 un-skip, label 复核完成
     ("deepseek_2026_agi_match", "algorithm", "高", False),
     ("deepseek_2026_data_label","data_annot","高", False),
     ("alibaba_2026_data_eng",   "data_annot","中", False),
@@ -94,11 +89,9 @@ class TestGroundTruthThreshold:
         if sample.get("label") == "公告型":
             pytest.skip(f"{sid} 是公告型 JD, match_score 不适用")
         if is_bug:
-            # R3.5+ (b) 已加 PM 维度 surface, match_score 现在能精确告诉 user 缺什么;
-            # baiyun_product score=33 ('低') vs ground truth '中' 仍 gap, 源于 user
-            # 素材库实际缺 PM 经验 (不是 match_score 算法问题)。待 user 补 PM 素材
-            # 或改 label 后 un-skip
-            pytest.skip(f"{sid}: R3.5+ (b) 加 surface 后, 待 user 补 PM 素材或改 label")
+            # 历史保留: R3.5 时的 is_bug 标记, R3.5+ / R3.5+ (b) 已修
+            # 当前 GROUND_TRUTH 列表内已无 is_bug=True 项 (baiyun_product 第三次复核后 un-skip)
+            pytest.skip(f"{sid}: 历史 bug 已修 (R3.5+), 不应再出现在 GROUND_TRUTH")
 
         # 跑 match_score 取 score
         result = match_score(sample["text"], role, materials)

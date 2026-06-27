@@ -85,42 +85,48 @@
 - **历史记录**: R3-K 从 2026-06-26 暂缓(cancelled 后保留需求),到 2026-06-27 user 主动删除,不再列入候选
 - **影响**: 无 — 从未实施,无 commit
 
-### R3-M — 简历排版改进(精细打磨) ⏸️ 待 brainstorm 方向
+### R3-M — 简历排版改进(精细打磨) 📋 已拆 3 个 round 推进
 - **背景**:**2026-06-27 user 改需求** — 把原"简历导出多格式(docx → pdf/md/html)"改成"把简历排版做到更好"。参考 `amruthpillai/reactive-resume` (39.1k stars, 15 套差异化模板) 后,明确"排版改进"的核心是**模板差异化 + 视觉规范 + 用户可控**
-- **参考项目**:[reactive-resume](https://github.com/amruthpillai/reactive-resume) 的关键设计模式
-  - **15 套模板** 每套有明显视觉差异(不只是配色, 还有结构性差异:单栏 / 双栏 / 时间线 / 创意 header / 双语等)
-  - **可定制颜色 / 字体 / 间距** (用户可调,而非硬编码)
-  - **A4 / Letter 双规格支持**
-  - **PDF 客户端渲染** v5.1.0+ (@react-pdf/renderer, 全部前端跑;我们目前只支持 docx)
-  - **JSON Resume 标准导入** (通用简历数据格式)
-  - **多语言** (Crowdin, 我们的差距)
+- **拆分方案** (2026-06-27 user 同意按 R3-M.1 → R3-M.2 → R3-M.3 推进):
+  - **R3-M.1** (短期,~350 行) — 方向 2 + 4:加 3 套新模板 + A4 规范 + 黑白打印友好
+  - **R3-M.2** (中期,~500 行) — 方向 1 + 3:8 套模板细节打磨 + 可读性优化
+  - **R3-M.3** (长期,~600 行) — 方向 6:用户可定制排版(前端面板 + 后端参数化)
+- **当前状态** (2026-06-27): ⏸️ R3-M.1 plan 已写,等 user 明确启动实施
+- **参考项目**:[reactive-resume](https://github.com/amruthpillai/reactive-resume) 启发的设计模式
+  - **15 套模板** (我们 5 → 8 套差异化)
+  - **可定制颜色 / 字体 / 间距** (留 R3-M.3)
+  - **A4 / Letter 双规格** (R3-M.1 上 A4 严格规范)
 - **现状对比**:
-  - 我们 5 套模板:`classic` / `single_column` / `two_column` / `minimal` / `technical` — 基础差异已有但模板间细节精致度不够
-  - 差距:模板数量 / 视觉差异维度(目前主要是配色) / 用户可调能力 / 排版规范
-- **范围待定**:user 倾向但还没指定具体方向,以下是 6 个 brainstorm 候选(reactive-resume 启发后细化):
-  1. **细节打磨** (受 reactive-resume 可定制颜色/字体启发) — 现有 5 套模板的字体 / 字号 / 行距 / 边距 / 段距 / 标题层级 统一规范,让每套模板视觉差异更明显,中英文混排空格 / 数字单位格式 / 日期格式统一
-  2. **增加新模板** (受 reactive-resume 15 套模板启发) — 学术 CV 风(适合读博 / 出国) / 互联网简洁风(字节阿里 style) / 国企端庄风 / 时间线风 / 双语简历 / 创意 header 风。**目标 8-10 套**
-  3. **可读性优化** — 项目描述统一 bullet 格式 / 技能标签对齐 / 时间线对齐 / 联系方式图标化(电话图标 / 邮箱图标 / GitHub 图标)
-  4. **A4 排版规范** (受 reactive-resume A4/Letter 双规格启发) — 严格 A4 纸张大小 / 控制 1-2 页 / 自动分页 / 黑白打印友好 / 字号不小于 9pt
-  5. **多列布局扩展** — 在 `two_column` 基础上扩展:左侧头像/技能,右侧项目/教育;可调列宽比例;支持跨列标题
-  6. **用户可定制排版** (受 reactive-resume 可定制颜色启发, R3-M 长期方向) — 前端加 "排版设置" 面板,用户选字体 / 字号 / 主色 / 行距 → 后端把这些参数化透传到 docx 渲染。改造点大,但用户体验显著提升
-- **触发条件**:你说"开始做 R3-M"或指定具体方向(1/2/3/4/5/6)
-- **依赖**:`pymupdf` 已装(用于预览/导出 PDF 预览图);`python-docx` 已装(排版核心)
-- **工作量**:取决于方向
-  - 1 细节打磨:中(~200 行 + 测试)
-  - 2 新模板:每个 ~50 行 config + 测试, 5 个新模板 = ~250 行
-  - 3 可读性优化:中(~150 行 + 测试)
-  - 4 A4 规范:小(~100 行 + 测试)
-  - 5 多列扩展:中(~200 行 + 测试)
-  - 6 用户可定制排版:大(前端面板 ~200 行 + 后端参数化 ~300 行 + 测试 ~100 行)
-- **价值**:差异化竞争力 + 长期 ROI(reactive-resume 证明模板系统是简历工具的护城河),一份精致简历比 10 份平庸的更能拿面试
-- **未参考的 reactive-resume 高级特性**(留待未来 round)
-  - PDF 客户端渲染(技术栈差异大,我们 python-docx 走服务端;如果要支持,建议服务端用 pymupdf 转 pdf,而非全栈重写)
-  - JSON Resume 标准导入(我们有自己的 materials.json schema,迁移成本高)
-  - 拖拽 section 排序(交互优化,非排版本身)
-  - 多语言(我们目前单语言,需求不明确)
-  - 暗色模式(简历打印场景用不到)
-  - AI 改写简历(我们有 LLM 改写链路,已覆盖)
+  - 我们 5 套模板:`classic` / `single_column` / `two_column` / `minimal` / `technical` — 基础差异已有但视觉差异维度不够(主要是配色)
+  - R3-M.1 加 3 套(academic / internet / bilingual) → 8 套 + A4 规范
+- **未参考的 reactive-resume 高级特性**(留待未来 round):
+  - PDF 客户端渲染 / JSON Resume 导入 / 拖拽排序 / 多语言 / 暗色模式
+
+### R3-M.1 — 加 3 套新模板 + A4 排版规范 ⏸️ plan 阶段 (2026-06-27)
+- **目标**: 5 套 → 8 套差异化模板 + 严格 A4 排版规范 + 黑白打印友好
+- **新增 3 套模板**:
+  1. **academic** (学术 CV) — 适合读博 / 出国申请, 字号 11pt, 行距 1.5, 边距 2.5cm 四边, 顶部姓名栏加粗 + 居中, 教育背景优先项目(本科→博士倒序), 项目 highlights 简化为学术风(去掉"项目经验"前缀, 直接列论文 / 项目名)
+  2. **internet** (互联网简洁) — 字节阿里 style, 字号 10pt, 行距 1.2, 边距 1.5cm 四边, 单栏紧凑, 项目 highlights 简短有力(每条 ≤ 15 字), 技能组前置, header 联系方式用 emoji 图标
+  3. **bilingual** (中英双语) — header 中英文姓名并列, 教育背景双语(学校中文 + 英文名), 项目标题中英双行(中文标题 + 英文副标题), 项目 highlights 中文为主关键术语括号英文
+- **A4 排版规范**:
+  - 所有 8 套模板 `margins_cm` 严格 A4(297mm × 210mm),上下 2.0cm 左右 1.8cm 默认 + 模板可调
+  - 字号不小于 9pt(防止打印缩小看不清)
+  - 行距 1.15-1.5(防止太挤或太散)
+  - **黑白打印友好**:任何模板关闭 `use_color` 后,排版不崩(颜色作为装饰,内容靠粗体 / 字号区分)
+- **后端改动** (主要):
+  - `backend/core/generator.py` LAYOUT_CONFIG 加 3 项 + 必要时加专属 `_render_*` 函数
+  - 大多数情况:复用 `_render_classic` alias 模式(只改 config,不改 renderer)
+  - **academic** 可能需要专门 renderer(项目 highlights 简化逻辑)
+  - **bilingual** 改动最大(header / education / project 标题双语, 需要 helper)
+- **测试**:
+  - `tests/test_generator_layouts.py` 加 3 个新模板的 dispatch 测试 + 视觉差异测试(参照现有 `TestLayoutDispatch` / `TestLayoutVisuals`)
+  - A4 规范测试:`test_a4_margins_within_2_5cm`(所有模板 `margins_cm` 上下 ≤ 2.5cm / 左右 ≤ 2.5cm)
+  - 黑白打印友好:`test_bw_print_friendly_when_color_disabled`(临时把 `use_color=False` 注入,验证 docx 仍生成有效)
+- **依赖**: 无新增
+- **工作量**: ~350 行(后端 config 3 项 ~80 行 + 渲染器扩展 ~100 行 + 测试 ~170 行)
+- **前端改动**: **零** — `/api/resume/roles` 自动遍历 LAYOUT_CONFIG 暴露新模板,App.vue `v-for` 自动加 radio
+- **价值**: 模板 5 → 8(覆盖学术 / 互联网 / 双语 3 大投递场景) + A4 规范闭环 + 黑白打印兜底
+- **plan 文档**: `.harness/docs/round3-m-1-plan.md` (待写)
 
 ### R3.5.1 — 扩 ground truth 样本 + 重跑阈值
 - **背景**:R3.5 决策"10 份够用",但 label 分布有偏(0 份"别投")

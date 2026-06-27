@@ -519,3 +519,50 @@ class TestAcademicRenderer:
         assert edu_idx < proj_idx, (
             f"academic 教育背景(idx={edu_idx})应在项目经历(idx={proj_idx})之前"
         )
+
+
+# ----------------------------------------------------------------------
+# Round 3 M.2 — 可读性扫描:8 套模板字号 / 段间距 / 行距 合理性
+# (防止后续 round 改 LAYOUT_CONFIG 时引入过小字号 / 负段距 / 极端行距)
+# ----------------------------------------------------------------------
+class TestReadabilityAcrossLayouts:
+    """8 套模板扫一遍 — 核心可读性 invariant,任一不满足 → fail"""
+
+    def test_body_font_size_at_least_9pt(self):
+        """8 套模板 body 字号 >= 9pt(可读性底线,再小就读不清)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            assert cfg["font_size_body"] >= 9.0, (
+                f"{template}: font_size_body ({cfg['font_size_body']}) < 9pt — 不可读"
+            )
+
+    def test_meta_line_font_at_least_8pt(self):
+        """8 套模板 meta 行(body * 0.88)>= 8pt(可读性底线)
+        meta = font_size_body * 0.88(由 _add_meta_line 内部公式决定)
+        """
+        for template, cfg in LAYOUT_CONFIG.items():
+            meta_pt = cfg["font_size_body"] * 0.88
+            assert meta_pt >= 8.0, (
+                f"{template}: meta ({meta_pt:.2f}pt) < 8pt — 不可读"
+            )
+
+    def test_all_spacings_non_negative(self):
+        """8 套模板 4 个可读性间距参数全部 >= 0(段后距为负会导致行重叠)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            before, after = cfg["section_spacing_pt"]
+            assert before >= 0 and after >= 0, (
+                f"{template}: section_spacing_pt = {cfg['section_spacing_pt']} 含负值"
+            )
+            assert cfg["meta_spacing_pt"] >= 0, (
+                f"{template}: meta_spacing_pt ({cfg['meta_spacing_pt']}) < 0"
+            )
+            assert cfg["item_spacing_pt"] >= 0, (
+                f"{template}: item_spacing_pt ({cfg['item_spacing_pt']}) < 0"
+            )
+
+    def test_line_spacing_in_reasonable_range(self):
+        """8 套模板 line_spacing 在 [1.15, 1.5](过紧/过松都不可读)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            ls = cfg["line_spacing"]
+            assert 1.15 <= ls <= 1.5, (
+                f"{template}: line_spacing ({ls}) 超出 [1.15, 1.5] 合理范围"
+            )

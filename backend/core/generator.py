@@ -249,7 +249,10 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
-        "bilingual_mode": True,  # R3-M.3 才激活双语 header / 教育 / 项目副标题(本轮 dead code)
+        # R3-M.2: bilingual_mode flag 保持 dead code(本轮只做可读性参数化,
+        # 双语 header / 教育 / 项目副标题留 R3-M.3 激活)。注意:这里**有意保留** flag,
+        # 让 R3-M.3 实施时不用再补 schema, 也不被 TestLayoutConfigSchema 误判。
+        "bilingual_mode": True,
         # 双语: H1 略小(避免双语标题视觉过重),bullet 段间距略大(中英文不同 baseline 拉开)
         "h1_size_ratio": 1.18,          # 12.39pt
         "h2_size_ratio": 1.05,          # 11.025pt

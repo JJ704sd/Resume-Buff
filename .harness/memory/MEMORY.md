@@ -98,6 +98,8 @@
 - **R3-G**：need 扣 borrowed pool 是 R3.5+ 设计的核心去重 — 必须等 `match_score` 算出 pool 后才调 `_build_resume_perspective`，不能独立算，否则 "简历里没写但素材库能补" 的关键词会算 need（false negative）
 - **R3-G**：移植 R3-G worktree 测试到当前 main 时，**必须**重新写断言而不是照搬 — R3.5+ borrowed pool 设计 + R3.5+ (b) PM dimensions 让 "Transformer/LLM/物流/工业工程" 等关键词被去重，第一版断言 assertIn 'Transformer', need 必 fail
 - **R3-G**：功能移植 vs git cherry-pick — eb7e841 base 是 R3-I 之前的旧 base，但 eb7e841 自身只 +1467/-5（worker 提前"剥离"成纯新增 4 + 修改 5 的结构）；走 `git show :file` 提取 + 手动合并 5 个修改文件，比 cherry-pick 处理 ~30 文件冲突快很多
+- **R3-G bug hunt (2026-06-27)**：写"简历里有某关键词"的测试时，**断言的关键词必须先在 JD 文本里"出现"**，否则不进 have/need（基本逻辑正确但容易踩坑）。例子：测试 emoji 归一化时，断言 `assert "LLM" in rp["have_keywords"]` 失败，因为 JD 文本只写 "需要 Python / PyTorch / Docker 经验"，LLM 不在 JD 要求里所以不进 have。**修法**：先在 JD 里列全要测的关键词，再写断言；不要靠"简历里出现 = 必然进 have"反推。**预防**：写测试时按 JD 文本 `parse_jd().skills ∪ tools ∪ domains` 列出 expected have 集合，比手工记忆更可靠
+- **R3-G bug hunt (2026-06-27)**：写回归测试前先**核对现有测试覆盖**，避免 100% 重叠冗余。11 个 bug hunt 用例分析后只新增 2 个（emoji/特殊字符归一化 + `.exe` UnsupportedFormatError），9 个已被覆盖（gbk / 损坏 docx / 损坏 pdf / 超大 / external None/空/空白 / synonym_alias / need 扣 borrowed pool / JD 0 关键词 / 中文标点）。**冗余检测清单**：写新测试前先 grep 现有 test_*.py 看同函数/同 case 关键词是否已被覆盖（特别是核心算法已 lock 的实现）
 
 ## 改动记录（重要决策）
 

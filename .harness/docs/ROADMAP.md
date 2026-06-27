@@ -8,36 +8,42 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-26 R3.5 收尾)
+## 0. 当前项目快照(2026-06-27 R3.5+ 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
 - 6 个 role:tech_metric / product / algorithm / data_annot / test_qa / general
 - 5 套简历模板:classic / single_column / two_column / minimal / technical
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
+- **borrowed pool + 'AI' surface**(R3.5+ 修复 false negative: 跨 role 经验自动纳入候选池 + 中英 JD 高频 "AI" 字面识别)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **124 个 pytest 全绿**(113 baseline + 11 R3.5 threshold_tuning),2 skipped(已知 match_score bug 待 R3.5+)
+- **128 个 pytest 全绿**(125 baseline + 3 R3.5+ bugfix),1 skipped(baiyun_2026_product 修后 label 待 user 复核)
 
 **最近 4 个 commit**:
+- `2889dd9` fix(round3.5+): match_score 漏匹配 bug — borrowed pool + 'AI' surface
+- `bdefd97` docs: ROADMAP.md 可持续更新的未来规划文档
 - `722b599` MEMORY 同步 R3.5 idempotent fix
 - `1bac68e` fix label_samples.py idempotent + --force flag
-- `24dfcc5` R3.5 阈值调优(80/60 锁死 + 11 回归测试)
-- `273df33` R3.5 样本入库(4 个百运网)
 
 ---
 
 ## 1. P1 — 短期可做(下次 round 候选)
 
-### R3.5+ — 修 match_score 漏匹配 bug
+### R3.5+ — 修 match_score 漏匹配 bug ✅ 完成 (2026-06-27, commit `2889dd9`)
 - **问题**:`baiyun_2026_product` / `baiyun_2026_qa` 触发 score=0,本应命中 Python/AI/LLM 等关键词
-- **推测根因**:`match_score` 只查 `KEYWORD_GROUPS`(用户素材里的 group),没查 raw text;JD 文本里关键词不在用户素材分组里 → 不命中
-- **修法**(待定):加 raw text fallback 查全 KEYWORD_GROUPS 子集;2 个回归测试(baiyun_product / baiyun_qa 应得非零分)
-- **触发条件**:你想看到更多 JD 真实命中情况 / 想跑 R3.5.1 重新调阈值
-- **依赖**:无
-- **工作量**:小(~50 行代码 + 2 测试)
-- **价值**:false negative 减少,后续阈值调优更可信
+- **实际根因**(比推测更复杂,2 个独立 bug):
+  1. `_build_candidate_pool` 只查 role_skill_keys 对应 items,跨 role 经验不计入池 → baiyun_qa 误判
+  2. `KEYWORD_GROUPS` 缺 "AI" surface,中英 JD 里高频 "AI" 字面识别不到 → baiyun_product 误判(parse_jd 命中 0 关键词,score 走全 unknown 兜底)
+- **修法**:
+  1. `_build_candidate_pool` 加 `include_borrowed=True` 参数(默认开):池 = role 范围 + 全素材库扫描
+  2. `KEYWORD_GROUPS['skills']` 加 `("AI", "LLM", 0.5)`:跟 "大模型"/"LLM" 语义等价
+  3. 抽出 `_scan_items_into_pool` 工具函数复用扫描逻辑
+- **效果**:8 份 eval 实跑准确率 **7/8 = 88%**(R3.5 时 6/8 = 75%,+13pp);baiyun_qa 修后 score=100 ✓,baiyun_product 修后 score=100 但 label='建议补充' 待 user 复核(原 label 基于 score=0 反推)
+- **3 个回归测试**:`tests/test_jd_parser.py::TestMatchScoreBugfixR35Plus` 锁死 baiyun_qa/baiyun_product 修复 + include_borrowed=False 旧行为
+- **未修(留给 user)**:baiyun_2026_product label 复核;`scripts/score_thresholds.py` 仍读 frozen top_score,需 R3.5.1 改实跑模式
+- **设计文档**:`.harness/docs/round3-5plus-plan.md`
 
 ### R3-G — 重启 cherry-pick
 - **背景**:`feat/r3g-resume-upload` 分支保留 1467 行 MVP(外部简历实时读取 + JD 评分联动),worktree `D:/简历帮/r3g-resume-upload` HEAD `eb7e841`;用户 2026-06-26 选完 scope 后主动 cancel,R3-G cancelled 但 MVP commit 在分支保留

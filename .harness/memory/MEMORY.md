@@ -18,6 +18,19 @@
 - **2026-06-26**：Round 3-I 完成 — JD-driven generation（让评分卡的"准"真正落到生成结果里）。**新 `core/jd_ranker.py` 纯规则排序**（命中数倒序 + tie 维持原顺序，3 函数 `rank_projects` / `rank_highlights` / `rank_skill_groups`）；`generator.py` / `preview_resume` / `generate_resume_docx` 加可选 `jd_context` / `jd_text` 关键字参数（默认 None → 字节级一致）；`llm_rewriter.py` system prompt 加 matched 识别 + missing 不编造 + tier 引导（jd_focus=None 时 user message schema 完全不变）；`api/resume.py` PreviewRequest / GenerateRequest 加 jd_text 字段 + 422 校验（>50k 字符）；前端 `App.vue` 加 jdAware 复选框 + section 命中关键词角标。**113 个 pytest 全绿**（88 baseline + 25 新增），6 role 字节级 baseline hash 在 test 里固化锁死 jd_context=None 路径。**coder 在 wrap-up 阶段被 15min cap kill 但实施 100% 完成 + commit 已就位**；owner 接手 merge + 文档同步（coder 在 deliverable.md 标好 merge commit message 模板）
 - **2026-06-26**：R3-I 收尾 archive — commit `775e8be chore(round3#i): archive R3-I 设计文档 + v4 JD 库 + scripts`（8 files / 4384 行）。R3-I 期间/前后留下的工作产物入库：`.harness/docs/round3-i-plan.md`（设计文档）+ `AI岗位JD库_v4_intern.json`（v4 主库 82 份 JD）+ 2 份 md 报告（4 级实习筛选 + 黄金标的 match 实测）+ 4 个 scripts（`audit_workspace.py` 工程审计 / `build_v4.py` v4 入库 / `score_intern_match.py` 4 级打标 / `match_golden_targets.py` 黄金实测）。**bugfix**：`build_v4.py` 原引用已 trash 的 `AI岗位JD库_v3_intern.json`，改为从 v4 文件自包含读取 + idempotent 注释，再跑 `v3: 82 → v4: 82 (新增 0)` 验证通过
 - **2026-06-26**：Round 3.5 完成 — 阈值调优（基于 8 份 ground truth 验证 `_classify_recommendation` 阈值 80/60）。**新增 `tests/test_threshold_tuning.py` 11 用例**（3 阈值常量锁死 + 6 ground truth 验证 + 2 meta-level 评估集/scale 校验），2 份 match_score 漏匹配 bug 已知 skip。**124 个 pytest 全绿**（113 baseline + 11 新增），2 skipped。新增 `scripts/label_samples.py`（AI 推断 label，按 `role_id_hint` 跑对应 role，60→10 次 match_score）+ `scripts/score_thresholds.py`（confusion matrix 报告）+ `AI岗位JD库_v4_intern_阈值调优报告.md`。`_meta.label_scale` 加第 4 项 `公告型`（公告型 JD 不参与阈值评估）。`jd_samples.json` 10 份（4 百运网 + 6 主库挑选），label 分布：推荐投 6 / 建议补充 2 / 公告型 2 / 别投 0。**当前阈值 80/60 准确率 6/8 = 75%（非 score=0 子集 100%）**；误判 2 份是 match_score 漏匹配 bug（`baiyun_2026_product` / `baiyun_2026_qa` score=0 但 label=建议补充/推荐投），归 R3.5+ 修
+- **2026-06-27**：Round 3.5+ 完成 — 修 match_score 漏匹配 bug（commit `2889dd9`）。**实际根因有 2 个独立 bug**（R3.5 推测只是 1 个）：
+  1. `_build_candidate_pool` 只查 role_skill_keys 对应 items → 跨 role 经验不计入池 → baiyun_qa 误判
+  2. `KEYWORD_GROUPS` 缺 "AI" surface → 中英 JD 里高频 "AI" 字面识别不到 → baiyun_product 误判（parse_jd 命中 0 关键词，score 走全 unknown 兜底归零）
+  **修法**：
+  1. `_build_candidate_pool` 加 `include_borrowed=True` 参数（默认开）：池 = role 范围（强匹配）+ 全素材库扫描（borrowed）
+  2. `match_score` 透传 `include_borrowed`，coverage 仍按 role 范围不变（保留"用户在当前 role 展示什么"语义），score/matched_keywords 反映 borrowed 命中
+  3. `KEYWORD_GROUPS['skills']` 加 `("AI", "LLM", 0.5)`：跟 "大模型"/"LLM" 语义等价
+  4. 抽出 `_scan_items_into_pool` 工具函数，role + borrowed 池扫描逻辑复用
+  **回归测试**：`tests/test_jd_parser.py::TestMatchScoreBugfixR35Plus` 3 个用例锁死修复：
+  - baiyun_qa 修后 score>0 + matched 含 Python/LLM
+  - baiyun_product 修后 score>0 + matched 含 LLM（"AI" surface 生效）
+  - include_borrowed=False 时严格 role 范围保留（旧行为可恢复，防回潮）
+  un-skip `baiyun_2026_qa`（修后 score=100，ground truth label '推荐投' 一致 ✓）；保留 `baiyun_2026_product` skip（修后 score=100，但 ground truth label='建议补充' 期望 '中'，原 label 基于 score=0 反推，KEYWORD_GROUPS 暂无 PM 维度关键词，match_score 不能反映"补 PM 维度"语义，待 user 复核 label）。**128 个 pytest 全绿**（125 baseline + 3 R3.5+ bugfix），1 skipped。**8 份 eval 实跑准确率 7/8 = 88%**（R3.5 时 6/8 = 75%，+13pp），仅 baiyun_product 1 份待 label 复核。`AI岗位JD库_v4_黄金标的match报告.md` 重跑：3 份黄金 × 6 role 分数无变化（公告型 JD 不受 R3.5+ 影响）。**未修（留给 user / R3.5.1）**：`scripts/score_thresholds.py` 仍读 jd_samples.json frozen top_score，R3.5+ 修复要等 R3.5.1 改实跑模式才能在阈值调优报告里看到。设计文档落档 `.harness/docs/round3-5plus-plan.md`
 
 ## 技术栈定型
 

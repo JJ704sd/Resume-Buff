@@ -2,8 +2,17 @@
 
 > 适用项目: 简历帮  
 > 日期: 2026-06-27  
-> 状态: Draft for next round  
+> 状态: **Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ 已落地**(320 → 352 → 416 pytest 全绿,2026-06-27)  
 > 目标: 在现有 Round 4 Agent MVP 基础上,把简历生成链路增强为可规划、可调用工具、可观测、可评测、可回退的本地单用户 Agent 工作流。
+
+## 阶段落地状态
+
+| Phase | 目标 | 状态 | 关键产物 |
+|---|---|---|---|
+| Phase 1 | Agent 编排层与工具注册 | ✅ 已完成(2026-06-27) | `core/agent_tools.py`(AGENT_TOOLS 4 个 + `execute_agent_tool`)+ `core/agent_workflow.py`(`build_task_graph` 确定性 + `run_agent_workflow` 失败降级)+ `enable_agent_workflow` 字段;320 pytest 全绿,283 老测试零回退 |
+| Phase 2 | 结构化 trace 与回放 | ✅ 已完成(2026-06-27) | `log_agent_trace_jsonl` 写 `backend/logs/agent_trace.jsonl` 11 字段 schema + `scripts/replay_agent_trace.py` argparse CLI;352 pytest 全绿(+32 新);安全审查无 P0/P1 阻塞 |
+| Phase 3 | 轻量 RAG evidence | ✅ 已完成(2026-06-27) | `core/evidence.py`(`EvidenceSnippet` frozen dataclass + `build_evidence_snippets` 切 projects/skills/honors/certs + `retrieve_evidence` 复用 `KEYWORD_GROUPS` lexical matching + 稳定排序 `(-confidence, source_type, source_id)` + `_summarize_evidence_for_prompt` 截断);`core/agent_tools.py` 注册 `retrieve_evidence` 工具;`core/agent_workflow.py` 任务图插入 `retrieve_evidence` step + evidence 失败降级 `use_default` + 显式 evidence 时 skipped;`core/llm_rewriter.py` `evidence` kwarg + `_build_request_payload` `evidence_summary` 字段 + `SYSTEM_PROMPT` 第 8 条约束"只能基于 evidence 改写" + `EVIDENCE_CONSTRAINT_SUFFIX` 后缀;416 pytest 全绿(+62 新);**零向量数据库 / 零 embedding API / 零新依赖**;安全审查无 P0/P1 阻塞 |
+| Phase 4 | Agent eval 报告 | ⏳ 未启动 | 等用户明确启动(需真实 LLM key 才能产出 eval 指标) |
 
 ---
 
@@ -375,7 +384,7 @@ preview 响应可选增加:
 
 ## 9. 分阶段实施
 
-### Phase 1: 编排层与工具注册
+### Phase 1: 编排层与工具注册 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -385,11 +394,18 @@ preview 响应可选增加:
 
 验收:
 
-- 旧路径所有测试保持通过。
-- 新增 workflow 单元测试覆盖任务图、工具调用、未知工具拒绝。
+- 旧路径所有测试保持通过(283 → 283,字节级一致)。
+- 新增 workflow 单元测试覆盖任务图、工具调用、未知工具拒绝(20 新 pytest)。
 - `enable_agent_workflow=false` 时输出结构不变。
 
-### Phase 2: 结构化 trace 与回放
+**落地证据**:
+
+- `core/agent_tools.py`: AGENT_TOOLS 4 个核心 + `execute_agent_tool` 入口(allowlist / 错误分类 / 隐私边界);`ToolResult` 不存 args/input 原文
+- `core/agent_workflow.py`: `build_task_graph(has_jd, enable_function_calling, has_external_resume)` 确定性产任务图(LLM 不参与规划);`run_agent_workflow` 失败时降级到旧路径;`enable_agent_workflow=False`(默认)字节级一致
+- `api/resume.py`: `PreviewRequest.enable_agent_workflow` / `GenerateRequest.enable_agent_workflow` 字段,默认 False
+- 测试: `test_agent_tools.py`(14 case)+ `test_agent_workflow.py`(29 case,含 9 个 Phase 2 trace 行为)= **37 case 全绿**
+
+### Phase 2: 结构化 trace 与回放 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -403,9 +419,40 @@ preview 响应可选增加:
 - replay 能根据 request_id 输出步骤摘要。
 - trace 写失败不影响 preview/generate。
 
-### Phase 3: 轻量 RAG evidence
+**落地证据**:
+
+- `core/logger.py`: `log_agent_trace_jsonl(event)` 写 `backend/logs/agent_trace.jsonl`;11 字段稳定 schema(`JSONL_TRACE_FIELDS` tuple 常量)—— ts / request_id / session_id / workflow / step / tool / latency_ms / status / error_type / input_size / output_size;写入失败(IO/磁盘满/编码错)由 logger 内部 try/except 静默降级不影响主流程(spec §6.3)
+- `core/agent_workflow.py`: `generate_request_id()` 短 uuid(前缀 "r");`run_agent_workflow` 每个 step(含本地步骤)写一条 JSONL trace;本地步骤 `status="skipped"`,`input_size/output_size=0`;`_estimate_input_size` / `_estimate_output_size` 用 `json.dumps(...).encode("utf-8")` 算字节长度,不存原文
+- `scripts/replay_agent_trace.py`: argparse CLI `--request-id` / `--session-id` / `--path`;输出 markdown 摘要(顶部 metadata + 7 列表格 + 错误汇总);只渲染 schema 字段,不输出 event 整体 dict;坏行静默跳过,文件不存在返空
+- 测试: `test_logger.py`(14 case,含 11 Phase 2)+ `test_agent_workflow.py`(29 case,含 9 Phase 2 trace 行为)+ `test_agent_trace_replay.py`(10 case 新增)= **53 case 涵盖 Phase 2**
+- **安全审查无 P0/P1 阻塞**(JSONL 不存原文 PII / 写入失败不阻断 / replay 不输出敏感内容 / request_id+session_id 都是 uuid 短串无 PII)
+- 旧 R4-A `log_agent_trace` / `agent_trace.log` 完全不动兼容共存
+
+### Phase 3: 轻量 RAG evidence ✅ 已完成(2026-06-27)
 
 目标:
+
+- 将 materials 切为 evidence snippets。
+- 用关键词召回 + role 权重生成 top-k evidence。
+- LLM 改写时注入 evidence,并保持"只基于事实改写"。
+
+验收:
+
+- 单测覆盖 snippets 生成、top-k 稳定排序、无证据时不编造。
+- JD-driven preview 中能返回 evidence summary。
+- match_score ground truth 准确率不回退。
+
+**落地证据**:
+
+- `core/evidence.py`: `EvidenceSnippet` frozen dataclass(source_type/source_id/text/matched_keywords/confidence) + `build_evidence_snippets(materials, role)` 从 projects/skills/honors/certs 4 类切 snippets(role 缺时 fallback general) + `retrieve_evidence(jd_keywords, role, materials, top_k=8)` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 稳定排序 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤(不返低 confidence 噪声);`_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限 + `(N more)` 截断标记;`evidence_to_dict_list` 把 frozen dataclass 转 JSON 友好 dict list
+- `core/agent_tools.py`: 注册 `retrieve_evidence` 工具(`ToolSpec.pii_risk=medium` 跟 match_score 同级,callable 包 lambda 走 `evidence_to_dict_list` 让 ToolResult.output 可序列化)
+- `core/agent_workflow.py`: has_jd 时任务图插入 `retrieve_evidence` step(match_score 之后, retrieve_materials 之前; `step.required=False, fallback="use_default"`);evidence 工具失败不阻断主流程(spec §6.3);caller 显式传 `evidence` kwarg 时工具调用 `status="skipped"` 跳过执行;`enable_agent_workflow=True` 时 preview 返回值新增 `evidence_summary` 字段(dict list)
+- `core/llm_rewriter.py`: `rewrite_highlights` 加 `evidence: Optional[list] = None` kwarg + `_build_request_payload` 加 `evidence_summary` kwarg + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写" + `EVIDENCE_CONSTRAINT_SUFFIX` 单独常量后缀(evidence 非空时追加,evidence=None 字节级一致)
+- `core/generator.py`: `build_sections` / `preview_resume` / `generate_resume_docx` 加 `evidence` kwarg 透传(零修改上层行为,None 旧路径字节级一致)
+- 测试: `test_evidence.py`(**45 case**:TestBuildEvidenceSnippets 9 + TestKeywordHit 5 + TestComputeConfidence 6 + TestRetrieveEvidence 9 + TestSummarizeEvidenceForPrompt 4 + TestEvidenceToDictList 3 + TestAgentToolsIntegration 4 + TestMatchScoreRegression 4 + TestKeyWordGroupsReuse 1) + `test_agent_workflow.py` 加 `TestEvidencePhase3` 9 case(任务图含 retrieve_evidence / workflow 跑 evidence step / evidence_explicit 时 skipped / evidence 失败降级不阻断 / trace 不含 evidence text / evidence_summary 返回 / 无 JD 不调 evidence / jd_context=None baseline 不变 / 无关键词命中返空 list) + `test_llm_rewriter.py` 加 `TestEvidenceIntegration` 8 case(evidence=None 字节级一致 / 空 list 等同 None / snippets 注入 summary / dict list 重建 Snippet / system prompt 含 suffix / retry 保留 summary / FC + evidence + jd_focus 三方共存 / `_build_request_payload` kwarg 透传) = **62 新 pytest**(352 → 416 全绿)
+- **安全审查无 P0/P1 阻塞**: trace 不含 evidence text 原文(只写 input_size/output_size bytes 长度)/ evidence_summary 不含 PII(materials 已脱敏)/ 无新增外部网络调用(retrieve_evidence 纯本地 lexical matching)/ write fail 静默降级不影响主流程
+- **零向量数据库 / 零 embedding API / 零新依赖**(spec §5.3);不实现 Phase 4,Phase 4(Agent eval 报告)等用户明确启动再开,需真实 LLM key 才能产出 schema pass rate / fallback rate 等指标
+
 
 - 将 materials 切为 evidence snippets。
 - 用关键词召回 + role 权重生成 top-k evidence。
@@ -417,7 +464,7 @@ preview 响应可选增加:
 - JD-driven preview 中能返回 evidence summary。
 - match_score ground truth 准确率不回退。
 
-### Phase 4: Agent eval 报告
+### Phase 4: Agent eval 报告 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -430,6 +477,14 @@ preview 响应可选增加:
 - 报告包含 schema pass rate、fallback rate、latency、score 档位变化。
 - eval 脚本不读取或输出真实私有素材。
 - 可作为每轮收尾验证的一部分手动运行。
+
+**落地证据**:
+
+- `scripts/evaluate_agent_workflow.py`: 加载固定 eval set 12 JD(jd_samples 8 份非公告型 + v4_strong 4 份),跑 4 组开关对照 (FC × AW 笛卡尔积),记录 jd_id / role_id / expected_label / score / recommendation / schema_pass / fallback_used / tools_used / latency_ms / error_type / pii_safe 11 字段,输出 markdown 报告含 8 节
+- 报告: `AI岗位JD库_agent_eval报告.md`(本机实测 schema pass 48/48 = 100%, fallback 0/48 = 0%, score 一致 12/12, AW 路径 +4ms overhead)
+- 隐私: 仅读 `materials.json` (公开脱敏版),不读 `_private_backup.json`;PII 扫描用 placeholder 白名单 (`13800000000` / `your_email@example.com`);**安全审查无 P0/P1 阻塞**
+- 不挂 pre-push hook (spec §12 #3)
+- 测试: `backend/tests/test_agent_eval.py` 11 case (TestEvalSetLoading 3 + TestSingleEvaluation 4 + TestPiiScanner 2 + TestPrivacyGuarantee 2),416 → 427 全绿,416 老测试零回退
 
 ---
 

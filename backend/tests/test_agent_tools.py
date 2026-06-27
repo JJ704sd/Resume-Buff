@@ -73,7 +73,8 @@ class TestRegistrySchema:
             assert isinstance(spec.name, str) and spec.name, f"{tool_name} name 空"
             assert callable(spec.callable), f"{tool_name} callable 不可调用"
             assert spec.permission in {
-                "read_jd_text", "read_jd_and_materials", "read_bullet_and_jd_focus"
+                "read_jd_text", "read_jd_and_materials", "read_bullet_and_jd_focus",
+                "read_materials_and_jd_keywords",  # R5-A Phase 3: retrieve_evidence 新增
             }, f"{tool_name} permission 异常: {spec.permission}"
             assert spec.pii_risk in {"low", "medium", "high"}, f"{tool_name} pii_risk 异常"
             assert isinstance(spec.timeout_ms, int) and spec.timeout_ms > 0, (

@@ -349,6 +349,7 @@ def build_sections(
     jd_context: Optional[dict] = None,
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
+    evidence: Optional[list] = None,  # R5-A Phase 3: 透传给 rewrite_highlights
 ) -> list[Section]:
     """
     构造完整的简历 sections 列表(可序列化为 JSON 预览,也可喂给 docx 渲染)。
@@ -366,6 +367,10 @@ def build_sections(
 
     R4-M 新增:session_id(可选)透传给 rewrite_highlights,挂上后从 session.py 拉历史
     消息拼到 LLM messages,实现多轮对话上下文保持。session_id=None → 老路径字节级一致。
+
+    R5-A Phase 3 新增:evidence(可选, list[EvidenceSnippet])透传给 rewrite_highlights,
+    LLM 改写时只能引用 evidence 中存在的事实。evidence=None → 老路径字节级一致,
+    LLM 不接收 evidence summary 也不受"基于 evidence 改写"约束。
     """
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
@@ -446,6 +451,7 @@ def build_sections(
                     jd_focus=jd_focus,
                     enable_function_calling=enable_function_calling,  # R4-F
                     session_id=session_id,  # R4-M
+                    evidence=evidence,  # R5-A Phase 3: None 字节级一致
                 )
             except Exception:
                 pass  # 静默降级 — 高层 build_sections 仍返回原文
@@ -1077,6 +1083,7 @@ def preview_resume(
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
+    evidence: Optional[list] = None,  # R5-A Phase 3: evidence 透传, None 字节级一致
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1100,6 +1107,11 @@ def preview_resume(
       - True  → 委托 core.agent_workflow.run_agent_workflow()(受控 Plan-and-Execute)
                 失败时自动 fallback 到老路径(spec §6.3)
                 输出 preview dict 结构与老路径一致
+
+    R5-A Phase 3: evidence(默认 None)
+      - None  → 老路径字节级一致,LLM 不接收 evidence summary
+      - list  → 透传给 build_sections → rewrite_highlights,LLM 改写受"基于 evidence 改写"约束
+      - 当前 enable_agent_workflow=False 老路径仅是"透传" — 真正注入逻辑在 workflow 路径
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
@@ -1119,6 +1131,7 @@ def preview_resume(
                 enable_function_calling=enable_function_calling,
                 session_id=session_id,
                 output_dir=None,  # preview 模式
+                evidence=evidence,  # R5-A Phase 3
             )
             # workflow 内部失败已 fallback 到旧路径, 这里无需再 try/except
             return result
@@ -1133,6 +1146,7 @@ def preview_resume(
         jd_context=jd_context,
         enable_function_calling=enable_function_calling,  # R4-F
         session_id=session_id,  # R4-M
+        evidence=evidence,  # R5-A Phase 3
     )
 
     out: dict = {
@@ -1142,6 +1156,7 @@ def preview_resume(
         "intention": next((s.content["intention"] for s in sections if s.type == "header"), ""),
         "sections": [asdict(s) for s in sections],
         "jd_match_counts": _build_jd_match_counts(sections, jd_context) if jd_context else None,
+        # R5-A Phase 3: evidence_summary 在 workflow 路径才生成, 老路径 evidence=None 不返
     }
     return out
 
@@ -1158,6 +1173,7 @@ def generate_resume_docx(
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
+    evidence: Optional[list] = None,  # R5-A Phase 3: 透传, None 字节级一致
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
@@ -1170,6 +1186,7 @@ def generate_resume_docx(
       - False → 老路径字节级一致
       - True  → 走 core.agent_workflow.run_agent_workflow(output_dir=...)
                 失败 fallback 到老路径
+    R5-A Phase 3: evidence(默认 None) 透传 build_sections → rewrite_highlights。
     """
     # R5-A Phase 1: enable_agent_workflow=True 走 workflow
     if enable_agent_workflow:
@@ -1185,6 +1202,7 @@ def generate_resume_docx(
                 enable_function_calling=enable_function_calling,
                 session_id=session_id,
                 output_dir=output_dir,
+                evidence=evidence,  # R5-A Phase 3
             )
             return result
         except Exception:
@@ -1197,6 +1215,7 @@ def generate_resume_docx(
         jd_context=jd_context,
         enable_function_calling=enable_function_calling,  # R4-F
         session_id=session_id,  # R4-M
+        evidence=evidence,  # R5-A Phase 3
     )
     return render_docx(
         sections, target_role, output_dir,

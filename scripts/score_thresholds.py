@@ -1,15 +1,40 @@
-"""R3.5 Phase 3: 用 10 份 ground truth 跑当前 match_score 阈值的 confusion matrix,
-识别 false negative / false positive, 决定要不要调阈值。
+"""R3.5.1: 阈值调优实跑模式 — 跑当前 match_score 拿 score, 不读 jd_samples.json frozen top_score.
+
+R3.5 时 score_thresholds.py 读 jd_samples.json 里的 top_score / top_role / top_coverage,
+那些字段是历史 snapshot 冻结值 (R3.5 当时 AI 推断 score 写死的), 不会随 match_score
+改动更新. R3.5+ / R3.5+ (b) 修 match_score 后, frozen top_score 跟实跑结果不一致,
+导致本脚本的"准确率"评估失去参考价值.
+
+R3.5.1 起改为实跑:
+  - score    = match_score(text, role_id_hint, materials)["score"]
+  - coverage = match_score 返回的 coverage
+  - role     = role_id_hint (user 标定的期望 role; 不再 6 role 取最高 — 简化, 跟 R3.5
+              报告里 top_role 不直接可比, 但阈值评估本身不依赖 6 role 扫描)
+
+跑法:
+  D:\\python3.11\\python.exe scripts/score_thresholds.py
+  → 写报告到 AI岗位JD库_v4_intern_阈值调优报告.md
 """
 import json
+import sys
 from pathlib import Path
 from collections import Counter
 
+# scripts/ 是 repo 根的子目录, backend/ 跟它平级. 把 backend/ 加到 sys.path 才能 import core.*
+BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
+sys.path.insert(0, str(BACKEND_DIR))
+
+from core.generator import load_materials  # noqa: E402
+from core.jd_parser import match_score  # noqa: E402
+
 SAMPLES = Path(r"D:/简历帮/简历帮知识库/jd_samples.json")
 
-# 当前 R3-A 占位阈值
+# 当前 R3.5 锁死阈值, R3.5.1 不调
 CURRENT_HIGH = 80
 CURRENT_MID = 60
+
+# R3.5.1 元信息
+VERSION = "R3.5.1 (实跑模式, 2026-06-27)"
 
 
 def classify(score: int, high: int, mid: int) -> str:
@@ -28,16 +53,19 @@ def label_to_rec(label: str) -> str:
 
 def main():
     samples = json.loads(SAMPLES.read_text(encoding="utf-8"))["samples"]
+    mats = load_materials()  # R3.5.1: 实跑 match_score 需要素材库
 
     # 排除公告型 (不参与阈值评估, match_score 不适用)
     eval_samples = [s for s in samples if s["label"] != "公告型"]
     skipped = [s for s in samples if s["label"] == "公告型"]
 
     print("=" * 80)
-    print(f"R3.5 Phase 3 — Confusion Matrix (阈值 高>={CURRENT_HIGH} / 中>={CURRENT_MID})")
+    print(f"{VERSION} — Confusion Matrix (阈值 高>={CURRENT_HIGH} / 中>={CURRENT_MID})")
     print("=" * 80)
     print()
     print(f"评估样本: {len(eval_samples)} 份 (排除 {len(skipped)} 份公告型)")
+    print(f"实跑模式: score = match_score(text, role_id_hint, materials)['score']")
+    print(f"          role = role_id_hint (user 标定的期望 role)")
     print()
 
     # label 分布
@@ -54,7 +82,11 @@ def main():
     details = []
     for s in eval_samples:
         true_label = s["label"]
-        score = s["top_score"]
+        role = s["role_id_hint"]
+        # R3.5.1: 实跑 match_score, 不再读 s["top_score"]
+        result = match_score(s["text"], role, mats)
+        score = result["score"]
+        coverage = result["coverage"]
         pred_rec = classify(score, CURRENT_HIGH, CURRENT_MID)
         true_rec = label_to_rec(true_label)
         match = pred_rec == true_rec
@@ -67,6 +99,8 @@ def main():
             "score": score,
             "pred": pred_rec,
             "match": match,
+            "role": role,
+            "coverage": coverage,
             "note": s.get("label_note", "")[:80],
         })
 
@@ -76,7 +110,10 @@ def main():
     print("详细分类:")
     for d in details:
         mark = "✅" if d["match"] else "❌"
-        print(f"  {mark} {d['id'].ljust(35)} score={d['score']:3d}  true={d['true']:8s} pred={d['pred']:4s}")
+        print(
+            f"  {mark} {d['id'].ljust(35)} "
+            f"score={d['score']:3d}  true={d['true']:8s} pred={d['pred']:4s}"
+        )
     print()
 
     # 3x3 confusion matrix
@@ -103,25 +140,34 @@ def main():
     # 公告型跳过说明
     print(f"--- 公告型 (不参与评估, {len(skipped)} 份) ---")
     for s in skipped:
-        print(f"  · {s['id']} (score={s['top_score']}, role={s['top_role']}) — match_score 不适用")
+        # R3.5.1: 公告型不实跑 (match_score 对公告型不适用), 沿用 frozen top_score 仅作展示
+        print(
+            f"  · {s['id']} (frozen top_score={s['top_score']}, "
+            f"role={s['top_role']}) — match_score 不适用"
+        )
 
     # 写报告 markdown
     report = []
-    report.append("# R3.5 Phase 3 — 阈值调优 confusion matrix 报告\n")
+    report.append(f"# R3.5.1 — 阈值调优 confusion matrix 报告 ({VERSION})\n")
     report.append(f"> 评估样本: {len(eval_samples)} 份 (排除 {len(skipped)} 份公告型)\n")
     report.append(f"> 阈值: 高>={CURRENT_HIGH} / 中>={CURRENT_MID}\n")
+    report.append(f"> 实跑模式: score = match_score(text, role_id_hint, materials)['score']\n")
     report.append(f"> 准确率: **{accuracy:.0%}** ({correct}/{len(eval_samples)})\n\n")
     report.append("## 评估集 label 分布\n\n")
     for k, v in label_dist.most_common():
         report.append(f"- {k}: {v}\n")
     report.append("\n")
     report.append("## 详细分类\n\n")
-    report.append("| id | true label | score | pred | match | note |\n")
-    report.append("|---|---|---|---|---|---|\n")
+    report.append("| id | role | true label | score | pred | match | coverage (sk/to/do) | note |\n")
+    report.append("|---|---|---|---|---|---|---|---|\n")
     for d in details:
         mark = "✅" if d["match"] else "❌"
+        cov = d["coverage"]
+        cov_str = f"{cov.get('skills', 0):.1f}/{cov.get('tools', 0):.1f}/{cov.get('domains', 0):.1f}"
         note = d["note"].replace("|", "\\|").replace("\n", " ")
-        report.append(f"| {d['id']} | {d['true']} | {d['score']} | {d['pred']} | {mark} | {note} |\n")
+        report.append(
+            f"| {d['id']} | {d['role']} | {d['true']} | {d['score']} | {d['pred']} | {mark} | {cov_str} | {note} |\n"
+        )
     report.append("\n")
     report.append("## Confusion Matrix\n\n")
     report.append("| true \\ pred | 高 | 中 | 低 |\n")
@@ -132,16 +178,29 @@ def main():
     report.append("\n")
     report.append("## 结论\n\n")
     if accuracy >= 0.85:
-        report.append(f"- 当前阈值 **{CURRENT_HIGH}/{CURRENT_MID} 准确率 {accuracy:.0%}** ≥ 85%, 保留\n")
+        report.append(
+            f"- 当前阈值 **{CURRENT_HIGH}/{CURRENT_MID} 准确率 {accuracy:.0%}** ≥ 85%, 保留\n"
+        )
     else:
-        report.append(f"- 当前阈值 **{CURRENT_HIGH}/{CURRENT_MID} 准确率 {accuracy:.0%}** < 85%, **需要进一步分析**\n")
-        report.append("- false negative 都是 match_score 漏匹配 (score=0 但 label=推荐投/建议补充), 不是阈值问题\n")
-        report.append("- 见下方 match_score 漏匹配清单\n\n")
-        report.append("### match_score 漏匹配清单 (R3.5.5 候选修)\n\n")
+        report.append(
+            f"- 当前阈值 **{CURRENT_HIGH}/{CURRENT_MID} 准确率 {accuracy:.0%}** < 85%, "
+            "**需要进一步分析**\n"
+        )
+        report.append("- 误判原因见下方 False 详情\n\n")
+        report.append("### False 详情\n\n")
         for d in details:
             if d["match"]:
                 continue
-            report.append(f"- `{d['id']}` (true={d['true']}, score={d['score']}, pred={d['pred']})\n")
+            report.append(
+                f"- `{d['id']}` (true={d['true']}, score={d['score']}, pred={d['pred']})\n"
+            )
+    report.append("\n## R3.5.1 vs R3.5 差异说明\n\n")
+    report.append("- R3.5 报告读 frozen top_score (R3.5 时 AI 推断 score 写死), 不会随 match_score 改动更新\n")
+    report.append("- R3.5.1 改为实跑 match_score, 反映当前 match_score 实现 + 真实素材库状态\n")
+    report.append("- frozen 字段 (top_score / top_role / top_coverage / all_role_scores) 仍保留在 jd_samples.json "
+                  "作为历史 snapshot, 不删除以保留 R3.5 时点的 ground truth\n")
+    report.append("- baiyun_2026_product 修后 score=33 ('低') vs ground truth '中', "
+                  "根因 user 素材库缺 PM 经验, 待 user 补 PM 素材 (R3.5+ (b) commit ed57e25)\n")
 
     out = Path(r"D:/简历帮/AI岗位JD库_v4_intern_阈值调优报告.md")
     out.write_text("".join(report), encoding="utf-8")

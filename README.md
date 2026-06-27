@@ -41,6 +41,7 @@
 | **JD-driven 生成**(粘贴 JD 后:项目/highlight/skill 按命中数倒序 + 前端每 section 命中关键词角标 + LLM 改写 prompt 注入 matched/missing 关键词 + 不传 JD 时字节级一致) | ✅ Round 3 I |
 | **R3.5 阈值调优**(基于 8 份 ground truth 验证,80/60 阈值锁死 + 11 回归测试防回潮) | ✅ Round 3.5 |
 | **R3.5+ 修 match_score 漏匹配 bug**(borrowed pool 跨 role 经验自动纳入 + `KEYWORD_GROUPS` 加 'AI' surface;3 个 bugfix 回归测试;baiyun_qa 修后 score=100 ✓,baiyun_product 修后 score=100 但 label 待 user 复核) | ✅ Round 3.5+ |
+| **R3.5+ (b) PM 维度 surface**(`KEYWORD_GROUPS['domains']` 加 物流/工业工程/原型/流程图 4 个 surface;baiyun_product 修后 score=33 + missing/suggestions 精确给"补 PM 维度"指引;3 个 pm_dimensions 回归测试) | ✅ Round 3.5+ (b) |
 
 ---
 
@@ -53,7 +54,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 128 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + **3 bugfix_r35plus**),**128 passed + 1 skipped**(baiyun_2026_product 修后 label 待 user 复核),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归**(验证 baiyun_qa/baiyun_product 修后 score>0 + include_borrowed=False 旧行为保留) |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 131 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + 3 bugfix_r35plus + **3 pm_dimensions**),**131 passed + 1 skipped**(baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归** + **R3.5+ (b) PM 维度 surface 锁死 + 3 pm_dimensions 回归**(验证 baiyun_product missing 含 PM 4 项 + suggestions 提到 PM 关键词 + KEYWORD_GROUPS 字典级断言) |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 

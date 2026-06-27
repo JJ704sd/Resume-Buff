@@ -8,24 +8,24 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3.5+ 收尾)
+## 0. 当前项目快照(2026-06-27 R3.5+ (b) 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
 - 6 个 role:tech_metric / product / algorithm / data_annot / test_qa / general
 - 5 套简历模板:classic / single_column / two_column / minimal / technical
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
-- **borrowed pool + 'AI' surface**(R3.5+ 修复 false negative: 跨 role 经验自动纳入候选池 + 中英 JD 高频 "AI" 字面识别)
+- **borrowed pool + 'AI' surface + PM 维度 surface**(R3.5+ / R3.5+ (b) 修复 false negative + 让 match_score 精确告诉 user 缺什么)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **128 个 pytest 全绿**(125 baseline + 3 R3.5+ bugfix),1 skipped(baiyun_2026_product 修后 label 待 user 复核)
+- **131 个 pytest 全绿**(128 baseline + 3 R3.5+ bugfix + 3 R3.5+ (b) pm_dimensions),1 skipped(baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验, 等 user 补素材或改 label)
 
 **最近 4 个 commit**:
+- `ed57e25` feat(round3.5+b): PM 维度 surface — match_score 精确识别 baiyun_product 缺失
+- `502661f` docs(round3.5+): sync ROADMAP + AGENTS + README + MEMORY to R3.5+ closeout
 - `2889dd9` fix(round3.5+): match_score 漏匹配 bug — borrowed pool + 'AI' surface
 - `bdefd97` docs: ROADMAP.md 可持续更新的未来规划文档
-- `722b599` MEMORY 同步 R3.5 idempotent fix
-- `1bac68e` fix label_samples.py idempotent + --force flag
 
 ---
 
@@ -42,8 +42,14 @@
   3. 抽出 `_scan_items_into_pool` 工具函数复用扫描逻辑
 - **效果**:8 份 eval 实跑准确率 **7/8 = 88%**(R3.5 时 6/8 = 75%,+13pp);baiyun_qa 修后 score=100 ✓,baiyun_product 修后 score=100 但 label='建议补充' 待 user 复核(原 label 基于 score=0 反推)
 - **3 个回归测试**:`tests/test_jd_parser.py::TestMatchScoreBugfixR35Plus` 锁死 baiyun_qa/baiyun_product 修复 + include_borrowed=False 旧行为
-- **未修(留给 user)**:baiyun_2026_product label 复核;`scripts/score_thresholds.py` 仍读 frozen top_score,需 R3.5.1 改实跑模式
-- **设计文档**:`.harness/docs/round3-5plus-plan.md`
+
+### R3.5+ (b) — PM 维度 surface ✅ 完成 (2026-06-27, commit `ed57e25`)
+- **上下文**:R3.5+ 修后 baiyun_product score=100 vs label='建议补充' (期望 '中') 仍 gap;user 选 (b) 方案: 加 PM 维度 surface, 让 match_score 精确告诉 user 缺什么
+- **修法**:`KEYWORD_GROUPS['domains']` 加 4 个 PM 维度 surface (0.5 加分): 物流 / 工业工程 / 原型 / 流程图
+- **效果**:baiyun_2026_product 实跑: score=33, matched=['LLM'], missing=['原型', '工业工程', '流程图', '物流'];suggestions 精确给"补 PM 维度素材"指引 (提到物流/工业工程/原型)
+- **8 份 eval live 准确率保持 7/8 = 88%**;baiyun_product 仍 skip (score='低' vs label='中' 仍 gap, 根因是 user 素材库实际缺 PM 经验, 不是算法问题)
+- **3 个回归测试**:`tests/test_jd_parser.py::TestMatchScorePMDimensions` 锁死 baiyun_product missing 含 PM 4 项 + suggestions 提到 PM 关键词 + KEYWORD_GROUPS 字典级断言
+- **未修(留给 user)**:baiyun_2026_product 严格阈值校验留待 user 补 PM 素材 (or 改 label='低') 后再 un-skip;`scripts/score_thresholds.py` 仍读 frozen top_score 需 R3.5.1 改实跑模式
 
 ### R3-G — 重启 cherry-pick
 - **背景**:`feat/r3g-resume-upload` 分支保留 1467 行 MVP(外部简历实时读取 + JD 评分联动),worktree `D:/简历帮/r3g-resume-upload` HEAD `eb7e841`;用户 2026-06-26 选完 scope 后主动 cancel,R3-G cancelled 但 MVP commit 在分支保留

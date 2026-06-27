@@ -125,6 +125,12 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
+        # ---- Round 3 M.2: 可读性参数(R3-M.1 视觉行为完全兼容) ----
+        "h1_size_ratio": 1.20,          # H1 = body * 1.20 → 12.6pt
+        "h2_size_ratio": 1.05,          # H2 = body * 1.05 → 11.025pt
+        "section_spacing_pt": (8, 4),   # H1 段前/后距(pt)
+        "meta_spacing_pt": 2,           # meta 行段后距(pt)
+        "item_spacing_pt": 0,           # bullet 段后距(pt)
     },
     "single_column": {
         "name": "单栏紧凑",
@@ -137,6 +143,11 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
+        "h1_size_ratio": 1.20,          # 12.0pt
+        "h2_size_ratio": 1.05,          # 10.5pt
+        "section_spacing_pt": (8, 4),
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 0,
     },
     "two_column": {
         "name": "双栏",
@@ -149,6 +160,11 @@ LAYOUT_CONFIG = {
         "two_column": True,
         "shaded_highlights": False,
         "skill_marker": "",
+        "h1_size_ratio": 1.20,
+        "h2_size_ratio": 1.05,
+        "section_spacing_pt": (8, 4),
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 0,
     },
     "minimal": {
         "name": "极简",
@@ -161,6 +177,11 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
+        "h1_size_ratio": 1.20,
+        "h2_size_ratio": 1.05,
+        "section_spacing_pt": (8, 4),
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 0,
     },
     "technical": {
         "name": "技术感",
@@ -173,8 +194,13 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": True,
         "skill_marker": "■ ",
+        "h1_size_ratio": 1.20,
+        "h2_size_ratio": 1.05,
+        "section_spacing_pt": (8, 4),
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 0,
     },
-    # ---- Round 3 M.1 新增 3 套模板 (MVP: 复用 _render_classic, 后续 round 加专属 renderer) ----
+    # ---- Round 3 M.1 新增 3 套模板 (MVP: 复用 _render_classic, R3-M.2 academic 加专属 renderer) ----
     "academic": {
         "name": "学术 CV",
         "description": "适合读博 / 出国申请,字号 11pt 行距 1.5 边距 2.5cm,教育背景优先",
@@ -186,7 +212,13 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
-        "academic_mode": True,  # 后续 R3-M.2 加专属 renderer(简化 highlights)
+        "academic_mode": True,  # R3-M.2 加专属 renderer(简化 highlights + 教育前置)
+        # 学术 CV: H1 比例略小(big body 11pt 不需要 1.2 倍),段间距更宽更舒展
+        "h1_size_ratio": 1.15,          # 12.65pt
+        "h2_size_ratio": 1.05,          # 11.55pt
+        "section_spacing_pt": (10, 5),  # 学术段间距略大
+        "meta_spacing_pt": 3,           # 学术 meta 间距略大
+        "item_spacing_pt": 2,           # 学术 bullet 略散(避免视觉拥挤)
     },
     "internet": {
         "name": "互联网简洁",
@@ -199,6 +231,12 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "▸ ",
+        # 互联网: H2 比例 = 1.0(跟 body 同字号,紧凑风格),段间距偏小
+        "h1_size_ratio": 1.20,          # 12.0pt
+        "h2_size_ratio": 1.00,          # 10.0pt(同 body,层次靠粗体区分)
+        "section_spacing_pt": (6, 3),   # 紧凑
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 0,
     },
     "bilingual": {
         "name": "中英双语",
@@ -211,7 +249,13 @@ LAYOUT_CONFIG = {
         "two_column": False,
         "shaded_highlights": False,
         "skill_marker": "",
-        "bilingual_mode": True,  # 后续 R3-M.3 加专属 renderer(双语 header)
+        "bilingual_mode": True,  # R3-M.3 才激活双语 header / 教育 / 项目副标题(本轮 dead code)
+        # 双语: H1 略小(避免双语标题视觉过重),bullet 段间距略大(中英文不同 baseline 拉开)
+        "h1_size_ratio": 1.18,          # 12.39pt
+        "h2_size_ratio": 1.05,          # 11.025pt
+        "section_spacing_pt": (8, 4),
+        "meta_spacing_pt": 2,
+        "item_spacing_pt": 2,
     },
 }
 

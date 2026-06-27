@@ -6,6 +6,8 @@ Round 3 J: 5 套排版模板 — generator.py layout dispatcher 行为测试
   - TestLayoutVisuals         视觉差异 — 颜色 / 斜体 / 底纹 / ■ marker / table / 字号
   - TestLayoutInvalid         非法 template 抛 ValueError
   - TestLayoutBackwardCompat  preview / generate 不传 template 也能工作
+  - TestLayoutVisualsR3M1     R3-M.1 新增 3 套模板差异化 config
+  - TestLayoutConfigSchema    R3-M.2: 8 套 LAYOUT_CONFIG 必含 5 个可读性参数
 
 测"核心逻辑",不测:
   - 单纯 dict.get 取值
@@ -25,6 +27,16 @@ from core.generator import (
     render_docx,
     build_sections,
 )
+
+
+# Round 3 M.2: 8 套模板共享的 5 个可读性参数(由 helper 改造消费)
+READABILITY_KEYS = {
+    "h1_size_ratio",       # H1 字号 = body * ratio
+    "h2_size_ratio",       # H2 字号 = body * ratio
+    "section_spacing_pt",  # H1 段前/后距(元组)
+    "meta_spacing_pt",     # meta 行段后距
+    "item_spacing_pt",     # bullet 段后距
+}
 
 
 # ----------------------------------------------------------------------
@@ -233,3 +245,52 @@ class TestLayoutVisualsR3M1:
         assert margins == pytest.approx((2.0, 2.0, 2.0, 2.0)), (
             f"bilingual margins 应为 (2.0, 2.0, 2.0, 2.0), 实际 {margins}"
         )
+
+
+# ----------------------------------------------------------------------
+# TestLayoutConfigSchema: Round 3 M.2 — 8 套 LAYOUT_CONFIG 必含 5 个可读性参数
+# (锁 schema,任一模板缺关键 → fail,防 R3-M.2 之后的 round 改 config 时不小心删字段)
+# ----------------------------------------------------------------------
+class TestLayoutConfigSchema:
+    def test_all_layouts_have_readability_keys(self):
+        """8 套模板 LAYOUT_CONFIG 必含 5 个可读性参数(任一缺 → fail)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            missing = READABILITY_KEYS - set(cfg.keys())
+            assert not missing, (
+                f"{template} 缺可读性参数 {missing},需要补齐后才能被 helper 消费"
+            )
+
+    def test_h1_ratio_above_h2_ratio(self):
+        """H1 size ratio 永远 >= H2 size ratio(8 套模板都满足,层次保证)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            assert cfg["h1_size_ratio"] >= cfg["h2_size_ratio"], (
+                f"{template}: h1_ratio ({cfg['h1_size_ratio']}) < h2_ratio ({cfg['h2_size_ratio']})"
+            )
+
+    def test_h2_ratio_above_one(self):
+        """H2 ratio >= 1.0(不会让 H2 比 body 还小,失去层次)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            assert cfg["h2_size_ratio"] >= 1.0, (
+                f"{template}: h2_ratio ({cfg['h2_size_ratio']}) < 1.0(应至少等于 body 字号)"
+            )
+
+    def test_section_spacing_pt_is_two_tuple(self):
+        """section_spacing_pt 必须是 (before, after) 2 元组(供 _add_h1 同时消费前后距)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            sp = cfg["section_spacing_pt"]
+            assert isinstance(sp, tuple) and len(sp) == 2, (
+                f"{template}: section_spacing_pt 必须是 (before, after) 2 元组, 实际 {sp!r}"
+            )
+            assert sp[0] >= 0 and sp[1] >= 0, (
+                f"{template}: section_spacing_pt 必须 >= 0, 实际 {sp}"
+            )
+
+    def test_meta_and_item_spacing_non_negative(self):
+        """meta_spacing_pt / item_spacing_pt 必须 >= 0(避免段后距为负导致行重叠)"""
+        for template, cfg in LAYOUT_CONFIG.items():
+            assert cfg["meta_spacing_pt"] >= 0, (
+                f"{template}: meta_spacing_pt ({cfg['meta_spacing_pt']}) < 0"
+            )
+            assert cfg["item_spacing_pt"] >= 0, (
+                f"{template}: item_spacing_pt ({cfg['item_spacing_pt']}) < 0"
+            )

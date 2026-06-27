@@ -424,3 +424,98 @@ class TestMetaSpacing:
         assert p.paragraph_format.space_after == Pt(expected), (
             f"academic meta space_after 应为 Pt({expected}),实际 {p.paragraph_format.space_after}"
         )
+
+
+# ----------------------------------------------------------------------
+# Round 3 M.2 — academic 专属 renderer
+# (核心差异: 项目 highlights 简化 — 无 H2 项目名 / 无 meta line / 无 summary)
+# ----------------------------------------------------------------------
+from core.generator import _LAYOUT_DISPATCH, _render_academic  # noqa: E402
+
+
+def _docx_paragraph_texts(path: Path) -> list[str]:
+    """提取 docx 所有段落的纯文本(按出现顺序)"""
+    doc = Document(str(path))
+    return [p.text for p in doc.paragraphs]
+
+
+def _docx_paragraphs_with_h2_size(path: Path, layout_cfg: dict) -> list[str]:
+    """返回所有字号 = body * h2_size_ratio 的段落文本(H2 段识别)
+    (帮助定位 H2 项目名 — classic 才有,academic 简化后无)
+    """
+    doc = Document(str(path))
+    h2_pt = layout_cfg["font_size_body"] * layout_cfg["h2_size_ratio"]
+    matches = []
+    for p in doc.paragraphs:
+        for r in p.runs:
+            if r.font.size and abs(r.font.size.pt - h2_pt) <= 0.5:
+                if p.text.strip():
+                    matches.append(p.text)
+                break
+    return matches
+
+
+class TestAcademicRenderer:
+    """academic 模板项目 highlights 简化 + 教育保持前置"""
+
+    def test_academic_dispatch_uses_render_academic(self):
+        """_LAYOUT_DISPATCH['academic'] 必须是 _render_academic(MVP 阶段是 _render_classic)"""
+        assert _LAYOUT_DISPATCH["academic"] is _render_academic, (
+            f"academic 模板应走 _render_academic, 实际 {_LAYOUT_DISPATCH['academic']!r}"
+        )
+
+    def test_academic_no_project_name_h2(self, tmp_path: Path):
+        """academic 项目名不应作为 H2 段出现(classic 才有 '项目名 | 角色' H2)"""
+        out = generate_resume_docx(
+            target_role="tech_metric", output_dir=tmp_path, template="academic"
+        )
+        h2_paragraphs = _docx_paragraphs_with_h2_size(out, LAYOUT_CONFIG["academic"])
+        # tech_metric 4 个项目,classic 模板会出 4 个 "项目名 | 角色" H2
+        # academic 简化后这 4 个 H2 都不应有
+        for marker in ["某头部互联网公司医疗垂类大模型评测项目", "示例高校 × 某医疗器械公司", "DATAWHALE 开源社区", "大型体育赛事马拉松"]:
+            for p_text in h2_paragraphs:
+                assert marker not in p_text, (
+                    f"academic 不应有项目名 H2,但发现 '{marker}' 在 H2 段 '{p_text}' 中"
+                )
+
+    def test_academic_no_project_period_meta(self, tmp_path: Path):
+        """academic 项目时间(如 '2025.10 - 2025.12')不应作为独立 meta 段出现
+        注:教育段时间嵌入 H2 段,honors 时间嵌在 'name (date)' 段里 — 都不算独立 meta 段;
+        只有 classic 模板项目 group 里才把 period 作为独立段(整段就是 period 文本)。
+        所以检查"段落文本完全等于 project period"即可锁定 _add_meta_line 是否被调用。
+        """
+        out = generate_resume_docx(
+            target_role="tech_metric", output_dir=tmp_path, template="academic"
+        )
+        all_texts = _docx_paragraph_texts(out)
+        project_periods = ["2025.10 - 2025.12", "2026.1 - 至今", "2024.9 - 至今", "2024.12 - 2025.11"]
+        for period in project_periods:
+            for text in all_texts:
+                assert text.strip() != period, (
+                    f"academic 不应有项目时间独立 meta 段,但发现段落文本 = '{period}'"
+                )
+
+    def test_academic_no_project_summary(self, tmp_path: Path):
+        """academic 项目概述(summary)不应出现(直接进 highlights)"""
+        out = generate_resume_docx(
+            target_role="tech_metric", output_dir=tmp_path, template="academic"
+        )
+        all_texts = " | ".join(_docx_paragraph_texts(out))
+        # 第一个项目的 summary 前缀(在 materials.json 里)
+        summary_marker = "针对医疗垂直领域大语言模型,构建专业评测体系"
+        assert summary_marker not in all_texts, (
+            f"academic 不应有项目概述, 但发现 summary 内容"
+        )
+
+    def test_academic_education_before_projects(self, tmp_path: Path):
+        """academic 模板中教育背景(H1 '教育背景')位置早于项目经历(H1 '项目经历')"""
+        out = generate_resume_docx(
+            target_role="tech_metric", output_dir=tmp_path, template="academic"
+        )
+        all_texts = _docx_paragraph_texts(out)
+        edu_idx = next((i for i, t in enumerate(all_texts) if "教育背景" in t), -1)
+        proj_idx = next((i for i, t in enumerate(all_texts) if "项目经历" in t), -1)
+        assert edu_idx >= 0 and proj_idx >= 0, "教育背景 / 项目经历 段未找到"
+        assert edu_idx < proj_idx, (
+            f"academic 教育背景(idx={edu_idx})应在项目经历(idx={proj_idx})之前"
+        )

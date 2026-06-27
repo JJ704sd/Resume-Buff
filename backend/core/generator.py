@@ -750,6 +750,37 @@ _render_minimal = _render_classic
 _render_technical = _render_classic
 
 
+def _render_project_group_academic_to(
+    container, s: Section, color: RGBColor, layout_cfg: dict
+):
+    """academic 简化版 project_group:无 H2 项目名 + 无 meta line + 无 summary,直接列 highlights
+    (学术 CV 偏好:读者只关心做了什么;项目名 / 时间 / 概述等元信息由 education 段承担)
+    """
+    _add_h1(container, s.title, color, layout_cfg)
+    for proj in s.content["projects"]:
+        c = proj["content"]
+        # 不渲染 H2 "项目名 | role" 行
+        # 不渲染 meta line (时间 / 周期)
+        # 不渲染 summary
+        for h in c.get("highlights", []):
+            _add_bullet(container, h, layout_cfg)
+
+
+def _render_academic(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
+    """academic 专属 renderer — 学术 CV 简化 highlights + 教育前置
+    行为:
+      - education / skills / honors / self_eval / header 走 _dispatch_section(同 classic)
+      - project_group 走 _render_project_group_academic_to(简化版)
+    注:build_sections 已经把 education 放第一位,renderer 不用动顺序。
+    """
+    color = role_cfg["title_color"]
+    for s in sections:
+        if s.type == "project_group":
+            _render_project_group_academic_to(doc, s, color, layout_cfg)
+        else:
+            _dispatch_section(doc, s, color, layout_cfg)
+
+
 def _add_two_column_table(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
     """双栏布局:左栏 education/skills/honors,右栏 project_group/self_eval"""
     color = role_cfg["title_color"]
@@ -802,8 +833,9 @@ _LAYOUT_DISPATCH = {
     "two_column": _render_two_column,
     "minimal": _render_minimal,
     "technical": _render_technical,
-    # ---- Round 3 M.1 MVP: 3 个新模板复用 _render_classic (后续 round 加专属 renderer) ----
-    "academic": _render_classic,
+    # ---- Round 3 M.2: academic 加专属 renderer(简化 highlights) ----
+    "academic": _render_academic,
+    # ---- Round 3 M.1 MVP: internet / bilingual 仍走 _render_classic(bilingual 双语留 R3-M.3) ----
     "internet": _render_classic,
     "bilingual": _render_classic,
 }

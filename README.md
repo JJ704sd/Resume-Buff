@@ -164,9 +164,9 @@ npm run dev                       # http://127.0.0.1:5173
 - **Round 3-P**: LLM Prompt 工程升级(SYSTEM_PROMPT v2 + 2 个 few-shot 示例 + 显式 JSON schema + 失败 retry 1 次 + 旧 schema 兼容)
 - **Round 3.5 / 3.5+ / 3.5.1**: match_score bug 修复(borrowed pool + 'AI' surface + PM 维度 surface) + score_thresholds 实跑模式 + 8/8 = 100% 准确率
 - **Round 4 Agent MVP**: Function Calling 协议接入(R4-F tools schema + evaluate_bullet_jd_match 工具函数 + 旧路径字节级一致)+ Agent Loop(R4-A max_step=3 + 单工具约束 + trace 日志)+ Session 记忆(R4-M 进程内 deque 上限 10 + 隐私隔离);pytest 252 → 283
-  - R4 收尾 commit: `8e2ce91 Merge pull request #1 from JJ704sd/feat/round4-agent-mvp`
-  - 4 个 commit: `a4c9156` (R4-F) / `ac90e13` (R4-A) / `c5ec652` (R4-M) / `ba536df` (R4-M integration)
-  - 远端 PR: https://github.com/JJ704sd/Resume-Buff/pull/1
+  - R4 收尾 commit: `60a18b8 docs(round4): 测试数 252 -> 283 + R4 Agent MVP 当前能力表 + AGENTS 锁点 + ROADMAP/MEMORY 同步` + `8e2ce91 Merge pull request #1 from JJ704sd/feat/round4-agent-mvp`
+  - 4 个实施 commit: `a4c9156` (R4-F) / `ac90e13` (R4-A) / `c5ec652` (R4-M) / `ba536df` (R4-M integration)
+  - 远端 PR: https://github.com/JJ704sd/Resume-Buff/pull/1 (PR merge 时 GitHub 自动删除 head branch `feat/round4-agent-mvp`,无需手动 `git branch -D` / `git push origin --delete`)
 
 ### 🎯 后续候选(等用户拍)
 - **R3-B**: LLM prompt 模板库 — 按 role 区分 system prompt(产品/算法/度量风格差异)

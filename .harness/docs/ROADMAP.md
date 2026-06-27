@@ -29,12 +29,12 @@
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
 - **283 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + 20 R3-M.3 + 19 R3-P + **8 R4-F: 5 TestFunctionCalling + 3 TestEvaluateBulletJdMatch** + **12 R4-A: 9 TestAgentLoop + 3 TestLogAgentTrace** + **11 R4-M: 8 TestSessionAPI + 3 TestSessionIntegration**)
 
-**最近 5 个 commit**:
-- `8e2ce91` Merge pull request #1 from JJ704sd/feat/round4-agent-mvp
+**最近 5 个 commit** (本地 = 远程, `8e2ce91..60a18b8` 已 push):
+- `60a18b8` docs(round4): 测试数 252 -> 283 + R4 Agent MVP 当前能力表 + AGENTS 锁点 + ROADMAP/MEMORY 同步
+- `8e2ce91` Merge pull request #1 from JJ704sd/feat/round4-agent-mvp (PR merge 时 GitHub 自动删除 head branch)
 - `ba536df` feat(round4-m integration): rewrite_highlights/generator/api 接入 session_id 透传
 - `c5ec652` feat(round4-m): Session 记忆(进程内 deque,上限 10) + 隐私隔离
 - `ac90e13` feat(round4-a): Agent Loop (max_step=3) + 单工具约束 + trace 日志
-- `a4c9156` feat(round4-f): Function Calling 协议接入 (tools schema + 旧路径字节级一致)
 
 ---
 
@@ -191,6 +191,20 @@
 - **依赖**:R3.5+ 完成(match_score 必须先准)
 - **工作量**:小(用户手工抄 ~20 份 + 跑 label_samples.py + 复核)
 - **价值**:阈值调优可信度提升
+
+### R4-C — Chat UI 组件(展示推理 trace) ⏸️ 留 P2 候补
+- **背景**:R4-F/A/M MVP 完成后,backend trace 信息没有 UI 出口;R4-C 提供一个"高级 / Advanced"折叠面板展示 LLM 推理 step / 工具调用 / 输出
+- **范围**:
+  - `frontend/src/components/AgentChatPanel.vue` (~150 行) — 展示推理 trace
+  - `App.vue` 顶部加"高级"折叠面板,默认收起
+  - 3 个 trace 卡片(step-by-step),可滚动
+- **触发条件**:
+  - 用户说"启动 R4-C"
+  - 或发现 backend trace 信息没出口,需要 UI 看
+- **依赖**:R4-A `logs/agent_trace.log` 已生成;`TestAgentLoop` 已锁行为
+- **工作量**:中(~200 行,需要 Vue + Element Plus 折叠面板 + 滚动列表)
+- **价值**:用户能直观看到 LLM 推理链路,理解工具调用逻辑,debug 改写质量
+- **不启动理由**:用户偏好"GUI 实施任务默认暂停"(2026-06-23 CT 重建后确定),等用户明确启动
 
 ---
 

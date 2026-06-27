@@ -60,6 +60,8 @@ class PreviewRequest(BaseModel):
     enable_function_calling: bool = False
     # R4-M: 可选 session_id(默认 None = 走老路径,字节级一致)
     session_id: str | None = None
+    # R5-A Phase 1: 可选 Agent workflow 开关(默认 False = 走老路径,字节级一致)
+    enable_agent_workflow: bool = False
 
 
 class GenerateRequest(BaseModel):
@@ -74,6 +76,8 @@ class GenerateRequest(BaseModel):
     enable_function_calling: bool = False
     # R4-M: 可选 session_id(默认 None = 走老路径,字节级一致)
     session_id: str | None = None
+    # R5-A Phase 1: 可选 Agent workflow 开关(默认 False = 走老路径,字节级一致)
+    enable_agent_workflow: bool = False
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -147,6 +151,7 @@ def preview(req: PreviewRequest):
             academic_layout=req.academic_layout,  # R3-M.3
             enable_function_calling=req.enable_function_calling,  # R4-F
             session_id=req.session_id,  # R4-M
+            enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -171,6 +176,7 @@ def generate(req: GenerateRequest):
             academic_layout=req.academic_layout,  # R3-M.3
             enable_function_calling=req.enable_function_calling,  # R4-F
             session_id=req.session_id,  # R4-M
+            enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

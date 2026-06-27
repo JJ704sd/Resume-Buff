@@ -8,15 +8,15 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3-M.3 收尾)
+## 0. 当前项目快照(2026-06-27 R3-P 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
 - 6 个 role:tech_metric / product / algorithm / data_annot / test_qa / general
 - **8 套简历模板**:classic / single_column / two_column / minimal / technical / academic / internet / bilingual
-  - **academic** 学术 CV(R3-M.1 11pt/1.5/2.5cm + R3-M.2 专属 renderer 简化 highlights + **R3-M.3 academic_layout compact/detailed 二级选项**)
+  - **academic** 学术 CV(R3-M.1 11pt/1.5/2.5cm + R3-M.2 专属 renderer 简化 highlights + R3-M.3 academic_layout compact/detailed 二级选项)
   - **internet** 互联网简洁(10pt/1.2/1.5cm / ▸ 前缀,字节阿里 style)
-  - **bilingual** 中英双语(**R3-M.3 激活 bilingual_mode**,header / 教育 / 项目副标题 3 个 section helper,`_en` 字段缺失时 graceful 降级)
+  - **bilingual** 中英双语(R3-M.3 激活 bilingual_mode,header / 教育 / 项目副标题 3 个 section helper,`_en` 字段缺失时 graceful 降级)
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
 - **borrowed pool + 'AI' surface + PM 维度 surface**(R3.5+ / R3.5+ (b) 修复 false negative + 让 match_score 精确告诉 user 缺什么)
 - **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 不再读 frozen top_score, 实时跑 match_score 出报告, 反映当前实现 + 真实素材库)
@@ -24,16 +24,16 @@
 - **R3.6.2 baiyun_product label 复核完成**(第三次复核改 '别投', un-skip → **8/8 = 100% 准确率, 0 skipped**)
 - **R3-G 外部简历上传 + 简历视角评分**(`POST /api/resume/parse-external` 解析 .docx/.pdf/.txt → `match_score` 增加 `external_resume_text` 参数 → 返回 `resume_perspective` 块 {have_keywords, need_keywords, have_count, need_count} → 前端 `ResumeUploader` drag 组件 + App.vue 评分结果区加 "已有/还缺" 卡片, 扣除素材库能补的避免 false negative)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
-- LLM 智能改写(无 key 静默降级)
+- **R3-P LLM Prompt 工程升级**(`SYSTEM_PROMPT` v2 加 2 个 few-shot 示例 + 显式 JSON schema + 失败 retry 1 次;LLM 智能改写无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **233 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + **20 R3-M.3: 6 TestAcademicLayout + 4 TestBilingualHeader + 3 TestBilingualEducation + 3 TestBilingualProject + 2 TestBilingualDispatch + 2 TestMaterialsBilingualSchema**)
+- **252 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + 20 R3-M.3 + **19 R3-P: 3 TestSystemPromptV2 + 5 TestNewSchemaExtraction + 3 TestRetryOnInvalid + 8 TestSchemaValidationUnit**)
 
 **最近 5 个 commit**:
+- `d2a11d5` feat(round3-p step1): SYSTEM_PROMPT v2 (few-shot) + 新 schema 验证 + 失败 retry 一次
+- `31df375` docs(round3-m.3): 测试数 213 -> 233 + R3-M.3 当前能力表 + AGENTS 锁死说明
 - `39c7d20` feat(round3-m.3 step4): 前端 academic_layout 单选 + bilingual 降级提示
 - `185c7f7` feat(round3-m.3 step3): build_sections 透传 _en 字段 + 真实数据 graceful 验证
 - `310cbe5` feat(round3-m.3 step2): 激活 bilingual_mode + 3 个 bilingual section helper
-- `9f25f40` feat(round3-m.3 step1): academic 加 academic_layout compact/detailed 分支
-- `cbf76af` docs(round3-m.2): 标记 plan 文档为完成状态(5 commit + 213 passed)
 
 ---
 
@@ -154,6 +154,18 @@
   - academic 模板 默认 compact(R3-M.2 行为不变)→ 选 detailed 时恢复 H2 + meta + summary(适合 Research Statement)
 - **已知限制**: 完整双语渲染要求用户补 `basics.name_en` / `education.school_en` / `education.major_en` / `projects[].title_en` 字段,前端 tooltip 已提示
 - **plan 文档**: `.harness/docs/round3-m-3-plan.md`
+
+### R3-P — Prompt 工程升级(few-shot + 显式 schema + retry) ✅ 完成 (2026-06-27, commit `d2a11d5`)
+- **目标**: 把 LLM 改写从"零样本指令 + 隐式 schema 猜"升级到"few-shot 示例 + 显式 schema 验证 + 失败 retry",改写质量立竿见影
+- **3 个核心改动**:
+  1. **SYSTEM_PROMPT v2**: 加 2 个 few-shot 示例(基础改写 + jd_focus 改写)+ 7 条硬性约束(不编造 / 长度 20-50 字 / JSON schema 唯一 / jd_focus 4 条)
+  2. **显式 JSON schema**: `{"rewritten": [{"index": i, "text": "..."}]}` 唯一规范(index 必唯一 + 0..N-1 + non-empty str)
+  3. **失败 retry 1 次**: `_call_with_retry` 解析失败(strict_retry=True 更严格指令)再试一次;网络错误不 retry(避免 token 浪费);仍失败 → 降级原文
+- **向后兼容**: 旧 schema(顶层 array / `{"rewritten": [str]}` / `{"bullets": [str]}`)保留兼容,16 个老 case 全绿
+- **测试**: **19 个新 pytest**(3 TestSystemPromptV2 锁 few-shot + 硬性约束 / 5 TestNewSchemaExtraction 锁新 schema 验证 / 3 TestRetryOnInvalid 锁 retry 行为 / 8 TestSchemaValidationUnit 锁 _validate_* 单元)
+- **效果**: 252 passed(233 + 19)+ 0 skipped,pre-push hook 全绿
+- **plan 文档**: 无单独 plan(在 deliverable.md 直接说,因为改动小)
+- **后续 P2 候选**: 解析 JD 用 LLM(hybrid 模式,A 方案 ~150 行)/ 输出更复杂结构(分段 / 元组 / 多语言)
 
 ### R3.5.1 — 扩 ground truth 样本 + 重跑阈值
 - **背景**:R3.5 决策"10 份够用",但 label 分布有偏(0 份"别投")

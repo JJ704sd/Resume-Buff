@@ -1076,6 +1076,7 @@ def preview_resume(
     academic_layout: Optional[str] = None,
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
+    enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1093,10 +1094,39 @@ def preview_resume(
 
     R4-M: session_id 透传到 build_sections(再到 rewrite_highlights),实现多轮 LLM 对话上下文。
     默认 None → 老路径字节级一致。
+
+    R5-A Phase 1: enable_agent_workflow(默认 False)
+      - False → 老路径(build_sections 字节级一致)— 283 老测试不破
+      - True  → 委托 core.agent_workflow.run_agent_workflow()(受控 Plan-and-Execute)
+                失败时自动 fallback 到老路径(spec §6.3)
+                输出 preview dict 结构与老路径一致
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
 
+    # R5-A Phase 1: enable_agent_workflow=True 时走 workflow(默认 False 走老路径,字节级一致)
+    if enable_agent_workflow:
+        # 局部 import 避免循环(generator → workflow → generator)
+        from core.agent_workflow import run_agent_workflow
+        try:
+            result = run_agent_workflow(
+                target_role=target_role,
+                intention=intention,
+                custom_project_ids=custom_project_ids,
+                template=template,
+                jd_text=jd_text,
+                academic_layout=academic_layout,
+                enable_function_calling=enable_function_calling,
+                session_id=session_id,
+                output_dir=None,  # preview 模式
+            )
+            # workflow 内部失败已 fallback 到旧路径, 这里无需再 try/except
+            return result
+        except Exception:
+            # workflow 自身崩溃(不是 fallback) → 走老路径兜底
+            pass  # fall through 到下面的老路径
+
+    # 老路径: 字节级一致(R3-I → R4-F → R4-M 一路下来)
     jd_context = _resolve_jd_context(jd_text)
     sections = build_sections(
         target_role, intention, custom_project_ids,
@@ -1127,6 +1157,7 @@ def generate_resume_docx(
     academic_layout: Optional[str] = None,
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
+    enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
@@ -1135,7 +1166,31 @@ def generate_resume_docx(
     R3-M.3: academic_layout 透传到 render_docx,触发 academic 模板 detailed/compact 分支。
     R4-F: enable_function_calling 透传到 build_sections,启用时挂载 tools。
     R4-M: session_id 透传到 build_sections(再到 rewrite_highlights),保持多轮 LLM 对话上下文。
+    R5-A Phase 1: enable_agent_workflow(默认 False)
+      - False → 老路径字节级一致
+      - True  → 走 core.agent_workflow.run_agent_workflow(output_dir=...)
+                失败 fallback 到老路径
     """
+    # R5-A Phase 1: enable_agent_workflow=True 走 workflow
+    if enable_agent_workflow:
+        from core.agent_workflow import run_agent_workflow
+        try:
+            result = run_agent_workflow(
+                target_role=target_role,
+                intention=intention,
+                custom_project_ids=custom_project_ids,
+                template=template,
+                jd_text=jd_text,
+                academic_layout=academic_layout,
+                enable_function_calling=enable_function_calling,
+                session_id=session_id,
+                output_dir=output_dir,
+            )
+            return result
+        except Exception:
+            pass  # fallback 到老路径
+
+    # 老路径: 字节级一致
     jd_context = _resolve_jd_context(jd_text)
     sections = build_sections(
         target_role, intention, custom_project_ids,

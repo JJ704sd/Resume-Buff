@@ -52,6 +52,9 @@ KEYWORD_GROUPS: dict[str, list[tuple[str, str, float]]] = {
         ("LLM", "LLM", 1.0),
         ("大模型", "LLM", 1.0),
         ("大语言模型", "LLM", 1.0),
+        # R3.5+ 新增:中英文 JD 都高频出现的 "AI" 字面词
+        # — 跟 "大模型"/"LLM" 语义等价,归一化到 LLM(加分权重 0.5)
+        ("AI", "LLM", 0.5),
         # 加分权重 (0.5) — 领域细分 / 加分项
         ("深度学习", "深度学习", 0.5),
         ("评测", "评测", 0.5),
@@ -387,27 +390,72 @@ def parse_jd(text: str) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 # match_score: 与素材库 + role 的匹配度评分
 # ----------------------------------------------------------------------
-def _build_candidate_pool(role_skill_keys: list[str], materials: dict) -> set[str]:
+def _scan_items_into_pool(items: list[str], pool: set[str]) -> None:
     """
-    从素材库 + role 的 skill_keys 构造"可提供关键词池"。
+    把 items 列表里命中 KEYWORD_GROUPS surface 的 normalized 归入 pool(in-place)。
 
-    逻辑:
-      1. 拿 role 的 skill_keys 列表 (e.g. ["ai_ml", "evaluation_metrics", ...])
-      2. 对每个 skill group,把 group 里的所有 item 字符串拿出来
-      3. 在每个 item 里再过一遍 KEYWORD_GROUPS surface,命中即纳入池
+    实现:对每个 item 字符串,扫 KEYWORD_GROUPS 所有 surface,命中即纳入。
+    同一 item 字符串里可能含多个 surface(如 "PyTorch 深度学习框架"
+    → 命中 "PyTorch" + "深度学习"),会一并纳入。
+    """
+    for item in items:
+        item_lower = item.lower()
+        for group_keywords in KEYWORD_GROUPS.values():
+            for surface, normalized, _w in group_keywords:
+                if surface.lower() in item_lower:
+                    pool.add(normalized)
 
-    例: ai_ml 有 "PyTorch 深度学习框架" → 包含 surface "PyTorch" → 池里有 "PyTorch"
+
+def _build_candidate_pool(
+    role_skill_keys: list[str],
+    materials: dict,
+    *,
+    include_borrowed: bool = True,
+) -> set[str]:
+    """
+    从素材库 + role 的 skill_keys 构造"可提供关键词池",由两部分构成:
+
+      1) role 范围(强匹配):role_skill_keys 对应 items 里 surface 命中
+         — 反映用户在当前 role 下的展示内容
+      2) borrowed 范围(跨 role 借用,R3.5+ 新增):materials["skills"] 所有
+         items 里 surface 命中(排除 role 范围已加的)
+         — 反映用户在其他 role 方向上的经验,用于缓解 false negative
+
+    Args:
+        role_skill_keys: 当前 role 的 skill group 列表
+        materials: 素材库 dict
+        include_borrowed: True(默认) = role + borrowed 合并;
+                         False = 仅 role 范围(旧行为,保留以备调用方需要
+                         "严格 role 区分度"场景)
+
+    Returns:
+        合并去重后的 normalized 关键词池(set)
+
+    设计权衡 (R3.5+):
+      - 之前只查 role 范围,导致 baiyun_2026_product / baiyun_2026_qa
+        触发 score=0(用户在 product/test_qa role 的 items 里没有 Python/LLM
+        字面,但在其他 role 的 items 里有)
+      - 引入 borrowed 池(默认开),让 score 反映"用户真实可提供"而不是
+        "当前 role 展示什么"
+      - coverage 算法不动,仍按 role 范围 — 保留"用户在当前 role 展示什么"
+        的语义;只 score 和 matched_keywords 反映 borrowed 命中
     """
     pool: set[str] = set()
     skills = materials.get("skills", {})
+
+    # 1) role 范围 — 强匹配(原有逻辑)
     for sk in role_skill_keys:
         items = skills.get(sk, []) or []
-        for item in items:
-            item_lower = item.lower()
-            for group_keywords in KEYWORD_GROUPS.values():
-                for surface, normalized, _w in group_keywords:
-                    if surface.lower() in item_lower:
-                        pool.add(normalized)
+        _scan_items_into_pool(items, pool)
+
+    # 2) borrowed 范围 — 跨 role 借用(新)
+    if include_borrowed:
+        role_set = set(role_skill_keys)
+        for sk, items in skills.items():
+            if sk in role_set:
+                continue  # role 范围已加,跳过
+            _scan_items_into_pool(items or [], pool)
+
     return pool
 
 
@@ -528,6 +576,8 @@ def match_score(
     text: str,
     target_role: str,
     materials: dict | None = None,
+    *,
+    include_borrowed: bool = True,
 ) -> dict[str, Any]:
     """
     给定 JD 文本 + target_role + materials,计算 0-100 匹配度评分 (加权)。
@@ -536,6 +586,10 @@ def match_score(
         text: JD 文本
         target_role: 6 个 role id 之一,必须在 ENABLED_ROLES
         materials: 可选,外部传入素材库;不传则内部 load_materials() 读 json
+        include_borrowed: R3.5+ 新增。True(默认) = 候选池包含用户其他 role
+            方向上的经验(borrowed 池),用于缓解 false negative(如
+            baiyun_2026_product / baiyun_2026_qa 之前 score=0);
+            False = 仅当前 role 范围(旧行为,严格 role 区分度)。
 
     Returns:
         dict:
@@ -563,7 +617,10 @@ def match_score(
     role_cfg = ROLE_CONFIG[target_role]
 
     parsed = parse_jd(text)
-    pool = _build_candidate_pool(role_cfg["skill_keys"], mats)
+    pool = _build_candidate_pool(
+        role_cfg["skill_keys"], mats,
+        include_borrowed=include_borrowed,
+    )
 
     # 构建 normalized -> weight 的反查表(同 normalized 在多 group 出现取最大 weight)
     kw_weight: dict[str, float] = {}

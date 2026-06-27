@@ -50,8 +50,12 @@ SAMPLES_PATH = Path(r"D:/简历帮/简历帮知识库/jd_samples.json")
 GROUND_TRUTH = [
     ("baiyun_2026_algorithm",   "algorithm", "高", False),
     ("baiyun_2026_fullstack",   "general",   "高", False),
-    ("baiyun_2026_product",     "product",   "中", True),   # match_score 漏匹配 bug
-    ("baiyun_2026_qa",          "test_qa",   "高", True),   # match_score 漏匹配 bug
+    # R3.5+ 修后 baiyun_qa score=100 → '高', 与 ground truth label='推荐投' 一致 ✓
+    ("baiyun_2026_qa",          "test_qa",   "高", False),
+    # R3.5+ 修后 baiyun_product score=100 → '高', 但 ground truth label='建议补充' (期望 '中')
+    # 保留 is_bug=True 标 skip: 原 label 是 R3.5 时基于 score=0 反推的, 修后 user 需复核
+    # (KEYWORD_GROUPS 暂无 PM 维度关键词, match_score 不能识别 '物流/工业工程/原型工具' 缺失)
+    ("baiyun_2026_product",     "product",   "中", True),  # R3.5+ 已修 bug, label 待 user 复核
     ("deepseek_2026_agi_match", "algorithm", "高", False),
     ("deepseek_2026_data_label","data_annot","高", False),
     ("alibaba_2026_data_eng",   "data_annot","中", False),
@@ -86,9 +90,10 @@ class TestGroundTruthThreshold:
         if sample.get("label") == "公告型":
             pytest.skip(f"{sid} 是公告型 JD, match_score 不适用")
         if is_bug:
-            # 已知 match_score 漏匹配 bug, 阈值逻辑本身没问题 (0 分必判低, 符合规则)
-            # 这里只 skip, bug 修复见 R3.5+
-            pytest.skip(f"{sid}: known match_score bug (R3.5+ 修), threshold logic OK")
+            # R3.5+ 已修 match_score 漏匹配 bug, 但 ground truth label 待 user 复核
+            # (见 GROUND_TRUTH 注释: 原 label 基于 score=0 反推, 修后 score=100 但
+            #  KEYWORD_GROUPS 暂无 PM 维度关键词, match_score 不能反映"补 PM 维度"语义)
+            pytest.skip(f"{sid}: R3.5+ 修后 score=100, label 待 user 复核")
 
         # 跑 match_score 取 score
         result = match_score(sample["text"], role, materials)

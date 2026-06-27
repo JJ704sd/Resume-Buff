@@ -751,6 +751,104 @@ class TestMatchResponseTierInfo:
 
 
 # ======================================================================
+# R3.5+ bugfix: match_score 漏匹配 — borrowed pool + 'AI' surface
+# ======================================================================
+class TestMatchScoreBugfixR35Plus:
+    """R3.5+ 修两个 false negative bug, 验证修复效果 + 保留旧行为开关。
+
+    Bug A: baiyun_2026_qa 触发 score=0
+        - 根因: _build_candidate_pool 只查 role_skill_keys 对应 items,
+          role=test_qa 时 items 字符串不含 'Python' 字面 → pool 为空
+        - 修法: 引入 borrowed pool(全素材库扫描), 默认开
+
+    Bug B: baiyun_2026_product 触发 score=0
+        - 根因: parse_jd 识别不到任何关键词(JD 文本里 'AI' 出现 4 次
+          但 KEYWORD_GROUPS 没 'AI' 这个 surface) → 走全 unknown 兜底
+        - 修法: KEYWORD_GROUPS['skills'] 加 ('AI', 'LLM', 0.5)
+    """
+
+    BAIYUN_PRODUCT_TEXT = (
+        "岗位职责:1. 协助梳理逻辑物流业务流程, 识别 AI 提效点;"
+        "2. 负责 AI 模块(如智能客服、自动单据识别)的原型设计与文档编写;"
+        "3. 协调开发与算法进行功能验证。"
+        "招聘要求:1. 工业工程、物流管理或计算机相关专业优先, 本科大三及以上;"
+        "2. 逻辑严密, 能画流程图或高质量原型;"
+        "3. 对 AI 落地有热情, 能熟练使用各种 AI 效率工具。"
+    )
+
+    BAIYUN_QA_TEXT = (
+        "岗位职责:1. 参与 AI 系统的功能测试与回归测试;"
+        "2. 编写测试用例, 记录并跟踪 Bug 修复进度;"
+        "3. 在导师指导下编写自动化测试脚本或使用 AI 工具生成测试数据。"
+        "招聘要求:1. 计算机相关专业, 熟悉软件测试理论与流程, 本科大三及以上;"
+        "2. 至少掌握一门脚本语言(如 Python 或 Typescript);"
+        "3. 细心、有责任感, 具备较强的逻辑分析和文档编写能力。"
+    )
+
+    def test_baiyun_qa_should_not_be_zero(self):
+        """Bug A 回归: test_qa role + 'AI 系统'/'Python' JD, 修复后 score > 0。
+
+        之前: pool 为空(因为 test_qa role 的 items 不含 'Python' 字面)
+              → 全部 JD 关键词 missing → score=0
+        修复: borrowed pool 跨 role 命中('Python' 在 tech_metric items 里)
+              → score > 0
+        """
+        result = match_score(
+            self.BAIYUN_QA_TEXT,
+            "test_qa",
+        )  # 用真实 materials.json
+        assert result["score"] > 0, (
+            f"Bug A 未修复: baiyun_qa score 仍 = 0, "
+            f"matched={result['matched_keywords']}"
+        )
+        # 验证 borrowed 命中了 Python 或 LLM
+        assert "Python" in result["matched_keywords"] or "LLM" in result["matched_keywords"], (
+            f"borrowed pool 未生效: matched={result['matched_keywords']}"
+        )
+
+    def test_baiyun_product_should_not_be_zero(self):
+        """Bug B 回归: product role + 'AI' 高频 JD, 修复后 score > 0。
+
+        之前: parse_jd 识别 0 关键词(KEYWORD_GROUPS 没 'AI' surface)
+              → all_parsed 为空 → score=0
+        修复: KEYWORD_GROUPS['skills'] 加 ('AI', 'LLM', 0.5)
+              → parse_jd 命中 LLM + borrowed pool 命中 LLM → score > 0
+        """
+        result = match_score(
+            self.BAIYUN_PRODUCT_TEXT,
+            "product",
+        )  # 用真实 materials.json
+        assert result["score"] > 0, (
+            f"Bug B 未修复: baiyun_product score 仍 = 0, "
+            f"matched={result['matched_keywords']}"
+        )
+        # 验证 'AI' 表面被识别为 LLM
+        assert "LLM" in result["matched_keywords"], (
+            f"'AI' surface 未生效: matched={result['matched_keywords']}"
+        )
+
+    def test_include_borrowed_false_keeps_role_strict(self):
+        """显式 include_borrowed=False 时, 旧行为(只 role 范围)保留。
+
+        防回潮: 如果未来有人不小心删了 include_borrowed 参数,
+        这个测试会 fail 提醒"参数被吃掉了"。
+        """
+        # 单元测试用 _minimal_materials, 在 test_qa role 注入只有 LLM 的 items
+        # (不含 Python), 验证 strict 模式下 Python 不在 matched
+        mats = _minimal_materials(test_qa=["自动化测试框架", "Selenium 集成"])
+        result = match_score(
+            self.BAIYUN_QA_TEXT,
+            "test_qa",
+            materials=mats,
+            include_borrowed=False,
+        )
+        # strict 模式: test_qa items 无 Python 字面 → Python 不命中
+        assert "Python" not in result["matched_keywords"], (
+            f"strict 模式被破坏: 仍命中 Python = {result['matched_keywords']}"
+        )
+
+
+# ======================================================================
 # 辅助:最小素材库
 # ======================================================================
 def _minimal_materials(**skill_groups: list[str]) -> dict:

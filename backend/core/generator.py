@@ -213,6 +213,10 @@ LAYOUT_CONFIG = {
         "shaded_highlights": False,
         "skill_marker": "",
         "academic_mode": True,  # R3-M.2 加专属 renderer(简化 highlights + 教育前置)
+        # R3-M.3: academic_layout 决定项目段走 compact(简化版,默认)还是 detailed(同 classic 完整版)
+        # compact: 无 H2 项目名 / 无 period meta / 无 summary — 适合履历表 / 紧凑学术 CV
+        # detailed: 恢复 H2 + period meta + summary — 适合 Research Statement / 学术 CV 详细版
+        "academic_layout": "compact",
         # 学术 CV: H1 比例略小(big body 11pt 不需要 1.2 倍),段间距更宽更舒展
         "h1_size_ratio": 1.15,          # 12.65pt
         "h2_size_ratio": 1.05,          # 11.55pt
@@ -769,17 +773,44 @@ def _render_project_group_academic_to(
             _add_bullet(container, h, layout_cfg)
 
 
+def _render_project_group_academic_detailed_to(
+    container, s: Section, color: RGBColor, layout_cfg: dict
+):
+    """academic detailed 模式 project_group:恢复 H2 项目名 + period meta + summary
+    (行为同 _render_project_group_to,但保留 academic 的 helper — 走同一份 layout_cfg,
+    满足 _render_academic 按 academic_layout 分支 dispatch 的对称性)
+    """
+    _add_h1(container, s.title, color, layout_cfg)
+    for proj in s.content["projects"]:
+        c = proj["content"]
+        _add_h2(container, f"{proj['title']}  |  {c['role']}", layout_cfg)
+        _add_meta_line(container, c["period"], layout_cfg)
+        if c.get("summary"):
+            _add_text(container, c["summary"], layout_cfg)
+        for h in c.get("highlights", []):
+            if layout_cfg.get("shaded_highlights", False):
+                _add_shaded_highlight(container, h, layout_cfg)
+            else:
+                _add_bullet(container, h, layout_cfg)
+
+
 def _render_academic(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
     """academic 专属 renderer — 学术 CV 简化 highlights + 教育前置
     行为:
       - education / skills / honors / self_eval / header 走 _dispatch_section(同 classic)
-      - project_group 走 _render_project_group_academic_to(简化版)
+      - project_group 走 academic_layout 分支:
+          compact  → _render_project_group_academic_to(无 H2 / 无 meta / 无 summary,默认)
+          detailed → _render_project_group_academic_detailed_to(恢复 H2 + meta + summary)
     注:build_sections 已经把 education 放第一位,renderer 不用动顺序。
     """
     color = role_cfg["title_color"]
+    academic_layout = layout_cfg.get("academic_layout", "compact")
     for s in sections:
         if s.type == "project_group":
-            _render_project_group_academic_to(doc, s, color, layout_cfg)
+            if academic_layout == "detailed":
+                _render_project_group_academic_detailed_to(doc, s, color, layout_cfg)
+            else:
+                _render_project_group_academic_to(doc, s, color, layout_cfg)
         else:
             _dispatch_section(doc, s, color, layout_cfg)
 

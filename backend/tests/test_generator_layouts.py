@@ -566,3 +566,88 @@ class TestReadabilityAcrossLayouts:
             assert 1.15 <= ls <= 1.5, (
                 f"{template}: line_spacing ({ls}) 超出 [1.15, 1.5] 合理范围"
             )
+
+
+# ----------------------------------------------------------------------
+# Round 3 M.3 — academic_layout compact / detailed 双分支
+# (验证 LAYOUT_CONFIG['academic']['academic_layout'] 字段被 _render_academic 真消费;
+#  detailed 模式恢复 H2 项目名 + period meta + summary,compact 模式维持 R3-M.2 行为)
+# ----------------------------------------------------------------------
+def _generate_docx_with_layout(tmp_path: Path, layout_cfg: dict):
+    """helper:用注入的 layout_cfg 走 _LAYOUT_DISPATCH['academic'] 生成 docx
+    (绕开 generate_resume_docx 直接读 LAYOUT_CONFIG 的限制,允许测试注入 academic_layout)
+    """
+    from core.generator import _LAYOUT_DISPATCH, _setup_doc, ROLE_CONFIG
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(exist_ok=True)
+    sections = build_sections(target_role="tech_metric")
+    doc = _setup_doc(layout_cfg)
+    _LAYOUT_DISPATCH["academic"](doc, sections, ROLE_CONFIG["tech_metric"], layout_cfg)
+    out = out_dir / "test.docx"
+    doc.save(str(out))
+    return out
+
+
+class TestAcademicLayout:
+    """academic_layout 字段驱动 _render_academic 项目段行为分支"""
+
+    def test_default_is_compact(self):
+        """LAYOUT_CONFIG['academic'] 默认 academic_layout = 'compact'(R3-M.2 行为兼容)"""
+        assert LAYOUT_CONFIG["academic"].get("academic_layout") == "compact", (
+            f"academic 默认 academic_layout 应为 'compact', 实际 {LAYOUT_CONFIG['academic'].get('academic_layout')!r}"
+        )
+
+    def test_compact_does_not_render_h2(self, tmp_path: Path):
+        """academic_layout=compact:项目段无 H2 '项目名 | role'(compact 走 _render_project_group_academic_to 不渲染 H2)"""
+        cfg = {**LAYOUT_CONFIG["academic"], "academic_layout": "compact"}
+        out = _generate_docx_with_layout(tmp_path, cfg)
+        h2_paragraphs = _docx_paragraphs_with_h2_size(out, cfg)
+        for marker in ["某头部互联网公司医疗垂类大模型评测项目", "示例高校 × 某医疗器械公司"]:
+            for p_text in h2_paragraphs:
+                assert marker not in p_text, (
+                    f"compact 不应有项目名 H2,但发现 '{marker}' 在 H2 段 '{p_text}' 中"
+                )
+
+    def test_compact_does_not_render_meta(self, tmp_path: Path):
+        """academic_layout=compact:项目段无独立 period meta 段(整段文本 = period 视为 meta 段)"""
+        cfg = {**LAYOUT_CONFIG["academic"], "academic_layout": "compact"}
+        out = _generate_docx_with_layout(tmp_path, cfg)
+        all_texts = _docx_paragraph_texts(out)
+        periods = ["2025.10 - 2025.12", "2026.1 - 至今", "2024.9 - 至今", "2024.12 - 2025.11"]
+        for period in periods:
+            for text in all_texts:
+                assert text.strip() != period, (
+                    f"compact 不应有项目时间独立段,但发现段落 = '{period}'"
+                )
+
+    def test_detailed_renders_h2_project_name(self, tmp_path: Path):
+        """academic_layout=detailed:项目段 H2 '项目名 | role' 必须出现(走 _render_project_group_academic_detailed_to)"""
+        cfg = {**LAYOUT_CONFIG["academic"], "academic_layout": "detailed"}
+        out = _generate_docx_with_layout(tmp_path, cfg)
+        h2_paragraphs = _docx_paragraphs_with_h2_size(out, cfg)
+        marker = "某头部互联网公司医疗垂类大模型评测项目"
+        matched = [p_text for p_text in h2_paragraphs if marker in p_text]
+        assert matched, (
+            f"detailed 应有项目名 H2 含 '{marker}',但未在 H2 段中找到 (H2 段: {h2_paragraphs})"
+        )
+
+    def test_detailed_renders_period_meta(self, tmp_path: Path):
+        """academic_layout=detailed:项目段 period 作为独立 meta 段(整段文本 = period)"""
+        cfg = {**LAYOUT_CONFIG["academic"], "academic_layout": "detailed"}
+        out = _generate_docx_with_layout(tmp_path, cfg)
+        all_texts = _docx_paragraph_texts(out)
+        periods = ["2025.10 - 2025.12", "2026.1 - 至今", "2024.9 - 至今", "2024.12 - 2025.11"]
+        matched = [p for p in all_texts if p.strip() in periods]
+        assert len(matched) >= 1, (
+            f"detailed 应至少 1 个项目时间独立段,实际段落 = {all_texts}"
+        )
+
+    def test_detailed_renders_summary(self, tmp_path: Path):
+        """academic_layout=detailed:项目段 summary 文本必须出现(走 _add_text)"""
+        cfg = {**LAYOUT_CONFIG["academic"], "academic_layout": "detailed"}
+        out = _generate_docx_with_layout(tmp_path, cfg)
+        joined = " | ".join(_docx_paragraph_texts(out))
+        summary_marker = "针对医疗垂直领域大语言模型,构建专业评测体系"
+        assert summary_marker in joined, (
+            f"detailed 应渲染 summary, 但未找到 '{summary_marker}'"
+        )

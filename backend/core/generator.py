@@ -815,6 +815,130 @@ def _render_academic(doc: Document, sections: list[Section], role_cfg: dict, lay
             _dispatch_section(doc, s, color, layout_cfg)
 
 
+# ---- Round 3 M.3: bilingual 模板专属 helper (激活 bilingual_mode dead code) ----
+# 设计要点:
+#   - 中文为主,英文为辅(14pt 姓名 / 10pt 学校项目副标题),缺失时 graceful 降级到单语言
+#   - header / education / project_group 走 bilingual 版 helper,其余段走 _dispatch_section
+#   - bilingual 模板走 _LAYOUT_DISPATCH['bilingual'] → _render_bilingual
+def _render_bilingual_header_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    """bilingual header:中文姓名(22pt bold)+ 可选英文姓名(14pt italic)+ 求职意向 + 联系方式"""
+    c = s.content
+    if layout_cfg.get("header_align") == "left":
+        align = WD_ALIGN_PARAGRAPH.LEFT
+    else:
+        align = WD_ALIGN_PARAGRAPH.CENTER
+
+    # 姓名(中)— 22pt bold,同 classic
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(c["name"])
+    _set_chinese_font(run, size_pt=22)
+    run.bold = True
+    p.paragraph_format.space_after = Pt(2)
+
+    # 姓名(英)— graceful: 没有 name_en 就不渲染
+    name_en = (c.get("name_en") or "").strip()
+    if name_en:
+        p = container.add_paragraph()
+        p.alignment = align
+        run = p.add_run(name_en)
+        _set_chinese_font(run, size_pt=14)
+        run.italic = True
+        p.paragraph_format.space_after = Pt(4)
+
+    # 求职意向 — bilingual 默认有色
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(f"求职意向:{c['intention']}")
+    _set_chinese_font(run, size_pt=11)
+    if layout_cfg.get("use_color", True):
+        run.font.color.rgb = color
+    p.paragraph_format.space_after = Pt(4)
+
+    # 联系方式
+    p = container.add_paragraph()
+    p.alignment = align
+    run = p.add_run(c["contact"])
+    _set_chinese_font(run, size_pt=10)
+    if layout_cfg.get("use_color", True):
+        run.font.color.rgb = RGBColor(0x60, 0x60, 0x60)
+    p.paragraph_format.space_after = Pt(8)
+
+
+def _render_bilingual_education_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    """bilingual education:中文教育信息 + 可选英文小字(school_en / major_en 非空时)"""
+    _add_h1(container, s.title, color, layout_cfg)
+    c = s.content
+    line = c.get("line", "")
+    school_en = (c.get("school_en") or "").strip()
+    major_en = (c.get("major_en") or "").strip()
+    if school_en or major_en:
+        # 中文行(H2)
+        _add_h2(container, line, layout_cfg)
+        # 英文小字(10pt italic)
+        en_line = " | ".join(x for x in [school_en, major_en] if x)
+        p = container.add_paragraph()
+        run = p.add_run(en_line)
+        _set_chinese_font(run, size_pt=10)
+        run.italic = True
+        p.paragraph_format.space_after = Pt(2)
+    else:
+        # graceful: 无英文就单语言(同 classic)
+        _add_h2(container, line, layout_cfg)
+
+    if c.get("courses"):
+        _add_text(container, f"核心课程:{c['courses']}", layout_cfg)
+    for h in c.get("highlights", []):
+        _add_bullet(container, h, layout_cfg)
+
+
+def _render_bilingual_project_group_to(container, s: Section, color: RGBColor, layout_cfg: dict):
+    """bilingual project:中文项目名 + role(H2)+ 可选英文副标题(title_en 非空时)+ period meta + summary + highlights
+    注:title_en 放在 project dict 顶层(与 id/title 同级),见 build_sections Step 3 R3-M.3
+    """
+    _add_h1(container, s.title, color, layout_cfg)
+    for proj in s.content["projects"]:
+        c = proj["content"]
+        # 项目名(中)+ role(H2)
+        _add_h2(container, f"{proj['title']}  |  {c['role']}", layout_cfg)
+        # 英文副标题 — graceful: 没有 title_en 就不渲染
+        title_en = (proj.get("title_en") or "").strip()
+        if title_en:
+            p = container.add_paragraph()
+            run = p.add_run(title_en)
+            _set_chinese_font(run, size_pt=10)
+            run.italic = True
+            p.paragraph_format.space_after = Pt(2)
+        # period meta
+        _add_meta_line(container, c["period"], layout_cfg)
+        # summary
+        if c.get("summary"):
+            _add_text(container, c["summary"], layout_cfg)
+        # highlights
+        for h in c.get("highlights", []):
+            if layout_cfg.get("shaded_highlights", False):
+                _add_shaded_highlight(container, h, layout_cfg)
+            else:
+                _add_bullet(container, h, layout_cfg)
+
+
+def _render_bilingual(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
+    """bilingual renderer:header/education/project_group 走双语版 helper,其余段走 _dispatch_section
+    graceful degradation:缺少 *_en 字段时 helper 内部 .get(..., '') 兜底空字符串,
+    自然只渲染中文(单语言降级,docx 仍合法)。
+    """
+    color = role_cfg["title_color"]
+    for s in sections:
+        if s.type == "header":
+            _render_bilingual_header_to(doc, s, color, layout_cfg)
+        elif s.type == "education":
+            _render_bilingual_education_to(doc, s, color, layout_cfg)
+        elif s.type == "project_group":
+            _render_bilingual_project_group_to(doc, s, color, layout_cfg)
+        else:
+            _dispatch_section(doc, s, color, layout_cfg)
+
+
 def _add_two_column_table(doc: Document, sections: list[Section], role_cfg: dict, layout_cfg: dict):
     """双栏布局:左栏 education/skills/honors,右栏 project_group/self_eval"""
     color = role_cfg["title_color"]
@@ -869,9 +993,10 @@ _LAYOUT_DISPATCH = {
     "technical": _render_technical,
     # ---- Round 3 M.2: academic 加专属 renderer(简化 highlights) ----
     "academic": _render_academic,
-    # ---- Round 3 M.1 MVP: internet / bilingual 仍走 _render_classic(bilingual 双语留 R3-M.3) ----
+    # ---- Round 3 M.1 MVP: internet 仍走 _render_classic ----
     "internet": _render_classic,
-    "bilingual": _render_classic,
+    # ---- Round 3 M.3: bilingual dead code 激活,改走 _render_bilingual ----
+    "bilingual": _render_bilingual,
 }
 
 

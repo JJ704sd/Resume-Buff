@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from core.generator import (
     LAYOUT_CONFIG,
@@ -650,4 +651,221 @@ class TestAcademicLayout:
         summary_marker = "针对医疗垂直领域大语言模型,构建专业评测体系"
         assert summary_marker in joined, (
             f"detailed 应渲染 summary, 但未找到 '{summary_marker}'"
+        )
+
+
+# ----------------------------------------------------------------------
+# Round 3 M.3 — bilingual 模板激活 + 3 个双语 helper + graceful degradation
+# (验证 _render_bilingual_header/education/project_group_to 真消费 *_en 字段,
+#  缺失时 graceful 降级到单语言 — 不抛异常,docx 仍合法)
+# ----------------------------------------------------------------------
+from core.generator import (
+    _render_bilingual_header_to,
+    _render_bilingual_education_to,
+    _render_bilingual_project_group_to,
+    _render_bilingual,
+    _render_classic,
+)  # noqa: E402
+
+
+def _bilingual_mock_sections(include_en: bool = True) -> list:
+    """构造 mock sections 喂给 3 个 bilingual helper(不需要 build_sections,测 helper 本体)
+    include_en=True → name_en / school_en / title_en 都填,验证完整双语渲染
+    include_en=False → _en 字段空字符串,验证 graceful 降级
+    """
+    from core.generator import Section
+    en_suffix = "_en"
+    name_en = "Mock Name EN" if include_en else ""
+    school_en = "Mock University" if include_en else ""
+    major_en = "Mock Major" if include_en else ""
+    title_en = "Mock Project EN" if include_en else ""
+
+    header = Section(
+        type="header",
+        title="个人信息",
+        content={
+            "name": "测试同学",
+            "name_en": name_en,
+            "intention": "AI 测试实习生",
+            "contact": "13800000000 | test@example.com | 现居 深圳",
+        },
+    )
+    edu = Section(
+        type="education",
+        title="教育背景",
+        content={
+            "line": "测试大学 · 测试学院 · 测试专业 · 本科  |  2024.9 - 2028.6(大二)",
+            "school_en": school_en,
+            "major_en": major_en,
+            "courses": "、".join(["程序设计基础(C++)", "算法与数据结构"]),
+            "highlights": ["测试亮点 A", "测试亮点 B"],
+        },
+    )
+    proj = Section(
+        type="project",
+        title="测试项目",
+        content={
+            "role": "测试工程师",
+            "period": "2025.10 - 2025.12",
+            "summary": "测试项目概述。",
+            "highlights": ["测试 highlight 1", "测试 highlight 2"],
+        },
+    )
+    project_group = Section(
+        type="project_group",
+        title="项目经历",
+        content={"projects": [
+            {
+                "id": "test_proj",
+                "title": "测试项目",
+                "title_en": title_en,
+                "content": proj.content,
+            }
+        ]},
+    )
+    return [header, edu, project_group]
+
+
+class TestBilingualHeader:
+    """bilingual header helper — 中文 22pt + 可选英文 14pt italic"""
+
+    def _make_doc(self):
+        return Document()
+
+    def test_header_renders_name(self):
+        """中文姓名必须出现(22pt bold)"""
+        doc = self._make_doc()
+        s = _bilingual_mock_sections(include_en=False)[0]
+        _render_bilingual_header_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert any("测试同学" in t for t in texts), f"bilingual header 应渲染中文姓名,实际 {texts}"
+
+    def test_header_renders_name_en_when_present(self):
+        """name_en 非空时,英文姓名斜体行必须出现(10pt italic 行)"""
+        doc = self._make_doc()
+        s = _bilingual_mock_sections(include_en=True)[0]
+        _render_bilingual_header_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert any("Mock Name EN" in t for t in texts), (
+            f"bilingual header 有 name_en 时应渲染英文行,实际 {texts}"
+        )
+        # 英文行有 italic
+        en_runs = [r for p in doc.paragraphs for r in p.runs if "Mock Name EN" in p.text]
+        assert en_runs and en_runs[0].italic, (
+            f"英文姓名行应 italic,实际 runs = {en_runs}"
+        )
+
+    def test_header_graceful_no_en_when_absent(self):
+        """name_en 缺失时(空字符串)不抛异常,只渲染中文行"""
+        doc = self._make_doc()
+        s = _bilingual_mock_sections(include_en=False)[0]
+        # 不抛异常 + 英文行不存在
+        _render_bilingual_header_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert not any("Mock Name EN" in t for t in texts), (
+            f"无 name_en 时不应有英文行,实际 {texts}"
+        )
+        assert any("测试同学" in t for t in texts), "中文姓名应保留"
+
+    def test_header_layout_center_default(self):
+        """bilingual 默认 header_align=center → 姓名段对齐 = CENTER"""
+        doc = self._make_doc()
+        s = _bilingual_mock_sections(include_en=False)[0]
+        _render_bilingual_header_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        # 找到含"测试同学"的段
+        name_p = next(p for p in doc.paragraphs if "测试同学" in p.text)
+        assert name_p.alignment == WD_ALIGN_PARAGRAPH.CENTER, (
+            f"bilingual 默认居中对齐,实际 {name_p.alignment}"
+        )
+
+
+class TestBilingualEducation:
+    """bilingual education helper — 中文 H2 + 可选英文 10pt italic"""
+
+    def test_education_renders_line(self):
+        """中文教育行(line)必须出现"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=False)[1]
+        _render_bilingual_education_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert any("测试大学" in t for t in texts), (
+            f"bilingual education 应渲染中文教育行,实际 {texts}"
+        )
+
+    def test_education_renders_school_en_when_present(self):
+        """school_en + major_en 非空时,英文斜体行存在(school_en | major_en)"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=True)[1]
+        _render_bilingual_education_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        en_line = next((t for t in texts if "Mock University" in t and "Mock Major" in t), None)
+        assert en_line, f"应有英文教育行含 school_en | major_en,实际 {texts}"
+        # 验证 italic
+        en_runs = [r for p in doc.paragraphs for r in p.runs if en_line in p.text]
+        assert en_runs and en_runs[0].italic, "英文教育行应 italic"
+
+    def test_education_graceful_no_en_when_absent(self):
+        """school_en / major_en 都缺失时,只渲染中文,无英文段"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=False)[1]
+        _render_bilingual_education_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert not any("Mock University" in t for t in texts), (
+            f"无 _en 时不应有英文教育行,实际 {texts}"
+        )
+
+
+class TestBilingualProject:
+    """bilingual project_group helper — 中文项目名 H2 + 可选英文副标题"""
+
+    def test_project_renders_title(self, tmp_path: Path):
+        """中文项目名 H2 必须出现"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=False)[2]
+        _render_bilingual_project_group_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        # 临时 save 让 _docx_paragraphs_with_h2_size 可读
+        out = tmp_path / "test.docx"
+        doc.save(str(out))
+        h2_paragraphs = _docx_paragraphs_with_h2_size(out, LAYOUT_CONFIG["bilingual"])
+        assert any("测试项目" in t and "测试工程师" in t for t in h2_paragraphs), (
+            f"bilingual 项目应有 '测试项目 | 测试工程师' H2,实际 H2 段: {h2_paragraphs}"
+        )
+
+    def test_project_renders_title_en_when_present(self):
+        """title_en 非空时,英文副标题斜体行存在(在 H2 之后,meta 之前)"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=True)[2]
+        _render_bilingual_project_group_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert any("Mock Project EN" in t for t in texts), (
+            f"bilingual 项目有 title_en 应渲染英文副标题,实际 {texts}"
+        )
+        # 验证 italic
+        en_runs = [r for p in doc.paragraphs for r in p.runs if "Mock Project EN" in p.text]
+        assert en_runs and en_runs[0].italic, "英文项目副标题应 italic"
+
+    def test_project_graceful_no_en_when_absent(self):
+        """title_en 缺失时,无英文副标题段(直接 H2 → meta)"""
+        doc = Document()
+        s = _bilingual_mock_sections(include_en=False)[2]
+        _render_bilingual_project_group_to(doc, s, RGBColor(0, 0, 0), LAYOUT_CONFIG["bilingual"])
+        texts = [p.text for p in doc.paragraphs]
+        assert not any("Mock Project EN" in t for t in texts), (
+            f"无 title_en 时不应有英文副标题,实际 {texts}"
+        )
+
+
+class TestBilingualDispatch:
+    """_render_bilingual 入口 + _LAYOUT_DISPATCH 切换 + classic 回归"""
+
+    def test_bilingual_layout_dispatches_to_bilingual_renderer(self):
+        """_LAYOUT_DISPATCH['bilingual'] 必须切到 _render_bilingual(dead code 激活)"""
+        assert _LAYOUT_DISPATCH["bilingual"] is _render_bilingual, (
+            f"bilingual 模板应走 _render_bilingual, 实际 {_LAYOUT_DISPATCH['bilingual']!r}"
+        )
+
+    def test_classic_layout_unchanged(self):
+        """classic 仍走 _render_classic(回归保护,本轮 R3-M.3 不动 classic 路径)"""
+        assert _LAYOUT_DISPATCH["classic"] is _render_classic, (
+            f"classic 仍应走 _render_classic, 实际 {_LAYOUT_DISPATCH['classic']!r}"
         )

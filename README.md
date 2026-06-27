@@ -47,6 +47,7 @@
 | **学术 CV 模板**(academic, 11pt / 1.5 行距 / 2.5cm 边距, 适合读博 / 出国申请) | ✅ Round 3-M.1 |
 | **互联网简洁模板**(internet, 10pt / 1.2 行距 / 1.5cm 边距 / ▸ 前缀, 字节阿里 style) | ✅ Round 3-M.1 |
 | **中英双语模板**(bilingual, 中英 header / 教育 / 项目副标题, 适合外企 / 海外岗位) | ✅ Round 3-M.1 |
+| **R3-M.2 模板可读性参数化**(`LAYOUT_CONFIG` 8 套加 h1_size_ratio / h2_size_ratio / section_spacing_pt / meta_spacing_pt / item_spacing_pt 5 个参数 + 6 个 helper 改造消费;academic 专属 `_render_academic` 简化项目 highlights(无 H2 项目名 / 无独立 period meta / 无 summary)+ 教育保持前置;模板差异化:academic 1.15/段宽 / internet H2=1.0/段紧凑 / bilingual 1.18+item=2;`TestReadabilityAcrossLayouts` 锁 body>=9pt / meta>=8pt / 4 间距>=0 / line_spacing [1.15, 1.5];bilingual_mode flag 保留 dead code 留 R3-M.3 激活双语 header / 教育 / 项目副标题) | ✅ Round 3-M.2 |
 
 ---
 
@@ -59,7 +60,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 190 个 pytest 用例**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + **7 R3-M.1 MVP:3 个 `test_layout_generates_valid_docx` 参数化 + 4 个 visuals `test_academic_larger_font_size` / `test_internet_smaller_font_size` / `test_internet_has_skill_marker` / `test_bilingual_default_margins`**),**190 passed + 0 skipped**(R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配 + R3-G bug hunt 加 2 个边界回归;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归** + **R3.5+ (b) PM 维度 surface 锁死 + 3 pm_dimensions 回归** + **R3.5.1 score_thresholds 实跑模式锁死 + 5 score_thresholds_live 回归** + **R3-G resume_parser 锁死 .docx/.pdf/.txt 解析边界 + resume_perspective 同义词 alias 算法 + 借调池去重 false negative + emoji/特殊字符归一化 + .exe 错误格式拒收** + **R3-M.1 MVP 8 套模板 dispatch + visuals 视觉差异 + 黑白打印友好** |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 213 个 pytest 用例**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + **7 R3-M.1 MVP:3 个 `test_layout_generates_valid_docx` 参数化 + 4 个 visuals `test_academic_larger_font_size` / `test_internet_smaller_font_size` / `test_internet_has_skill_marker` / `test_bilingual_default_margins`** + **23 R3-M.2: 5 个 `TestLayoutConfigSchema` 锁 LAYOUT_CONFIG 5 个可读性参数 schema + 比例不变量 + 9 个 helper 集成(`TestHeadingHierarchy` 4 + `TestSectionSpacing` 2 + `TestBulletSpacing` 2 + `TestMetaSpacing` 1, 验证参数真的写到 docx run.font.size / paragraph_format.space_before/after) + 5 个 `TestAcademicRenderer`(dispatch / 无项目名 H2 / 无独立 period meta / 无 summary / education 在 projects 前) + 4 个 `TestReadabilityAcrossLayouts`(body>=9pt / meta>=8pt / 4 间距>=0 / line_spacing [1.15, 1.5])**),**213 passed + 0 skipped**(R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配 + R3-G bug hunt 加 2 个边界回归;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归** + **R3.5+ (b) PM 维度 surface 锁死 + 3 pm_dimensions 回归** + **R3.5.1 score_thresholds 实跑模式锁死 + 5 score_thresholds_live 回归** + **R3-G resume_parser 锁死 .docx/.pdf/.txt 解析边界 + resume_perspective 同义词 alias 算法 + 借调池去重 false negative + emoji/特殊字符归一化 + .exe 错误格式拒收** + **R3-M.1 MVP 8 套模板 dispatch + visuals 视觉差异 + 黑白打印友好** + **R3-M.2 LAYOUT_CONFIG 5 个可读性参数 + academic 专属 renderer 简化项目 highlights + 8 套模板可读性 invariant(body>=9pt / meta>=8pt / 4 间距>=0 / line_spacing 范围)** |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 
@@ -110,7 +111,7 @@ npm run dev                       # http://127.0.0.1:5173
 │   │   ├── test_jd_parser.py       # 53 pytest 用例(R2#2 关键词 + R3-A 加权/tier/recommendation + bugfix 回归)
 │   │   ├── test_api_jd.py          # 3 pytest 用例(R3-A FastAPI TestClient 集成)
 │   │   ├── test_llm_rewriter.py    # 16 pytest 用例(含 R2#1 baseline 锁死)
-│   │   ├── test_generator_layouts.py # 16 pytest 用例(R3-J 5 套 layout dispatcher + 视觉差异 + invalid + backward-compat)
+│   │   ├── test_generator_layouts.py # 39 pytest 用例(R3-J 5 套 layout dispatcher + 视觉差异 + invalid + backward-compat + R3-M.1 3 套新模板 + R3-M.2 5 schema + 9 helper 集成 + 5 academic + 4 readability = 23 新增)
 │   │   └── test_threshold_tuning.py # 11 pytest 用例(R3.5 阈值常量锁死 + 6 ground truth + 2 meta)
 │   ├── data/
 │   │   └── materials.json     # 素材库(单人唯一真源,脱敏版)

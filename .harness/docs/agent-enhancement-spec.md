@@ -524,10 +524,42 @@ preview 响应可选增加:
 
 ## 12. 开放问题
 
-1. 是否需要在前端展示完整 trace,还是只展示高级摘要。
-2. 轻量 RAG 是否停留在关键词召回,还是进入本地 embedding cache。
-3. Agent eval 报告是否纳入 pre-push hook,或保持手动脚本避免耗时。
-4. session 是否需要 TTL;当前进程退出即丢符合 MVP 隐私边界。
+1. 是否需要在前端展示完整 trace,还是只展示高级摘要。 — **R5-A closeout 部分解决**: workflow preview 新增 `agent_summary` 字段(§8.2), 含 request_id / steps_executed / tools_used / fallback_used / latency_ms — 前端可拉取展示; 完整 trace 仍走 JSONL + replay 脚本(不直接渲染到 UI)。
+2. 轻量 RAG 是否停留在关键词召回,还是进入本地 embedding cache。 — Round 5-B spec 已规划。
+3. Agent eval 报告是否纳入 pre-push hook,或保持手动脚本避免耗时。 — **R5-A Phase 4 决定**: 保持手动脚本 (spec §12 #3 已明确)。
+4. session 是否需要 TTL;当前进程退出即丢符合 MVP 隐私边界。 — 暂不引入 TTL,符合 MVP 隐私边界。
+
+---
+
+## R5-A closeout (2026-06-27)
+
+> 状态: ✅ 已完成 (commit `b60a215`)
+> 范围: 基于 `.planning/agent-architecture-audit/findings.md` 修复 4 个可修 gap + 1 个隐性 bug
+
+### 修复清单
+
+| ID | 来源 | 修复 | 测试覆盖 |
+|---|---|---|---|
+| Bug A | findings Gap 7 | `enable_external_resume` 字段透传 (api / generator / workflow 整链) — 替换 hardcoded `False` | TestEnableExternalResumePassthrough ×3 |
+| Bug B | findings Gap 4 | workflow preview 返回值新增 `agent_summary` 字典 (5 字段) | TestAgentSummaryField ×7 |
+| Bug C | findings Gap 6 | `execute_agent_tool` 加 `_validate_required_args(spec, args)` 主动 schema 校验 | TestAgentToolArgsValidation ×3 |
+| Bug D | 隐性 | `match_score` schema/参数名 `role` → `target_role` (对齐 `jd_parser.match_score` 函数签名) | TestAgentToolArgsValidation::test_match_score_schema_uses_target_role |
+
+### 未修复 / 留 Round 5-B
+
+| ID | 来源 | 现状 |
+|---|---|---|
+| Gap 5 | frontend TypeScript API/UI 未暴露 enable_agent_workflow 等 5 个字段 | 用户偏好 GUI 实施暂停 (R5-A spec 已知) |
+| Gap 8 | evaluate_bullet_jd_match 是 representative single-step, 不是 per-bullet | MVP 简化, 留 Round 5-B 重构 |
+| Gap 3 | spec §8.1 `agent_trace` 字段未实现 | 保留待 Round 5-B 设计 (开关默认行为难定义) |
+| Gap 1+2 | spec §0 表格 Phase 4 状态不一致 | 已在 `503005e` (Phase 4 commit) 修过 |
+
+### 关键指标
+
+- 441 pytest passed + 0 skipped (416 R4 baseline + 25 R5-A Phase 1-3 + 14 closeout 新增, 416 老测试零回退)
+- 不挂 pre-push hook (spec §12 #3)
+- 不破坏既有 baseline 字节级一致
+- 安全审查无 P0/P1 阻塞
 
 ---
 

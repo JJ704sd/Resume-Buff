@@ -65,6 +65,27 @@ def _openai_chat_response(bullets: list[str]) -> dict:
     }
 
 
+def _openai_chat_response_v2(indexed_items: list[dict]) -> dict:
+    """
+    R3-P: 构造一个返回新 schema 的 OpenAI 响应
+    indexed_items: [{"index": 0, "text": "..."}, {"index": 1, "text": "..."}, ...]
+    """
+    return {
+        "id": "chatcmpl-fake-v2",
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps({"rewritten": indexed_items}, ensure_ascii=False),
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
 def _payload_chunk_size(req) -> int:
     """从请求 payload 里读出 bullets 数组长度(== 这次 chunk 大小)"""
     payload = json.loads(req.data.decode("utf-8"))
@@ -422,3 +443,238 @@ def test_build_sections_silent_fallback_when_http_fails(enable_llm, monkeypatch)
     # 不为空,且是 list[str](没异常被吞)
     assert isinstance(proj["content"]["highlights"], list)
     assert proj["content"]["highlights"]
+
+
+# ======================================================================
+# Round 3-P: Prompt 工程升级 (few-shot + JSON schema + retry)
+# ======================================================================
+class TestSystemPromptV2:
+    """R3-P: SYSTEM_PROMPT v2 必须含 few-shot 示例 + 显式 schema 约束。"""
+
+    def test_system_prompt_contains_few_shot_example_basic(self):
+        """基础 few-shot 示例(无 jd_focus)必须在 SYSTEM_PROMPT 里"""
+        assert "示例 1" in llm.SYSTEM_PROMPT
+        assert "基础改写" in llm.SYSTEM_PROMPT or "无 jd_focus" in llm.SYSTEM_PROMPT
+        # 示例里必须给输入 + 输出 + 显式 schema
+        assert "输入 bullets" in llm.SYSTEM_PROMPT
+        assert '"rewritten"' in llm.SYSTEM_PROMPT
+        assert '"index"' in llm.SYSTEM_PROMPT
+        assert '"text"' in llm.SYSTEM_PROMPT
+
+    def test_system_prompt_contains_few_shot_example_with_jd_focus(self):
+        """带 jd_focus 的 few-shot 示例必须在 SYSTEM_PROMPT 里"""
+        assert "示例 2" in llm.SYSTEM_PROMPT
+        assert "jd_focus" in llm.SYSTEM_PROMPT
+        # jd_focus 的 4 个子键都应出现
+        assert "matched" in llm.SYSTEM_PROMPT
+        assert "missing" in llm.SYSTEM_PROMPT
+        assert "tier_required" in llm.SYSTEM_PROMPT
+        assert "tier_preferred" in llm.SYSTEM_PROMPT
+
+    def test_system_prompt_has_hard_constraints(self):
+        """硬性约束 7 条(不编造 / 长度 / schema / jd_focus 4 条)都在 prompt 里"""
+        assert "绝不" in llm.SYSTEM_PROMPT
+        assert "编造事实" in llm.SYSTEM_PROMPT
+        assert "20-50 字" in llm.SYSTEM_PROMPT
+        # schema 约束
+        assert "JSON" in llm.SYSTEM_PROMPT
+        assert "数量必须等于" in llm.SYSTEM_PROMPT
+
+
+class TestNewSchemaExtraction:
+    """R3-P: 新 schema 验证 + 提取。"""
+
+    def test_new_schema_indexed_items_accepted(self, enable_llm, monkeypatch):
+        """新 schema [{"index": i, "text": "..."}] 能被正确提取"""
+        items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 1, "text": "改写 1"},
+            {"index": 2, "text": "改写 2"},
+        ]
+        body = json.dumps(_openai_chat_response_v2(items)).encode("utf-8")
+        _patch_urlopen(monkeypatch, body)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1", "原文 2"], target_role="tech_metric"
+        )
+        assert out == ["改写 0", "改写 1", "改写 2"]
+
+    def test_new_schema_rejects_duplicate_index(self, enable_llm, monkeypatch):
+        """重复 index → 验证失败 → 走 retry → 第 2 次仍 bad → 降级原文"""
+        items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 0, "text": "改写 1"},  # 重复 index 0
+            {"index": 2, "text": "改写 2"},
+        ]
+        body = json.dumps(_openai_chat_response_v2(items)).encode("utf-8")
+        # 两次都返同样 bad schema → retry 也没救 → 降级
+        _patch_urlopen(monkeypatch, body)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1", "原文 2"], target_role="tech_metric"
+        )
+        # 验证失败 → retry 仍失败 → 降级原文
+        assert out == ["原文 0", "原文 1", "原文 2"]
+
+    def test_new_schema_rejects_out_of_range_index(self, enable_llm, monkeypatch):
+        """index 越界(>= expected_count)→ 验证失败 → retry 仍失败 → 降级"""
+        items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 1, "text": "改写 1"},
+            {"index": 5, "text": "改写 2"},  # 越界(预期 0..2)
+        ]
+        body = json.dumps(_openai_chat_response_v2(items)).encode("utf-8")
+        _patch_urlopen(monkeypatch, body)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1", "原文 2"], target_role="tech_metric"
+        )
+        assert out == ["原文 0", "原文 1", "原文 2"]
+
+    def test_new_schema_rejects_empty_text(self, enable_llm, monkeypatch):
+        """text 是空字符串 → 验证失败 → retry → 降级"""
+        items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 1, "text": "  "},  # 空白
+            {"index": 2, "text": "改写 2"},
+        ]
+        body = json.dumps(_openai_chat_response_v2(items)).encode("utf-8")
+        _patch_urlopen(monkeypatch, body)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1", "原文 2"], target_role="tech_metric"
+        )
+        assert out == ["原文 0", "原文 1", "原文 2"]
+
+    def test_new_schema_rejects_count_mismatch(self, enable_llm, monkeypatch):
+        """数量不等(expected_count=3,返回 2 个)→ 验证失败 → 降级"""
+        items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 1, "text": "改写 1"},
+            # 缺第 3 个
+        ]
+        body = json.dumps(_openai_chat_response_v2(items)).encode("utf-8")
+        _patch_urlopen(monkeypatch, body)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1", "原文 2"], target_role="tech_metric"
+        )
+        assert out == ["原文 0", "原文 1", "原文 2"]
+
+
+class TestRetryOnInvalid:
+    """R3-P: 失败 retry 一次(更严格指令)→ 成功时返回;仍失败时降级。"""
+
+    def test_retry_succeeds_with_strict_hint(self, enable_llm, monkeypatch):
+        """第 1 次返 bad schema,第 2 次返 good schema → 取第 2 次结果"""
+        bad_items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 0, "text": "改写 1"},  # 重复 index
+        ]
+        good_items = [
+            {"index": 0, "text": "改写 retry 0"},
+            {"index": 1, "text": "改写 retry 1"},
+        ]
+        # 两次 urlopen 返回不同 body
+        body_bad = json.dumps(_openai_chat_response_v2(bad_items)).encode("utf-8")
+        body_good = json.dumps(_openai_chat_response_v2(good_items)).encode("utf-8")
+
+        call_count = {"n": 0}
+        def fake_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            body = body_bad if call_count["n"] == 1 else body_good
+            return _FakeResp(body)
+
+        monkeypatch.setattr(
+            "core.llm_rewriter.urllib.request.urlopen", fake_urlopen
+        )
+
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric"
+        )
+        assert call_count["n"] == 2, "应该重试 1 次(共 2 次调用)"
+        assert out == ["改写 retry 0", "改写 retry 1"], "应取第 2 次成功结果"
+
+    def test_retry_exhausted_falls_back_to_original(self, enable_llm, monkeypatch):
+        """第 1 次 + 第 2 次都返 bad schema → 降级原文(不再重试)"""
+        bad_items = [
+            {"index": 0, "text": "改写 0"},
+            {"index": 0, "text": "改写 1"},  # 重复
+        ]
+        body_bad = json.dumps(_openai_chat_response_v2(bad_items)).encode("utf-8")
+
+        call_count = {"n": 0}
+        def fake_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            return _FakeResp(body_bad)
+
+        monkeypatch.setattr(
+            "core.llm_rewriter.urllib.request.urlopen", fake_urlopen
+        )
+
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric"
+        )
+        assert call_count["n"] == 2, "应该调用 2 次(首次 + retry 1 次)"
+        assert out == ["原文 0", "原文 1"], "retry 也失败 → 降级原文"
+
+    def test_network_error_does_not_retry(self, enable_llm, monkeypatch):
+        """HTTP/网络错误 → 不 retry(避免浪费 token)→ 立即降级"""
+        from urllib.error import URLError
+        call_count = {"n": 0}
+        def fake_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            raise URLError("connection refused")
+
+        monkeypatch.setattr(
+            "core.llm_rewriter.urllib.request.urlopen", fake_urlopen
+        )
+
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric"
+        )
+        assert call_count["n"] == 1, "网络错误不应 retry(避免 token 浪费)"
+        assert out == ["原文 0", "原文 1"]
+
+
+class TestSchemaValidationUnit:
+    """R3-P: _validate_new_schema / _validate_legacy_schema 单元测试(无网络)"""
+
+    def test_validate_new_schema_happy_path(self):
+        items = [
+            {"index": 0, "text": "a"},
+            {"index": 1, "text": "b"},
+        ]
+        assert llm._validate_new_schema(items, 2) is True
+
+    def test_validate_new_schema_wrong_count(self):
+        items = [{"index": 0, "text": "a"}]  # expected 2
+        assert llm._validate_new_schema(items, 2) is False
+
+    def test_validate_new_schema_index_out_of_range(self):
+        items = [
+            {"index": 0, "text": "a"},
+            {"index": 3, "text": "b"},  # 越界(expected_count=2)
+        ]
+        assert llm._validate_new_schema(items, 2) is False
+
+    def test_validate_new_schema_empty_text(self):
+        items = [
+            {"index": 0, "text": "a"},
+            {"index": 1, "text": ""},
+        ]
+        assert llm._validate_new_schema(items, 2) is False
+
+    def test_validate_new_schema_non_dict_item(self):
+        items = [
+            {"index": 0, "text": "a"},
+            "not a dict",
+        ]
+        assert llm._validate_new_schema(items, 2) is False
+
+    def test_validate_legacy_schema_happy_path(self):
+        items = ["a", "b", "c"]
+        assert llm._validate_legacy_schema(items, 3) is True
+
+    def test_validate_legacy_schema_wrong_count(self):
+        items = ["a", "b"]  # expected 3
+        assert llm._validate_legacy_schema(items, 3) is False
+
+    def test_validate_legacy_schema_empty_string(self):
+        items = ["a", "  ", "c"]
+        assert llm._validate_legacy_schema(items, 3) is False

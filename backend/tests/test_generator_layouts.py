@@ -8,20 +8,37 @@ Round 3 J: 5 套排版模板 — generator.py layout dispatcher 行为测试
   - TestLayoutBackwardCompat  preview / generate 不传 template 也能工作
   - TestLayoutVisualsR3M1     R3-M.1 新增 3 套模板差异化 config
   - TestLayoutConfigSchema    R3-M.2: 8 套 LAYOUT_CONFIG 必含 5 个可读性参数
+  - TestHeadingHierarchy      R3-M.2: H1/H2 字号 = body * ratio(直接调 helper 验证)
+  - TestSectionSpacing        R3-M.2: H1 段前后距 + H2 = 一半
+  - TestBulletSpacing         R3-M.2: bullet / shaded / skill 段后距 = item_spacing_pt
+  - TestMetaSpacing           R3-M.2: meta 行段后距 = meta_spacing_pt
 
 测"核心逻辑",不测:
   - 单纯 dict.get 取值
   - URL 字面量
   - mock 自指
+
+测点设计原则:每加一个 case 必问"它测了什么核心价值?"
+  - H1/H2 字号映射到 docx run.font.size → 验证参数实际生效(集成)
+  - 段间距映射到 docx paragraph_format.space_before/after → 验证参数实际生效(集成)
+  - 不测"h1_ratio >= h2_ratio"(已在 TestLayoutConfigSchema 锁 schema,避免重复)
 """
 import re
 import zipfile
 from pathlib import Path
 
 import pytest
+from docx import Document
+from docx.shared import Pt, RGBColor
 
 from core.generator import (
     LAYOUT_CONFIG,
+    _add_h1,
+    _add_h2,
+    _add_bullet,
+    _add_meta_line,
+    _add_skill_line,
+    _add_shaded_highlight,
     generate_resume_docx,
     preview_resume,
     render_docx,
@@ -294,3 +311,116 @@ class TestLayoutConfigSchema:
             assert cfg["item_spacing_pt"] >= 0, (
                 f"{template}: item_spacing_pt ({cfg['item_spacing_pt']}) < 0"
             )
+
+
+# ----------------------------------------------------------------------
+# Round 3 M.2 — 标题层级 / 段间距 / bullet 段间距 参数化生效测试
+# (直接调 helper 函数,验证 LAYOUT_CONFIG 的可读性参数真的写到 docx 上 — 核心集成价值)
+# ----------------------------------------------------------------------
+class TestHeadingHierarchy:
+    """_add_h1 / _add_h2 字号 = body * ratio,验证 4 套模板差异化
+    注:OOXML 把 w:sz 存为 half-point 整数,所以 12.6pt 会被存为 25 half-point=12.5pt。
+    断言用 abs=0.5 容忍这个根本存储精度,而不是断言"完全相等"。
+    """
+
+    def test_h1_size_uses_h1_size_ratio_classic(self):
+        """classic: H1 = body(10.5) * 1.20 = 12.6pt(±0.5 half-point 存储精度)"""
+        doc = Document()
+        p = _add_h1(doc, "教育背景", RGBColor(0, 0, 0), LAYOUT_CONFIG["classic"])
+        actual_pt = p.runs[0].font.size.pt
+        expected_pt = LAYOUT_CONFIG["classic"]["font_size_body"] * LAYOUT_CONFIG["classic"]["h1_size_ratio"]
+        assert actual_pt == pytest.approx(expected_pt, abs=0.5), (
+            f"classic H1 应为 {expected_pt}pt±0.5,实际 {actual_pt}pt"
+        )
+
+    def test_h2_size_uses_h2_size_ratio_classic(self):
+        """classic: H2 = body(10.5) * 1.05 = 11.025pt(±0.5)"""
+        doc = Document()
+        p = _add_h2(doc, "项目名 | 角色", LAYOUT_CONFIG["classic"])
+        actual_pt = p.runs[0].font.size.pt
+        expected_pt = LAYOUT_CONFIG["classic"]["font_size_body"] * LAYOUT_CONFIG["classic"]["h2_size_ratio"]
+        assert actual_pt == pytest.approx(expected_pt, abs=0.5), (
+            f"classic H2 应为 {expected_pt}pt±0.5,实际 {actual_pt}pt"
+        )
+
+    def test_academic_h1_uses_academic_ratio(self):
+        """academic: H1 = body(11) * 1.15 = 12.65pt(差异化,跟 classic 的 12.6pt 不同)"""
+        doc = Document()
+        p = _add_h1(doc, "教育背景", RGBColor(0, 0, 0), LAYOUT_CONFIG["academic"])
+        actual_pt = p.runs[0].font.size.pt
+        expected_pt = 11.0 * 1.15  # 12.65
+        assert actual_pt == pytest.approx(expected_pt, abs=0.5), (
+            f"academic H1 应为 {expected_pt}pt±0.5(差异化),实际 {actual_pt}pt"
+        )
+
+    def test_internet_h2_equals_body_size(self):
+        """internet: H2 = body(10) * 1.0 = 10pt(同 body 字号,紧凑风格)"""
+        doc = Document()
+        p = _add_h2(doc, "项目名 | 角色", LAYOUT_CONFIG["internet"])
+        actual_pt = p.runs[0].font.size.pt
+        expected_pt = 10.0  # internet h2_ratio=1.0
+        assert actual_pt == pytest.approx(expected_pt, abs=0.5), (
+            f"internet H2 应等于 body {expected_pt}pt±0.5(层次靠粗体区分),实际 {actual_pt}pt"
+        )
+
+
+class TestSectionSpacing:
+    """_add_h1 space_before/after = section_spacing_pt,_add_h2 = 一半"""
+
+    def test_h1_section_spacing_pt_applied(self):
+        """classic: H1 space_before=Pt(8), space_after=Pt(4)(来自 section_spacing_pt)"""
+        doc = Document()
+        p = _add_h1(doc, "X", RGBColor(0, 0, 0), LAYOUT_CONFIG["classic"])
+        before, after = LAYOUT_CONFIG["classic"]["section_spacing_pt"]
+        assert p.paragraph_format.space_before == Pt(before), (
+            f"classic H1 space_before 应为 Pt({before}),实际 {p.paragraph_format.space_before}"
+        )
+        assert p.paragraph_format.space_after == Pt(after), (
+            f"classic H1 space_after 应为 Pt({after}),实际 {p.paragraph_format.space_after}"
+        )
+
+    def test_h2_section_spacing_is_half_of_h1(self):
+        """classic: H2 space = H1 一半(经典层次:大标题宽,小标题紧)"""
+        doc = Document()
+        p = _add_h2(doc, "X", LAYOUT_CONFIG["classic"])
+        before, after = LAYOUT_CONFIG["classic"]["section_spacing_pt"]
+        assert p.paragraph_format.space_before == Pt(before / 2), (
+            f"H2 space_before 应为 H1 一半 Pt({before/2}),实际 {p.paragraph_format.space_before}"
+        )
+        assert p.paragraph_format.space_after == Pt(after / 2), (
+            f"H2 space_after 应为 H1 一半 Pt({after/2}),实际 {p.paragraph_format.space_after}"
+        )
+
+
+class TestBulletSpacing:
+    """_add_bullet / _add_shaded_highlight / _add_skill_line 段后距 = item_spacing_pt"""
+
+    def test_bullet_classic_item_spacing_zero(self):
+        """classic: item_spacing_pt=0 → bullet space_after=Pt(0)(R3-M.1 视觉保持)"""
+        doc = Document()
+        p = _add_bullet(doc, "X", LAYOUT_CONFIG["classic"])
+        assert p.paragraph_format.space_after == Pt(0), (
+            f"classic bullet space_after 应为 Pt(0),实际 {p.paragraph_format.space_after}"
+        )
+
+    def test_bullet_academic_item_spacing_two_pt(self):
+        """academic: item_spacing_pt=2 → bullet space_after=Pt(2)(学术模板略散)"""
+        doc = Document()
+        p = _add_bullet(doc, "X", LAYOUT_CONFIG["academic"])
+        expected = LAYOUT_CONFIG["academic"]["item_spacing_pt"]
+        assert p.paragraph_format.space_after == Pt(expected), (
+            f"academic bullet space_after 应为 Pt({expected}),实际 {p.paragraph_format.space_after}"
+        )
+
+
+class TestMetaSpacing:
+    """_add_meta_line space_after = meta_spacing_pt(academic 3,其他 2)"""
+
+    def test_meta_academic_spacing_three_pt(self):
+        """academic: meta_spacing_pt=3 → meta 行 space_after=Pt(3)(学术 meta 略宽)"""
+        doc = Document()
+        p = _add_meta_line(doc, "2024.06 - 2024.09", LAYOUT_CONFIG["academic"])
+        expected = LAYOUT_CONFIG["academic"]["meta_spacing_pt"]
+        assert p.paragraph_format.space_after == Pt(expected), (
+            f"academic meta space_after 应为 Pt({expected}),实际 {p.paragraph_format.space_after}"
+        )

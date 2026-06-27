@@ -533,38 +533,50 @@ def _setup_doc(layout_cfg: Optional[dict] = None) -> Document:
 # ---- 段落 helper(签名:container, ...)— container 可以是 Document 或 _Cell ----
 
 def _add_h1(container, text: str, color: RGBColor, layout_cfg: dict):
-    """section 大标题 (e.g. 教育背景) — minimal 时不设 color(默认黑)"""
+    """section 大标题 (e.g. 教育背景) — minimal 时不设 color(默认黑)
+    Round 3 M.2: 字号 = body * h1_size_ratio,段前后距 = section_spacing_pt
+    """
     p = container.add_paragraph()
     run = p.add_run(text)
-    _set_chinese_font(run, size_pt=12)
+    h1_size = layout_cfg["font_size_body"] * layout_cfg["h1_size_ratio"]
+    _set_chinese_font(run, size_pt=h1_size)
     run.bold = True
     if layout_cfg.get("use_color", True) and color is not None:
         run.font.color.rgb = color
-    p.paragraph_format.space_before = Pt(8)
-    p.paragraph_format.space_after = Pt(4)
+    before, after = layout_cfg["section_spacing_pt"]
+    p.paragraph_format.space_before = Pt(before)
+    p.paragraph_format.space_after = Pt(after)
     return p
 
 
 def _add_h2(container, text: str, layout_cfg: dict):
-    """子标题 (e.g. 项目名 + 角色)"""
+    """子标题 (e.g. 项目名 + 角色)
+    Round 3 M.2: 字号 = body * h2_size_ratio,段前后距 = section_spacing_pt 的一半
+    """
     p = container.add_paragraph()
     run = p.add_run(text)
-    _set_chinese_font(run, size_pt=layout_cfg["font_size_body"])
+    h2_size = layout_cfg["font_size_body"] * layout_cfg["h2_size_ratio"]
+    _set_chinese_font(run, size_pt=h2_size)
     run.bold = True
-    p.paragraph_format.space_before = Pt(4)
-    p.paragraph_format.space_after = Pt(2)
+    before, after = layout_cfg["section_spacing_pt"]
+    # H2 段间距 = H1 的一半(经典层次:大标题宽,小标题紧)
+    p.paragraph_format.space_before = Pt(before / 2)
+    p.paragraph_format.space_after = Pt(after / 2)
     return p
 
 
 def _add_meta_line(container, text: str, layout_cfg: dict):
-    """项目时间 / meta 行 — minimal 时不 italic 不上灰"""
+    """项目时间 / meta 行 — minimal 时不 italic 不上灰
+    Round 3 M.2: 字号 = body * 0.88(原硬编码 9pt),space_after = meta_spacing_pt
+    """
     p = container.add_paragraph()
     run = p.add_run(text)
-    _set_chinese_font(run, size_pt=9)
+    meta_size = layout_cfg["font_size_body"] * 0.88
+    _set_chinese_font(run, size_pt=meta_size)
     if layout_cfg.get("use_color", True):
         run.italic = True
         run.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_after = Pt(layout_cfg["meta_spacing_pt"])
     return p
 
 
@@ -580,18 +592,23 @@ def _add_text(container, text: str, layout_cfg: dict, size_pt: Optional[float] =
 
 
 def _add_bullet(container, text: str, layout_cfg: dict, size_pt: Optional[float] = None):
-    """普通 bullet"""
+    """普通 bullet
+    Round 3 M.2: 段后距 = item_spacing_pt
+    """
     if size_pt is None:
         size_pt = layout_cfg["font_size_body"]
     p = container.add_paragraph(style="List Bullet")
     run = p.add_run(text)
     _set_chinese_font(run, size_pt=size_pt)
     p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.25)
+    p.paragraph_format.space_after = Pt(layout_cfg["item_spacing_pt"])
     return p
 
 
 def _add_shaded_highlight(container, text: str, layout_cfg: dict, size_pt: Optional[float] = None):
-    """浅灰底纹 bullet(technical template 专用)— 用 w:shd 元素 fill=EEEEEE"""
+    """浅灰底纹 bullet(technical template 专用)— 用 w:shd 元素 fill=EEEEEE
+    Round 3 M.2: 段后距 = item_spacing_pt
+    """
     if size_pt is None:
         size_pt = layout_cfg["font_size_body"]
     p = container.add_paragraph(style="List Bullet")
@@ -605,17 +622,21 @@ def _add_shaded_highlight(container, text: str, layout_cfg: dict, size_pt: Optio
     shd.set(qn("w:color"), "auto")
     shd.set(qn("w:fill"), "EEEEEE")
     pPr.append(shd)
+    p.paragraph_format.space_after = Pt(layout_cfg["item_spacing_pt"])
     return p
 
 
 def _add_skill_line(container, label: str, items: list, layout_cfg: dict):
-    """技能行 — technical 模板用 marker (e.g. '■ ') 加前缀"""
+    """技能行 — technical 模板用 marker (e.g. '■ ') 加前缀
+    Round 3 M.2: 段后距 = item_spacing_pt
+    """
     marker = layout_cfg.get("skill_marker", "") or ""
     p = container.add_paragraph()
     text = f"{label}: " + "、".join(items)
     run = p.add_run(marker + text)
     _set_chinese_font(run, size_pt=layout_cfg["font_size_body"])
     p.paragraph_format.line_spacing = layout_cfg.get("line_spacing", 1.3)
+    p.paragraph_format.space_after = Pt(layout_cfg["item_spacing_pt"])
     return p
 
 

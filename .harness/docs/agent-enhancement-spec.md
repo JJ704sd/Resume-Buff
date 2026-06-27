@@ -2,7 +2,7 @@
 
 > 适用项目: 简历帮  
 > 日期: 2026-06-27  
-> 状态: **Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ 已落地**(320 → 352 → 416 pytest 全绿,2026-06-27)  
+> 状态: **Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ + Phase 4 ✅ + R5-A closeout ✅ 已落地**(320 → 352 → 416 → 427 → 441 pytest 全绿,2026-06-27)
 > 目标: 在现有 Round 4 Agent MVP 基础上,把简历生成链路增强为可规划、可调用工具、可观测、可评测、可回退的本地单用户 Agent 工作流。
 
 ## 阶段落地状态
@@ -12,7 +12,8 @@
 | Phase 1 | Agent 编排层与工具注册 | ✅ 已完成(2026-06-27) | `core/agent_tools.py`(AGENT_TOOLS 4 个 + `execute_agent_tool`)+ `core/agent_workflow.py`(`build_task_graph` 确定性 + `run_agent_workflow` 失败降级)+ `enable_agent_workflow` 字段;320 pytest 全绿,283 老测试零回退 |
 | Phase 2 | 结构化 trace 与回放 | ✅ 已完成(2026-06-27) | `log_agent_trace_jsonl` 写 `backend/logs/agent_trace.jsonl` 11 字段 schema + `scripts/replay_agent_trace.py` argparse CLI;352 pytest 全绿(+32 新);安全审查无 P0/P1 阻塞 |
 | Phase 3 | 轻量 RAG evidence | ✅ 已完成(2026-06-27) | `core/evidence.py`(`EvidenceSnippet` frozen dataclass + `build_evidence_snippets` 切 projects/skills/honors/certs + `retrieve_evidence` 复用 `KEYWORD_GROUPS` lexical matching + 稳定排序 `(-confidence, source_type, source_id)` + `_summarize_evidence_for_prompt` 截断);`core/agent_tools.py` 注册 `retrieve_evidence` 工具;`core/agent_workflow.py` 任务图插入 `retrieve_evidence` step + evidence 失败降级 `use_default` + 显式 evidence 时 skipped;`core/llm_rewriter.py` `evidence` kwarg + `_build_request_payload` `evidence_summary` 字段 + `SYSTEM_PROMPT` 第 8 条约束"只能基于 evidence 改写" + `EVIDENCE_CONSTRAINT_SUFFIX` 后缀;416 pytest 全绿(+62 新);**零向量数据库 / 零 embedding API / 零新依赖**;安全审查无 P0/P1 阻塞 |
-| Phase 4 | Agent eval 报告 | ⏳ 未启动 | 等用户明确启动(需真实 LLM key 才能产出 eval 指标) |
+| Phase 4 | Agent eval 报告 | ✅ 已完成(2026-06-27) | `scripts/evaluate_agent_workflow.py` 跑 12 JD × 4 组开关对照,输出 `AI岗位JD库_agent_eval报告.md`;`backend/tests/test_agent_eval.py` 11 case;427 pytest 全绿(+11 新);不挂 pre-push hook;真实 LLM run 已产出 schema pass / fallback / latency 指标 |
+| R5-A closeout | Agent API 契约与工具参数补缺 | ✅ 已完成(2026-06-27) | commit `b60a215` + PR #4 合并到 `main`(merge `12dfcf1`);补 `agent_summary` / `enable_external_resume` 透传 / required args validation / `match_score.target_role`;441 pytest 全绿(+14 新) |
 
 ---
 
@@ -451,7 +452,7 @@ preview 响应可选增加:
 - `core/generator.py`: `build_sections` / `preview_resume` / `generate_resume_docx` 加 `evidence` kwarg 透传(零修改上层行为,None 旧路径字节级一致)
 - 测试: `test_evidence.py`(**45 case**:TestBuildEvidenceSnippets 9 + TestKeywordHit 5 + TestComputeConfidence 6 + TestRetrieveEvidence 9 + TestSummarizeEvidenceForPrompt 4 + TestEvidenceToDictList 3 + TestAgentToolsIntegration 4 + TestMatchScoreRegression 4 + TestKeyWordGroupsReuse 1) + `test_agent_workflow.py` 加 `TestEvidencePhase3` 9 case(任务图含 retrieve_evidence / workflow 跑 evidence step / evidence_explicit 时 skipped / evidence 失败降级不阻断 / trace 不含 evidence text / evidence_summary 返回 / 无 JD 不调 evidence / jd_context=None baseline 不变 / 无关键词命中返空 list) + `test_llm_rewriter.py` 加 `TestEvidenceIntegration` 8 case(evidence=None 字节级一致 / 空 list 等同 None / snippets 注入 summary / dict list 重建 Snippet / system prompt 含 suffix / retry 保留 summary / FC + evidence + jd_focus 三方共存 / `_build_request_payload` kwarg 透传) = **62 新 pytest**(352 → 416 全绿)
 - **安全审查无 P0/P1 阻塞**: trace 不含 evidence text 原文(只写 input_size/output_size bytes 长度)/ evidence_summary 不含 PII(materials 已脱敏)/ 无新增外部网络调用(retrieve_evidence 纯本地 lexical matching)/ write fail 静默降级不影响主流程
-- **零向量数据库 / 零 embedding API / 零新依赖**(spec §5.3);不实现 Phase 4,Phase 4(Agent eval 报告)等用户明确启动再开,需真实 LLM key 才能产出 schema pass rate / fallback rate 等指标
+- **零向量数据库 / 零 embedding API / 零新依赖**(spec §5.3);Phase 4 已完成并产出 Agent eval 报告,后续 Round 5-B 优先基于报告结论收紧工具契约、真实工具数据流与 eval 关联方式
 
 
 - 将 materials 切为 evidence snippets。
@@ -552,11 +553,11 @@ preview 响应可选增加:
 | Gap 5 | frontend TypeScript API/UI 未暴露 enable_agent_workflow 等 5 个字段 | 用户偏好 GUI 实施暂停 (R5-A spec 已知) |
 | Gap 8 | evaluate_bullet_jd_match 是 representative single-step, 不是 per-bullet | MVP 简化, 留 Round 5-B 重构 |
 | Gap 3 | spec §8.1 `agent_trace` 字段未实现 | 保留待 Round 5-B 设计 (开关默认行为难定义) |
-| Gap 1+2 | spec §0 表格 Phase 4 状态不一致 | 已在 `503005e` (Phase 4 commit) 修过 |
+| Gap 1+2 | spec §0 表格 Phase 4 状态不一致、推荐下一步过期 | 本次 R5-B.0 文档基线校准修复;后续以 `round5-b-agent-capability-spec.md` 为下一轮入口 |
 
 ### 关键指标
 
-- 441 pytest passed + 0 skipped (416 R4 baseline + 25 R5-A Phase 1-3 + 14 closeout 新增, 416 老测试零回退)
+- 441 pytest passed + 0 skipped (427 R5-A Phase 4 baseline + 14 closeout 新增;默认关闭增强路径时旧行为保持不变)
 - 不挂 pre-push hook (spec §12 #3)
 - 不破坏既有 baseline 字节级一致
 - 安全审查无 P0/P1 阻塞
@@ -565,10 +566,10 @@ preview 响应可选增加:
 
 ## 13. 推荐下一步
 
-建议下一轮从 Phase 1 + Phase 2 开始:
+建议下一轮启动 **Round 5-B Phase 2A: 工具契约、权限与真实数据流**:
 
-1. 先做工具注册表和受控 workflow,把现有 R4 能力统一起来。
-2. 同步做 JSONL trace 和 replay,让每次 Agent 行为可解释。
-3. 暂不引入向量库,避免把本地单用户工具复杂化。
+1. 在现有 required args validation 基础上,补轻量 schema 子集校验(type / required / properties / items / minimum / maximum),错误信息只写字段摘要不写原文。
+2. 让 `execute_agent_tool(tool_name, args, context)` 真正使用 context 权限,锁住 JD / materials / external resume / pii_risk 的访问边界。
+3. 收紧 `agent_summary.tools_used` 语义:只统计实际执行且影响本次 preview 的工具,并把 eval 脚本改为优先用 `agent_summary.request_id` 精确关联 JSONL trace。
 
-这样可以最小改动覆盖“Agent 工作流、Skill/Tool、可靠性、可观测”四个核心 JD 场景,并为后续 RAG 与评测报告留出干净接口。
+暂不优先做 GUI 面板,也不把 Agent eval 挂入 pre-push hook。当前真实 LLM 评测显示延迟成本较高,下一轮更适合先把后端契约和可审计性做硬。

@@ -174,7 +174,15 @@
 
 ---
 
-## 八、与既有脚本的关系
+## 八、R5-A closeout 后解读
+
+- 本报告生成于 R5-A Phase 4,closeout 后 `preview` 已新增 `agent_summary.request_id` / `tools_used` / `fallback_used` / `latency_ms`;下一版 eval 应优先用 `agent_summary.request_id` 精确关联 JSONL trace,JSONL 只做交叉验证。
+- 真实 LLM run 证明 schema pass 和 fallback 表现稳定,但 AW 路径平均 latency 明显高于 baseline;因此 eval 继续保持手动脚本,不挂 pre-push hook。
+- 下一轮优化不应先做 GUI,而应先收紧工具契约:类型 schema、context 权限、`tools_used` 只统计实际影响 preview 的工具,再升级 fallback 分类统计。
+
+---
+
+## 九、与既有脚本的关系
 
 - `scripts/score_thresholds.py`: 阈值调优, 单维度 match_score 准确率, 跟本脚本独立
 - `scripts/match_golden_targets.py`: 黄金 JD × 6 role 全量扫描, 跟本脚本独立

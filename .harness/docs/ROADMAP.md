@@ -26,22 +26,23 @@
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - **R3-P LLM Prompt 工程升级**(`SYSTEM_PROMPT` v2 加 2 个 few-shot 示例 + 显式 JSON schema + 失败 retry 1 次;LLM 智能改写无 key 静默降级)
 - **R4 Agent MVP** — Function Calling 协议接入(R4-F tools schema + evaluate_bullet_jd_match 工具函数)+ Agent Loop(R4-A max_step=3 + 单工具约束 + trace 日志)+ Session 记忆(R4-M 进程内 deque 上限 10 + 隐私隔离不写内容只写 id+步数);**MVP 优先打 AI Agent R&D JD 缺口**;R4-C Chat UI 留 P2(用户偏好 GUI 暂停)
-- **R5-A Agent 增强 3 phase**(对应 `.harness/docs/agent-enhancement-spec.md`):
+- **R5-A Agent 增强 4 phase + closeout**(对应 `.harness/docs/agent-enhancement-spec.md`):
   - **Phase 1** — Agent 编排层(`core/agent_workflow.py` 受控 Plan-and-Execute + `build_task_graph()` 确定性产任务图 LLM 不参与规划 + `run_agent_workflow()` 失败降级到旧路径)+ 工具注册表(`core/agent_tools.py` AGENT_TOOLS 4 个核心工具 + 统一 `execute_agent_tool()` 入口 + 隐私边界 `ToolResult` 不存 args/input 原文);`enable_agent_workflow` 字段默认 False,字节级一致
   - **Phase 2** — 结构化 JSONL trace(`core/logger.py` `log_agent_trace_jsonl` 写 `backend/logs/agent_trace.jsonl` + 11 字段稳定 schema + `request_id` 短 uuid 前缀 "r" + input_size/output_size 只算 bytes 不存原文 + 写入失败静默降级不影响主流程)+ 会话回放(`scripts/replay_agent_trace.py` argparse CLI 支持 `--request-id`/`--session-id`/`--path` 输出 markdown 摘要不输出原文敏感字段);旧 R4-A `agent_trace.log` 完全不动兼容共存
   - **Phase 3** — 轻量 RAG evidence(`core/evidence.py` 新增 `EvidenceSnippet` frozen dataclass + `build_evidence_snippets` 切 projects/skills/honors/certs 4 类 snippets + `retrieve_evidence` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 排序稳定 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤 + `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限);**零向量数据库 / 零 embedding API / 零新依赖**(`SPEC §5.3`);`enable_agent_workflow=True` 时任务图插入 retrieve_evidence step(match_score 之后 retrieve_materials 之前),失败 `use_default` 降级不阻断主流程,evidence 透传到 `rewrite_highlights` + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写";evidence=None 字节级一致
   - **Phase 4** — Agent 离线评测报告(scripts/evaluate_agent_workflow.py 跑固定 eval set 12 JD = jd_samples 8 份非公告型 + v4_strong 4 份 × 4 组开关对照 (FC × AW 笛卡尔积);输出 AI岗位JD库_agent_eval报告.md 含 8 节;不挂 pre-push hook (SPEC §12 #3 默认手动脚本);不修改既有 match_score / score_thresholds.py / match_golden_targets.py / replay_agent_trace.py;无 LLM key 时全部走原文 fallback;PII 用 placeholder 白名单
+  - **R5-A closeout** — 补齐 `agent_summary` / `enable_external_resume` 透传 / required args validation / `match_score.target_role` 工具 schema bugfix;PR #4 已合并到 `main`(merge `12dfcf1`)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
 - **441 个 pytest 全绿 + 0 skipped**(283 R4 baseline + **20 R5-A Phase 1: 6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee** + **32 R5-A Phase 2: 4 TestLogAgentTraceJsonlSchema + 3 TestLogAgentTraceJsonlTypes + 2 TestLogAgentTraceJsonlPrivacy + 3 TestLogAgentTraceJsonlRobustness + 9 TestWorkflowJsonlTrace + 3 TestReplayFilter + 3 TestReplayMarkdown + 3 TestReplayScript + 2 TestReplayRobustness** + **62 R5-A Phase 3: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 TestEvidencePhase3 + 8 TestEvidenceIntegration** + **11 R5-A Phase 4: 3 TestEvalSetLoading + 4 TestSingleEvaluation + 2 TestPiiScanner + 2 TestPrivacyGuarantee** + **14 R5-A closeout: 3 TestEnableExternalResumePassthrough + 7 TestAgentSummaryField + 4 TestAgentToolArgsValidation**)
 
-**最近 7 个 commit** (本地 ahead of origin, 待 push):
-- `380906f` feat(round5-a phase3): 轻量 RAG evidence + 62 新 pytest
-- `7c5af05` feat(round5-a phase2): JSONL trace + replay 脚本 + 11 字段 schema
-- `1679a22` feat(round5-a phase1): Agent 工具注册表 + 受控 Plan-and-Execute 编排(默认关闭,字节级一致)
-- `66cf5ff` Merge pull request #2 from JJ704sd/feat/round5-a-agent-phase1 (PR merge 时 GitHub 自动删除 head branch — R5-A Phase 2+3+closeout 推到 main 后)
-- `283caa0` docs(round4 followup): 同步 R4 closeout commit 60a18b8 到 README/ROADMAP/MEMORY
-- `60a18b8` docs(round4): 测试数 252 -> 283 + R4 Agent MVP 当前能力表 + AGENTS 锁点 + ROADMAP/MEMORY 同步
-- `8e2ce91` Merge pull request #1 from JJ704sd/feat/round4-agent-mvp (PR merge 时 GitHub 自动删除 head branch)
+**最近 7 个 commit** (`main` / `origin/main` 当前基线):
+- `12dfcf1` Merge pull request #4 from JJ704sd/feat/round5-a-agent-phase1
+- `ce57802` docs(round5-a closeout): closeout 文档同步 + 测试数 427 -> 441
+- `b60a215` fix(round5-a closeout): agent_summary + enable_external_resume + tool args validation + match_score schema bugfix
+- `9caf7bd` Merge pull request #3 from JJ704sd/feat/round5-a-agent-phase1
+- `0c6b057` docs(round5-b): future spec + 架构审计文档
+- `503005e` feat(round5-a phase4): Agent 离线评测报告 + 12 JD x 4 组开关对照
+- `9eca73a` docs(round5-a phase3): 测试数 352 -> 416 + R5-A Phase 3 当前能力表 + ROADMAP/MEMORY 同步
 
 ---
 
@@ -103,20 +104,22 @@
 - **plan 文档**: `.harness/docs/round4-agent-mvp-plan.md`(已标 ✅ 完成)
 - **R4-C (Chat UI 组件) 留 P2**:用户偏好"GUI 实施任务默认暂停",设计文档够用,等明确启动再开
 
-### R5-A Agent 增强 — 3 phase 全部落地 ✅ 完成 (2026-06-27, commits `1679a22` + `7c5af05` + `380906f`)
-- **背景**:R4 MVP 优先打 AI Agent R&D JD 结构性缺口;R5-A 在 R4 基础上补"可观测 + 可规划 + 可调用 + 可评测"工作流,设计文档 `.harness/docs/agent-enhancement-spec.md` 拆 4 phase,Phase 4 (Agent eval 报告) 需真实 LLM key 等用户明确启动再开
-- **实施路径**(3 commit 顺序落地):
+### R5-A Agent 增强 — 4 phase + closeout 全部落地 ✅ 完成 (2026-06-27, merge `12dfcf1`)
+- **背景**:R4 MVP 优先打 AI Agent R&D JD 结构性缺口;R5-A 在 R4 基础上补"可观测 + 可规划 + 可调用 + 可评测"工作流,设计文档 `.harness/docs/agent-enhancement-spec.md` 拆 4 phase;Phase 4 已在 `503005e` 完成,closeout 已在 `b60a215` 修复 API/工具契约补缺并通过 PR #4 合并到 `main`
+- **实施路径**(5 个核心 commit 顺序落地):
   1. `1679a22` **Phase 1** — Agent 编排层(`core/agent_workflow.py` 受控 Plan-and-Execute: `build_task_graph(has_jd, enable_function_calling, has_external_resume)` 确定性产任务图 LLM 不参与规划 + step 序号连续 + `AgentStep` frozen=True; `run_agent_workflow()` 失败时降级到 `build_sections` / `render_docx` 旧路径)+ 工具注册表(`core/agent_tools.py` AGENT_TOOLS 4 个核心工具 `parse_jd` / `match_score` / `evaluate_bullet_jd_match` / `rewrite_highlights` + 统一 `execute_agent_tool(tool_name, args, context)` 入口; 未知工具 → `TOOL_NOT_ALLOWED` 不抛 / TypeError → `TOOL_ARGS_INVALID` / 其他异常 → `TOOL_RUNTIME_ERROR`; `ToolResult` dataclass **不存 args / input 原文** 隐私边界); `PreviewRequest.enable_agent_workflow` / `GenerateRequest.enable_agent_workflow` 字段默认 False 字节级一致; **283 → 320 +20 pytest** (6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee)
   2. `7c5af05` **Phase 2** — 结构化 JSONL trace(`core/logger.py` `JSONL_TRACE_FIELDS` 11 字段稳定 schema ts / request_id / session_id / workflow / step / tool / latency_ms / status / error_type / input_size / output_size; `log_agent_trace_jsonl(event)` 写 `backend/logs/agent_trace.jsonl`; `_estimate_input_size` / `_estimate_output_size` 用 `json.dumps(...).encode("utf-8")` 算 bytes 不存原文; 写入失败 IO / 磁盘满 / 编码错 logger 内部 try/except 静默降级不影响主流程; `generate_request_id()` 模块级函数生成短 uuid 前缀 "r") + 会话回放(`scripts/replay_agent_trace.py` argparse CLI `--request-id` / `--session-id` / `--path` 输出 markdown 摘要只渲染 7 列 step/tool/latency_ms/status/error_type/input_size/output_size 不输出原文); 每个 step 含本地步骤(intent / retrieve / aggregate / parse_external_resume)写一条 trace `status="skipped"`; 旧 R4-A `log_agent_trace` / `agent_trace.log` 签名/格式/路径完全不动兼容共存; **320 → 352 +32 pytest** (4 + 3 + 2 + 3 + 9 + 3 + 3 + 3 + 2); **安全审查无 P0/P1 阻塞** (JSONL 不存原文 PII / 写入失败不阻断 / replay 不输出敏感内容)
   3. `380906f` **Phase 3** — 轻量 RAG evidence(`core/evidence.py` 新增 420 行: `EvidenceSnippet` frozen dataclass 5 字段 source_type/source_id/text/matched_keywords/confidence; `build_evidence_snippets(materials, role)` 切 projects/skills/honors/certs 4 类 snippets role 缺时 fallback general; `retrieve_evidence(jd_keywords, role, materials, top_k=8, min_confidence=0.0)` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 排序稳定 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤; `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限 + `(N more)` 截断标记; `evidence_to_dict_list` frozen dataclass 转 JSON 友好 dict list tuple→list round 3 位小数); `core/agent_tools.py` 注册 `retrieve_evidence` 工具(`ToolSpec.pii_risk=medium` 跟 match_score 同级; callable 包 lambda 走 `evidence_to_dict_list`); `core/agent_workflow.py` has_jd 时任务图插入 `retrieve_evidence` step(match_score 之后 retrieve_materials 之前; `step.required=False, fallback="use_default"`) + 显式 evidence 透传时 step.status="skipped" 跳过执行 + `enable_agent_workflow=True` 时 preview 返回值新增 `evidence_summary` 字段(dict list 供前端高级信息区); `core/llm_rewriter.py` `rewrite_highlights` 加 `evidence` kwarg(None 字节级一致) + `_build_request_payload` 加 `evidence_summary` kwarg + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写" + `EVIDENCE_CONSTRAINT_SUFFIX` 单独常量后缀; `core/generator.py` `build_sections` / `preview_resume` / `generate_resume_docx` 加 `evidence` kwarg 透传(零修改上层行为, None 旧路径字节级一致); **352 → 416 +62 pytest** (45 `test_evidence.py`: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 `test_agent_workflow.py` TestEvidencePhase3 + 8 `test_llm_rewriter.py` TestEvidenceIntegration); **零向量数据库 / 零 embedding API / 零新依赖** (spec §5.3); **安全审查无 P0/P1 阻塞** (trace 不含 evidence text 原文只记 bytes / evidence_summary 不含 PII materials 已脱敏 / 无新增外部网络调用 / write fail 静默降级不影响主流程)
+  4. `503005e` **Phase 4** — Agent 离线评测报告(`scripts/evaluate_agent_workflow.py` 跑固定 eval set 12 JD × 4 组开关对照,输出 `AI岗位JD库_agent_eval报告.md`;无 LLM key 时原文 fallback 不报错,有真实 LLM key 时产出 schema pass / fallback / latency 指标;`backend/tests/test_agent_eval.py` +11 case;**416 → 427 pytest 全绿**;不挂 pre-push hook)
+  5. `b60a215` **closeout** — 根据 `.planning/agent-architecture-audit/findings.md` 修复 `agent_summary` 响应、`enable_external_resume` 整链透传、required args validation 和 `match_score.target_role` 工具 schema bugfix;**427 → 441 pytest 全绿**;PR #4 merge `12dfcf1`
 - **实施坑**(已写进 MEMORY.md / spec):
   1. Phase 1 测试数计算口径:R4 baseline 283 → Phase 1 320 (+37, 不是 +20 单纯加 Phase 1 测试; 累计计算包含基础测试调整) → Phase 2 352 (+32) → Phase 3 416 (+62),**实际测试增量需扣除测试文件内 fixture / helper 等带来的间接调整**
   2. Phase 3 evidence 任务图插入位置很关键:`match_score` 之后, `retrieve_materials` 之前 — 顺序不能颠倒(evidence 依赖 match_score 算出的 jd_keywords 透传)
   3. `evidence=None` 字节级一致是 R5-A Phase 3 的硬约束(老 352 测试零回退),实现路径上 `_build_request_payload` 在 evidence_summary 为 None 时不写字段 + system prompt 不追加 `EVIDENCE_CONSTRAINT_SUFFIX` 后缀,这两条缺一不可
   4. `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限是为了避免 evidence 注入 LLM context 后超 token 上限;截断标记 `(N more)` 提示 LLM 还有更多 evidence 但当前 summary 已截断
-- **效果**:**416 passed + 0 skipped**(283 R4 baseline + 20 Phase 1 + 32 Phase 2 + 62 Phase 3);**R5-A 整体增量 +133 pytest**,三轮迭代零回退,字节级一致;`evidence_summary` 是新字段仅 `enable_agent_workflow=True` 时返回,默认 False 不污染老路径;`agent_trace.jsonl` 跟 `agent_trace.log` 并存,R4-A 老格式用户数据兼容;**默认 disable 全部新能力**(enable_agent_workflow=False + evidence=None + enable_function_calling=False + session_id=None),**零行为变更**,等用户明确启用才走新路径
-- **spec 文档**: `.harness/docs/agent-enhancement-spec.md`(Phase 1+2+3 状态均已 ✅)
-- **Phase 4 (Agent eval 报告) 留待**:需真实 LLM key 才能产出 schema pass rate / fallback rate 等指标,等用户明确启动再开
+- **效果**:**441 passed + 0 skipped**(含 R5-A Phase 4 +11、closeout +14);四阶段与 closeout 均零 P0/P1 安全阻塞;`agent_summary` / `evidence_summary` 都仅在 `enable_agent_workflow=True` 路径提供,默认 False 不污染老路径;`agent_trace.jsonl` 跟 `agent_trace.log` 并存,R4-A 老格式用户数据兼容;**默认 disable 全部新能力**(enable_agent_workflow=False + evidence=None + enable_function_calling=False + session_id=None),**零行为变更**,等用户明确启用才走新路径
+- **spec 文档**: `.harness/docs/agent-enhancement-spec.md`(Phase 1+2+3+4+closeout 状态均已 ✅),`.harness/docs/round5-b-agent-capability-spec.md` 为下一轮入口
+- **下一步**:Round 5-B 推荐先做 Phase 2A 工具 schema/context/effective tools,再做 eval request_id 关联;GUI 高级面板继续等用户明确启动
 
 ---
 
@@ -308,4 +311,4 @@
 
 ---
 
-_最后更新:2026-06-27 R5-A closeout 收尾(commit b60a215 + 503005e + 0c6b057 推送至 origin/feat/round5-a-agent-phase1;427 → 441 全绿含 14 closeout 新 pytest),由 orchestrator 维护;R5-A 4 phase + closeout bug fix 全部完成,Round 5-B spec 已落地待启动,后续按需推进_
+_最后更新:2026-06-27 R5-B.0 文档基线校准;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`,427 → 441 全绿含 14 closeout 新 pytest),由 orchestrator 维护;下一轮推荐启动 Round 5-B Phase 2A 工具契约/权限/真实数据流_

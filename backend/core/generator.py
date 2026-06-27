@@ -174,6 +174,45 @@ LAYOUT_CONFIG = {
         "shaded_highlights": True,
         "skill_marker": "■ ",
     },
+    # ---- Round 3 M.1 新增 3 套模板 (MVP: 复用 _render_classic, 后续 round 加专属 renderer) ----
+    "academic": {
+        "name": "学术 CV",
+        "description": "适合读博 / 出国申请,字号 11pt 行距 1.5 边距 2.5cm,教育背景优先",
+        "use_color": True,
+        "header_align": "center",
+        "font_size_body": 11.0,
+        "line_spacing": 1.5,
+        "margins_cm": (2.5, 2.5, 2.5, 2.5),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "",
+        "academic_mode": True,  # 后续 R3-M.2 加专属 renderer(简化 highlights)
+    },
+    "internet": {
+        "name": "互联网简洁",
+        "description": "字节阿里 style,字号 10pt 行距 1.2 边距 1.5cm 单栏紧凑",
+        "use_color": True,
+        "header_align": "left",
+        "font_size_body": 10.0,
+        "line_spacing": 1.2,
+        "margins_cm": (1.5, 1.5, 1.5, 1.5),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "▸ ",
+    },
+    "bilingual": {
+        "name": "中英双语",
+        "description": "header / 教育 / 项目双语,适合外企或海外岗位",
+        "use_color": True,
+        "header_align": "center",
+        "font_size_body": 10.5,
+        "line_spacing": 1.3,
+        "margins_cm": (2.0, 2.0, 2.0, 2.0),
+        "two_column": False,
+        "shaded_highlights": False,
+        "skill_marker": "",
+        "bilingual_mode": True,  # 后续 R3-M.3 加专属 renderer(双语 header)
+    },
 }
 
 
@@ -698,6 +737,10 @@ _LAYOUT_DISPATCH = {
     "two_column": _render_two_column,
     "minimal": _render_minimal,
     "technical": _render_technical,
+    # ---- Round 3 M.1 MVP: 3 个新模板复用 _render_classic (后续 round 加专属 renderer) ----
+    "academic": _render_classic,
+    "internet": _render_classic,
+    "bilingual": _render_classic,
 }
 
 

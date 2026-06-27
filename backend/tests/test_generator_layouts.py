@@ -201,3 +201,35 @@ class TestLayoutBackwardCompat:
         # classic 视觉特征:有 italic(项目时间 meta 行)
         assert _docx_has_italic(out), "默认 template 应走 classic(classic 有 italic meta)"
         assert _docx_normal_style_pt(out) == pytest.approx(10.5)
+
+
+# ----------------------------------------------------------------------
+# TestLayoutVisualsR3M1: Round 3 M.1 新增 3 套模板的差异化 config 断言
+# (dispatch 覆盖由现有 TestLayoutDispatch.test_layout_generates_valid_docx 参数化
+#  自动扩展 — 该 parametrize 遍历 LAYOUT_CONFIG.keys(),新增 3 项自动覆盖 3 个新模板)
+# ----------------------------------------------------------------------
+class TestLayoutVisualsR3M1:
+    def test_academic_larger_font_size(self):
+        """academic font_size_body = 11.0(读博 / 出国申请 字号偏大)"""
+        assert LAYOUT_CONFIG["academic"]["font_size_body"] == pytest.approx(11.0), (
+            f"academic font_size_body 应为 11.0, 实际 {LAYOUT_CONFIG['academic']['font_size_body']}"
+        )
+
+    def test_internet_smaller_font_size(self):
+        """internet font_size_body = 10.0(字节阿里 style 单页紧凑)"""
+        assert LAYOUT_CONFIG["internet"]["font_size_body"] == pytest.approx(10.0), (
+            f"internet font_size_body 应为 10.0, 实际 {LAYOUT_CONFIG['internet']['font_size_body']}"
+        )
+
+    def test_internet_has_skill_marker(self):
+        """internet skill_marker = '▸ '(互联网简历技术感前缀)"""
+        assert LAYOUT_CONFIG["internet"]["skill_marker"] == "▸ ", (
+            f"internet skill_marker 应为 '▸ ', 实际 {LAYOUT_CONFIG['internet']['skill_marker']!r}"
+        )
+
+    def test_bilingual_default_margins(self):
+        """bilingual margins 接近 2.0cm 四边(双语布局相对宽松)"""
+        margins = LAYOUT_CONFIG["bilingual"]["margins_cm"]
+        assert margins == pytest.approx((2.0, 2.0, 2.0, 2.0)), (
+            f"bilingual margins 应为 (2.0, 2.0, 2.0, 2.0), 实际 {margins}"
+        )

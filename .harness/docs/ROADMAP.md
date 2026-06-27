@@ -8,12 +8,15 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3-G 收尾)
+## 0. 当前项目快照(2026-06-27 R3-M.3 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
 - 6 个 role:tech_metric / product / algorithm / data_annot / test_qa / general
-- 5 套简历模板:classic / single_column / two_column / minimal / technical
+- **8 套简历模板**:classic / single_column / two_column / minimal / technical / academic / internet / bilingual
+  - **academic** 学术 CV(R3-M.1 11pt/1.5/2.5cm + R3-M.2 专属 renderer 简化 highlights + **R3-M.3 academic_layout compact/detailed 二级选项**)
+  - **internet** 互联网简洁(10pt/1.2/1.5cm / ▸ 前缀,字节阿里 style)
+  - **bilingual** 中英双语(**R3-M.3 激活 bilingual_mode**,header / 教育 / 项目副标题 3 个 section helper,`_en` 字段缺失时 graceful 降级)
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
 - **borrowed pool + 'AI' surface + PM 维度 surface**(R3.5+ / R3.5+ (b) 修复 false negative + 让 match_score 精确告诉 user 缺什么)
 - **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 不再读 frozen top_score, 实时跑 match_score 出报告, 反映当前实现 + 真实素材库)
@@ -23,14 +26,14 @@
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **183 个 pytest 全绿 + 0 skipped**(137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext` + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError, 全移植自 R3-G worktree `eb7e841` + 当前 main 的 R3.5+ borrowed pool / KEYWORD_GROUPS 适配 + R3-G bug hunt 加 2 个边界回归)
+- **233 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + **20 R3-M.3: 6 TestAcademicLayout + 4 TestBilingualHeader + 3 TestBilingualEducation + 3 TestBilingualProject + 2 TestBilingualDispatch + 2 TestMaterialsBilingualSchema**)
 
 **最近 5 个 commit**:
-- `c3b2807` feat(round3-g#3): 前端集成 ResumeUploader + resume_perspective 展示
-- `d81c71e` feat(round3#g step2): 实装 _build_resume_perspective + 移植 R3-G 测试 (181 passed)
-- `b15dec5` feat(round3#g step1): resume upload 端点 + match_score 透传 external_resume_text
-- `2813505` docs(round3.6.2): sync ROADMAP + AGENTS + README to R3.6.2 closeout (137/0 skipped)
-- `b254611` chore(round3.6.2): baiyun_product label 第三次复核改 '别投' + un-skip
+- `39c7d20` feat(round3-m.3 step4): 前端 academic_layout 单选 + bilingual 降级提示
+- `185c7f7` feat(round3-m.3 step3): build_sections 透传 _en 字段 + 真实数据 graceful 验证
+- `310cbe5` feat(round3-m.3 step2): 激活 bilingual_mode + 3 个 bilingual section helper
+- `9f25f40` feat(round3-m.3 step1): academic 加 academic_layout compact/detailed 分支
+- `cbf76af` docs(round3-m.2): 标记 plan 文档为完成状态(5 commit + 213 passed)
 
 ---
 
@@ -85,17 +88,17 @@
 - **历史记录**: R3-K 从 2026-06-26 暂缓(cancelled 后保留需求),到 2026-06-27 user 主动删除,不再列入候选
 - **影响**: 无 — 从未实施,无 commit
 
-### R3-M — 简历排版改进(精细打磨) 📋 已拆 3 个 round 推进
+### R3-M — 简历排版改进(精细打磨) ✅ R3-M.3 收尾完成(2026-06-27, 3 round 全部落地)
 - **背景**:**2026-06-27 user 改需求** — 把原"简历导出多格式(docx → pdf/md/html)"改成"把简历排版做到更好"。参考 `amruthpillai/reactive-resume` (39.1k stars, 15 套差异化模板) 后,明确"排版改进"的核心是**模板差异化 + 视觉规范 + 用户可控**
 - **拆分方案** (2026-06-27 user 同意按 R3-M.1 → R3-M.2 → R3-M.3 推进):
-  - **R3-M.1** (短期,~350 行) — 方向 2 + 4:加 3 套新模板 + A4 规范 + 黑白打印友好
-  - **R3-M.2** (中期,~500 行) — 方向 1 + 3:8 套模板细节打磨 + 可读性优化
-  - **R3-M.3** (长期,~600 行) — 方向 6:用户可定制排版(前端面板 + 后端参数化)
-- **当前状态** (2026-06-27): ⏸️ R3-M.1 plan 已写,等 user 明确启动实施
+  - **R3-M.1** (短期,~350 行) ✅ 完成 — 方向 2 + 4:加 3 套新模板 + A4 规范 + 黑白打印友好
+  - **R3-M.2** (中期,~430 行) ✅ 完成 — 方向 1 + 3:8 套模板细节打磨 + 可读性优化
+  - **R3-M.3** (长期,~310 行) ✅ 完成 — bilingual_mode 激活 + academic_layout 详细模式(用户可定制排版的最小子集;完整 R3-M.3 reactive-resume 风格面板留 P2 后续)
+- **当前状态** (2026-06-27): ✅ 3 round 全部 commit 落地(详见每个 sub-round entry);`test_generator_layouts.py` 从 16 case → 39 case;pytest 183 → 233
 - **参考项目**:[reactive-resume](https://github.com/amruthpillai/reactive-resume) 启发的设计模式
-  - **15 套模板** (我们 5 → 8 套差异化)
-  - **可定制颜色 / 字体 / 间距** (留 R3-M.3)
-  - **A4 / Letter 双规格** (R3-M.1 上 A4 严格规范)
+  - **15 套模板** (我们 5 → 8 套差异化 ✅)
+  - **可定制颜色 / 字体 / 间距** (留 P2 R3-M.4)
+  - **A4 / Letter 双规格** (R3-M.1 上 A4 严格规范 ✅)
 - **现状对比**:
   - 我们 5 套模板:`classic` / `single_column` / `two_column` / `minimal` / `technical` — 基础差异已有但视觉差异维度不够(主要是配色)
   - R3-M.1 加 3 套(academic / internet / bilingual) → 8 套 + A4 规范
@@ -127,6 +130,30 @@
 - **前端改动**: **零** — `/api/resume/roles` 自动遍历 LAYOUT_CONFIG 暴露新模板,App.vue `v-for` 自动加 radio
 - **价值**: 模板 5 → 8(覆盖学术 / 互联网 / 双语 3 大投递场景) + A4 规范闭环 + 黑白打印兜底
 - **plan 文档**: `.harness/docs/round3-m-1-plan.md` (待写)
+
+### R3-M.2 — 8 套模板细节打磨 + 可读性优化 ✅ 完成 (2026-06-27, commits `7541810` ~ `cbf76af`)
+- **目标**: 8 套 LAYOUT_CONFIG 加 5 个可读性参数 + 6 个 helper 改造消费 + academic 专属 renderer 简化项目 highlights
+- **5 个可读性参数**:`h1_size_ratio` / `h2_size_ratio` / `section_spacing_pt`(2 元组)/ `meta_spacing_pt` / `item_spacing_pt`
+- **academic 专属 renderer**: 走 `_render_academic`,项目段简化(无 H2 项目名 / 无独立 period meta / 无 summary,直接列 highlights 为 bullets);教育保持前置(build_sections 已教育优先)
+- **测试**:`TestLayoutConfigSchema` 5 + `TestHeadingHierarchy` 4 + `TestSectionSpacing` 2 + `TestBulletSpacing` 2 + `TestMetaSpacing` 1 + `TestAcademicRenderer` 5 + `TestReadabilityAcrossLayouts` 4 = **23 个新 case**(原计划 30,合并冗余)
+- **bilingual_mode**: 本轮仍保留 dead code(注释明确"留 R3-M.3 激活"),`TestLayoutConfigSchema` 锁 schema 不判它
+- **效果**: 213 passed(190 + 23),pre-push hook 全绿,8 套模板可读性 invariant(body>=9pt / meta>=8pt / 4 间距>=0 / line_spacing 范围)锁死
+- **plan 文档**: `.harness/docs/round3-m-2-plan.md`
+
+### R3-M.3 — bilingual 激活 + academic detailed 模式 ✅ 完成 (2026-06-27, commits `9f25f40` + `310cbe5` + `185c7f7` + `39c7d20`)
+- **目标**: 激活 `bilingual_mode` flag(R3-M.1 留的 dead code)+ academic 加 `academic_layout: "compact" | "detailed"` 二级选项(恢复 R3-M.2 删掉的 H2 项目名 / period meta / summary)
+- **实施路径**(4 step,每个独立 commit):
+  1. `9f25f40` Step 1 — `LAYOUT_CONFIG['academic']` 加 `academic_layout: "compact"` 字段(默认 compact 保持 R3-M.2 行为)+ `_render_project_group_academic_detailed_to` 恢复 H2 + meta + summary + `_render_academic` 按 academic_layout 分支 dispatch;`TestAcademicLayout` 6 case
+  2. `310cbe5` Step 2 — 3 个 bilingual section helper(`_render_bilingual_header_to` 14pt 英文姓名 italic / `_render_bilingual_education_to` 10pt 英文学校 italic / `_render_bilingual_project_group_to` 10pt 英文副标题 italic)+ `_render_bilingual` 入口 + `_LAYOUT_DISPATCH['bilingual']` 切到新入口;`TestBilingual*` 12 case
+  3. `185c7f7` Step 3 — `build_sections` 透传 `_en` 字段(`name_en` / `school_en` / `major_en` / `title_en`,缺失给空字符串 graceful 降级);`TestMaterialsBilingualSchema` 2 case(真实 materials.json 无 _en 字段 bilingual 模板不抛异常 + build_sections schema 锁);6 role `_BASELINE_HASHES` 因 `_en` 字段 schema 扩展重算固化
+  4. `39c7d20` Step 4 — 前端 App.vue academic 模板时显示二级单选(紧凑/详细),bilingual 模板 button 加 title tooltip 提示双语字段缺失降级;`PreviewRequest` / `GenerateRequest` 加 `academic_layout` 字段;`render_docx` 拷贝 LAYOUT_CONFIG 后覆盖(不污染全局)
+- **测试**: **20 个新 pytest**(6 + 12 + 2),213 → **233 passed + 0 skipped**
+- **效果**: 
+  - bilingual 模板 真实数据(无 _en 字段)→ docx 单语言降级,不抛异常
+  - bilingual 模板 补 _en 字段 → 完整双语(header 中英两行 / 教育有英文学校 / 项目有英文副标题)
+  - academic 模板 默认 compact(R3-M.2 行为不变)→ 选 detailed 时恢复 H2 + meta + summary(适合 Research Statement)
+- **已知限制**: 完整双语渲染要求用户补 `basics.name_en` / `education.school_en` / `education.major_en` / `projects[].title_en` 字段,前端 tooltip 已提示
+- **plan 文档**: `.harness/docs/round3-m-3-plan.md`
 
 ### R3.5.1 — 扩 ground truth 样本 + 重跑阈值
 - **背景**:R3.5 决策"10 份够用",但 label 分布有偏(0 份"别投")

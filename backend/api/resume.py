@@ -9,11 +9,14 @@ Round 1 流程(带人工确认):
 
 Round 3 J: 5 套排版模板(template: classic/single_column/two_column/minimal/technical)
 Round 3 I: 可选 jd_text 触发 JD-driven 排序(空 → 走原路径,字节级一致)
+Round 3 G: POST /api/resume/parse-external -> 接收 .docx/.pdf/.txt 上传,
+  解析为段落 list 返回(纯内存, 不落盘),
+  给前端"上传外部简历 + JD 评分简历视角"提供原始数据
 """
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -24,6 +27,15 @@ from core.generator import (
     ROLE_CONFIG,
     LAYOUT_CONFIG,
 )
+from core.resume_parser import (  # R3-G 新增: 外部简历解析
+    EmptyResumeError,
+    UnsupportedFormatError,
+    parse_resume_bytes,
+)
+
+# R3-G: 上传大小上限 5MB (避免恶意灌入)
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
 from core.logger import log_generation
 
 router = APIRouter()
@@ -161,3 +173,67 @@ def generate(req: GenerateRequest):
         filename=out_path.name,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+# ----------------------------------------------------------------------
+# R3-G: 外部简历上传解析
+# ----------------------------------------------------------------------
+@router.post("/parse-external")
+async def parse_external(file: UploadFile = File(...)):
+    """
+    接收 .docx / .pdf / .txt 上传, 解析为段落 list 返回 (纯内存, 不落盘)。
+
+    设计:
+      - 不依赖 LLM, 纯格式解析 (python-docx / pymupdf / utf-8 decode)
+      - 段落结构同构: [{idx, text, is_heading}] (PDF 多 page 字段)
+      - 上限 5MB, 超限返 413
+      - 不支持后缀返 415
+      - 空文件 / 解析失败返 422
+
+    Returns:
+        dict:
+          - filename:    str
+          - size_bytes:  int
+          - paragraphs:  list[dict]  (idx / text / is_heading / page?)
+
+    Errors:
+      - 415: 文件后缀不在 .docx / .pdf / .txt
+      - 413: 文件 > 5MB
+      - 422: 空文件 / 解析失败
+    """
+    filename = file.filename or "uploaded_resume"
+    raw = await file.read()
+
+    # 1) 大小检查
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过 5MB (实际 {len(raw)} bytes)",
+        )
+    if len(raw) == 0:
+        raise HTTPException(status_code=422, detail="空文件")
+
+    # 2) 后缀 dispatch (parse_resume_bytes 内部抛 UnsupportedFormatError / EmptyResumeError / ParseError)
+    try:
+        parsed = parse_resume_bytes(filename, raw)
+        # parse_resume_bytes 返回 dict {filename, size_bytes, paragraphs, page_count?, note}
+        # API 层只暴露 paragraphs + page_count + note (filename 已在 endpoint 包装过)
+        paragraphs = parsed["paragraphs"]
+        extra = {
+            k: v for k, v in parsed.items()
+            if k in ("page_count", "note")
+        }
+    except UnsupportedFormatError as e:
+        raise HTTPException(status_code=415, detail=str(e))
+    except EmptyResumeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        # ParseError 或其他未分类 → 422
+        raise HTTPException(status_code=422, detail=f"解析失败: {e}")
+
+    return {
+        "filename": filename,
+        "size_bytes": len(raw),
+        "paragraphs": paragraphs,
+        **extra,  # 透传 page_count (PDF) + note
+    }

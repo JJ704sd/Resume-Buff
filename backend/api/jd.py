@@ -31,6 +31,12 @@ class ParseRequest(BaseModel):
 class MatchRequest(BaseModel):
     text: str = Field(..., description="JD 文本")
     target_role: str = Field(..., description="6 个 role id 之一")
+    # R3-G 新增:外部简历全文 (由前端把上传文件的所有 paragraph.text 拼起来)
+    # 可选, 不传则 match_score 不计算 resume_perspective 字段
+    external_resume_text: str | None = Field(
+        default=None,
+        description="R3-G 新增: 外部简历全文 (可选, >50k 走不到这里, 由 _MAX_TEXT_LEN 兜底)",
+    )
 
 
 def _validate_text(text: str) -> None:
@@ -77,7 +83,11 @@ def jd_match(req: MatchRequest):
         )
 
     try:
-        return match_score(req.text, req.target_role)
+        return match_score(
+            req.text,
+            req.target_role,
+            external_resume_text=req.external_resume_text,
+        )
     except ValueError as e:
         # match_score 内部也会校验,但防御性兜底
         raise HTTPException(status_code=400, detail=str(e))

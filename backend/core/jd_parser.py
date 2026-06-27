@@ -584,6 +584,7 @@ def match_score(
     materials: dict | None = None,
     *,
     include_borrowed: bool = True,
+    external_resume_text: str | None = None,
 ) -> dict[str, Any]:
     """
     给定 JD 文本 + target_role + materials,计算 0-100 匹配度评分 (加权)。
@@ -596,6 +597,10 @@ def match_score(
             方向上的经验(borrowed 池),用于缓解 false negative(如
             baiyun_2026_product / baiyun_2026_qa 之前 score=0);
             False = 仅当前 role 范围(旧行为,严格 role 区分度)。
+        external_resume_text: R3-G 新增。外部简历全文 (可选), 用于计算
+            "简历视角" 的 have/need 关键词 (resume_perspective 字段)。
+            None 或空字符串 → 跳过 resume_perspective 计算, 返回 dict 不含此字段。
+            实际计算逻辑在 R3-G Step 2 落地 (本函数现在只接收参数, 透传)。
 
     Returns:
         dict:
@@ -690,4 +695,52 @@ def match_score(
         "role_id": target_role,
         "tier_info": parsed.get("tier_info", {"required": [], "preferred": [], "bonus": []}),
         "recommendation": _classify_recommendation(int(score)),
+        # R3-G 新增: external_resume_text 非空时, 计算"简历视角" have/need 关键词
+        # Step 2 实装 _build_resume_perspective 函数, 这里先接收参数占位
+        "resume_perspective": _build_resume_perspective(
+            external_resume_text, parsed, pool
+        ),
+    }
+
+
+# ----------------------------------------------------------------------
+# R3-G: 简历视角 (external resume perspective)
+# ----------------------------------------------------------------------
+def _build_resume_perspective(
+    external_resume_text: str | None,
+    parsed: dict[str, Any],
+    pool: set[str],
+) -> dict[str, Any] | None:
+    """
+    R3-G: 基于外部简历全文, 告诉用户"投这份 JD, 你简历里已经有什么 / 还缺什么"。
+
+    输入:
+      - external_resume_text: 上传简历的全文 (None/空 → 跳过, 返回 None)
+      - parsed: parse_jd() 输出 (含 skills/tools/domains 三个 normalized 列表)
+      - pool: match_score 计算出的候选关键词池 (role 范围 + borrowed 池)
+
+    输出:
+      - None: external_resume_text 为空 (前端不展示此字段)
+      - dict:
+          - have_keywords: list[str]   JD 要求 ∩ 简历里有 ∩ 素材库能提供
+          - need_keywords: list[str]   JD 要求 - 简历里有 - 素材库能提供 (真正缺)
+          - have_count / need_count:   计数
+
+    设计 (R3-G 计划文档):
+      - 不重复 match_score 的工作: 直接用 parsed + pool
+      - "need" 排除"已有素材库能提供" (避免双计)
+      - Step 1 占位: 返回 None 避免破坏 API, Step 2 实装核心逻辑
+    """
+    if not external_resume_text or not external_resume_text.strip():
+        return None
+
+    # Step 1 占位: 仅返回简历全文长度, 不做 have/need 计算
+    # Step 2 实装: 复用 _normalize_text + 扫简历文本里的 surface 命中
+    return {
+        "have_keywords": [],
+        "need_keywords": [],
+        "have_count": 0,
+        "need_count": 0,
+        "_placeholder": True,  # Step 2 移除
+        "resume_text_length": len(external_resume_text),
     }

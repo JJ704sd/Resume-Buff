@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3.5.1 收尾)
+## 0. 当前项目快照(2026-06-27 R3.6.1 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -17,16 +17,17 @@
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
 - **borrowed pool + 'AI' surface + PM 维度 surface**(R3.5+ / R3.5+ (b) 修复 false negative + 让 match_score 精确告诉 user 缺什么)
 - **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 不再读 frozen top_score, 实时跑 match_score 出报告, 反映当前实现 + 真实素材库)
+- **R3.6 扩库 + 质量清理: 88 份 JD**(v3 86 → R3.6 +10 → R3.6.1 清理 -8 = 88, **A 级 86 / B 级 2**, 无 placeholder 无 C 级, 4 级标签 strong=53 / campus_to_intern=7 / weak=20 / none=8)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
 - **136 个 pytest 全绿**(131 baseline + 5 R3.5.1 score_thresholds_live),1 skipped(baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验, 等 user 补素材或改 label)
 
 **最近 4 个 commit**:
+- `a3eb9d4` chore(round3.6.1): v4 主库清理 8 份低质量 JD (96 → 88, A=86/B=2/无 C)
+- `a4a1619` feat(round3.6): 10 份大厂 JD 入库(阿里 4 + 腾讯 2 + 字节 4)
 - `44bd370` feat(round3.5.1): score_thresholds.py 改实跑 match_score
 - `ed57e25` feat(round3.5+b): PM 维度 surface — match_score 精确识别 baiyun_product 缺失
-- `502661f` docs(round3.5+): sync ROADMAP + AGENTS + README + MEMORY to R3.5+ closeout
-- `2889dd9` fix(round3.5+): match_score 漏匹配 bug — borrowed pool + 'AI' surface
 
 ---
 

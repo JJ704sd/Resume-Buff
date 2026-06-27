@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3-P 收尾)
+## 0. 当前项目快照(2026-06-27 R4 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -25,15 +25,16 @@
 - **R3-G 外部简历上传 + 简历视角评分**(`POST /api/resume/parse-external` 解析 .docx/.pdf/.txt → `match_score` 增加 `external_resume_text` 参数 → 返回 `resume_perspective` 块 {have_keywords, need_keywords, have_count, need_count} → 前端 `ResumeUploader` drag 组件 + App.vue 评分结果区加 "已有/还缺" 卡片, 扣除素材库能补的避免 false negative)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - **R3-P LLM Prompt 工程升级**(`SYSTEM_PROMPT` v2 加 2 个 few-shot 示例 + 显式 JSON schema + 失败 retry 1 次;LLM 智能改写无 key 静默降级)
+- **R4 Agent MVP** — Function Calling 协议接入(R4-F tools schema + evaluate_bullet_jd_match 工具函数)+ Agent Loop(R4-A max_step=3 + 单工具约束 + trace 日志)+ Session 记忆(R4-M 进程内 deque 上限 10 + 隐私隔离不写内容只写 id+步数);**MVP 优先打 AI Agent R&D JD 缺口**;R4-C Chat UI 留 P2(用户偏好 GUI 暂停)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **252 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + 20 R3-M.3 + **19 R3-P: 3 TestSystemPromptV2 + 5 TestNewSchemaExtraction + 3 TestRetryOnInvalid + 8 TestSchemaValidationUnit**)
+- **283 个 pytest 全绿 + 0 skipped**(181 R3-G baseline + 1 emoji/特殊字符归一化 + 1 .exe UnsupportedFormatError + 7 R3-M.1 MVP + 23 R3-M.2 + 20 R3-M.3 + 19 R3-P + **8 R4-F: 5 TestFunctionCalling + 3 TestEvaluateBulletJdMatch** + **12 R4-A: 9 TestAgentLoop + 3 TestLogAgentTrace** + **11 R4-M: 8 TestSessionAPI + 3 TestSessionIntegration**)
 
 **最近 5 个 commit**:
-- `d2a11d5` feat(round3-p step1): SYSTEM_PROMPT v2 (few-shot) + 新 schema 验证 + 失败 retry 一次
-- `31df375` docs(round3-m.3): 测试数 213 -> 233 + R3-M.3 当前能力表 + AGENTS 锁死说明
-- `39c7d20` feat(round3-m.3 step4): 前端 academic_layout 单选 + bilingual 降级提示
-- `185c7f7` feat(round3-m.3 step3): build_sections 透传 _en 字段 + 真实数据 graceful 验证
-- `310cbe5` feat(round3-m.3 step2): 激活 bilingual_mode + 3 个 bilingual section helper
+- `8e2ce91` Merge pull request #1 from JJ704sd/feat/round4-agent-mvp
+- `ba536df` feat(round4-m integration): rewrite_highlights/generator/api 接入 session_id 透传
+- `c5ec652` feat(round4-m): Session 记忆(进程内 deque,上限 10) + 隐私隔离
+- `ac90e13` feat(round4-a): Agent Loop (max_step=3) + 单工具约束 + trace 日志
+- `a4c9156` feat(round4-f): Function Calling 协议接入 (tools schema + 旧路径字节级一致)
 
 ---
 
@@ -78,6 +79,22 @@
   3. `parse_resume_bytes` 返回 dict 不是 list, API endpoint 必须提取 `parsed["paragraphs"]` 不能直接传整个 dict
   4. UTF-16 → UTF-8 转码:6959 个 null bytes 让 pytest 报 "source code string cannot contain null bytes"
 - **效果**:**181 passed, 0 skipped**;端到端冒烟: 上传简历 (.txt 218 字符/10 段) → score=95 / recommendation='高' / have=10 关键词 / need=0 (简历覆盖所有 JD 要求);不传 / 空字符串 → `resume_perspective: None` (前端 v-if 隐藏)
+
+### R4 Agent MVP — Function Calling + Agent Loop + Session 记忆 ✅ 完成 (2026-06-27, commits `a4c9156` + `ac90e13` + `c5ec652` + `ba536df`, PR #1 合并)
+- **背景**:用户对照 AI Agent R&D JD 识别出 4 个项目结构性缺口(Function Calling / Agent Loop / Session 记忆 / 可观测 trace);MVP 优先打前 3 个 + trace 跟 R4-A 合并,Chat UI 留 P2
+- **ROI 决策**(对 JD 信号 × 改动成本):必做 R4-F + R4-A + R4-M,不做 R4-X (MCP 协议, ~400 行 + 改 SDK 风险大)/ R4-V (完整回放, 留 P2)
+- **实施路径**(4 commit 顺序落地,3 步 + 1 集成):
+  1. `a4c9156` Step 1 — `llm_rewriter.py` 加 `TOOL_EVALUATE_SCHEMA` OpenAI tools schema + `evaluate_bullet_jd_match(bullet, jd_focus)` 工具函数 + `_build_request_payload` 加 tools 字段 + `_extract_rewritten` 加 tool_calls 解析分支 + `rewrite_highlights` 加 `enable_function_calling: bool = False` 参数(默认关,旧路径字节级一致);`TestFunctionCalling` 5 case + `TestEvaluateBulletJdMatch` 3 case
+  2. `ac90e13` Step 2 — `_call_with_agent_loop()` ReAct-style mini loop(`MAX_AGENT_STEPS=3` 硬上限 + 单步单工具 + 网络错误不入 loop)+ `logger.log_agent_trace(session_id, step, tool_name, latency_ms, outcome)` 写 `logs/agent_trace.log`(跟 `generation.log` 分离);`TestAgentLoop` 9 case + `TestLogAgentTrace` 3 case
+  3. `c5ec652` Step 3 — `core/session.py` 新建 `_SESSIONS: dict[str, deque(maxlen=10)]` + 4 API(create / get / append / clear)+ `rewrite_highlights` 加 `session_id: str | None = None` 参数 + 隐私隔离(session 内容不写日志,只写 session_id + 步数);`TestSessionAPI` 8 case + `TestSessionIntegration` 3 case
+  4. `ba536df` Step 4 (integration) — `generator.build_sections` + `api/resume.py` Preview/Generate 整链 `session_id` 字段透传;`enable_function_calling=False / session_id=None` 旧路径字节级一致,`TestSessionIntegration` 链路验证
+- **实施坑**(已写进 MEMORY.md):
+  1. R4-M worker 第一轮 commit `81dd80c` stat 只 2 文件, message 描述 5 文件 — classic "commit message 撒谎"
+  2. cherry-pick R4-M 后 2 个 `TestSessionIntegration` fail(`rewrite_highlights` 没接 `session_id` 参数) — owner 手工补完剩下 4 文件改动 + 验证全绿
+  3. `_call_with_agent_loop` 内部解析失败 + 工具执行失败要分别走不同降级路径,不能混在一起
+- **效果**:**283 passed + 0 skipped**(252 R3-P baseline + 8 R4-F + 12 R4-A + 11 R4-M);`logs/agent_trace.log` 独立写,跟 `generation.log` 分离;`session_id=None` 字节级一致,旧 baseline 不破;预推送 hook 全绿
+- **plan 文档**: `.harness/docs/round4-agent-mvp-plan.md`(已标 ✅ 完成)
+- **R4-C (Chat UI 组件) 留 P2**:用户偏好"GUI 实施任务默认暂停",设计文档够用,等明确启动再开
 
 ---
 
@@ -245,7 +262,7 @@
 | 后端入口 | `backend/main.py` |
 | 核心域 | `backend/core/generator.py` + `backend/core/jd_parser.py` + `backend/core/llm_rewriter.py` + `backend/core/jd_ranker.py` |
 | API | `backend/api/resume.py` + `backend/api/jd.py` |
-| 测试 | `backend/tests/` 124 pytest |
+| 测试 | `backend/tests/` 283 pytest |
 | 前端入口 | `frontend/src/App.vue` |
 | 设计文档 | `.harness/docs/` |
 | 项目记忆 | `.harness/memory/MEMORY.md` |
@@ -255,4 +272,4 @@
 
 ---
 
-_最后更新:2026-06-26 R3.5 收尾,由 orchestrator 创建_
+_最后更新:2026-06-27 R4 收尾(PR #1 merge `8e2ce91`),由 orchestrator 维护;R4-C Chat UI 留 P2 等用户明确启动_

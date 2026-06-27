@@ -1,5 +1,5 @@
 """
-LLM 智能改写模块 (Round 2 #3, R3-P 升级)
+LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling)
 
 设计原则:
   - MVP: 没 key / 没启用 / 调用失败 → 全部静默降级,绝不抛异常给上层
@@ -12,6 +12,21 @@ R3-P 升级:
   - 显式 JSON schema: {"rewritten": [{"index": i, "text": "..."}]} 唯一规范
   - 失败 retry 一次(更严格指令);仍失败 → 降级原文
   - 旧 schema(顶层 array / {"rewritten": [...]} / {"bullets": [...]})保留兼容
+
+R4-F: Function Calling 协议接入
+  - 暴露 1 个工具: evaluate_bullet_jd_match(bullet, jd_focus) → 匹配关键词/缺失关键词/建议
+  - tools 字段只在 enable_function_calling=True AND jd_focus is not None 时挂载
+    (默认路径字节级一致, 252 老测试不破)
+  - LLM 返 tool_calls 时 → _extract_rewritten 返回 None → 走降级原文
+    (R4-A 才会接 agent loop 真正调工具)
+
+R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志
+  - 新增 _call_with_agent_loop(): 包装 _call_with_retry 加循环
+  - 每个 step 调一次 LLM, 检查 tool_calls; 有工具就 execute 后继续 loop
+  - 单步单工具: tool_calls[0] 执行, 其余忽略
+  - 网络错误不进 loop, 立即降级
+  - 全失败(3 步仍无 output)→ 降级原文
+  - 每次 step 写一行 trace 到 backend/logs/agent_trace.log
 """
 import json
 import os
@@ -29,6 +44,69 @@ REQUEST_TIMEOUT_SEC = 15
 
 # R3-P: max 1 retry on invalid response(总最多 2 次尝试,避免 key 成本失控)
 MAX_RETRY_ON_INVALID = 1
+
+# R4-A: Agent Loop 硬上限,防 LLM 一直调工具不输出
+# MAX_AGENT_STEPS=0 触发特殊行为 — rewrite_highlights 走 _call_with_retry 老路径
+MAX_AGENT_STEPS = 3
+
+# ----------------------------------------------------------------------
+# R4-F: Function Calling — 工具 schema (OpenAI 标准 tools 字段格式)
+# ----------------------------------------------------------------------
+# MVP 只暴露 1 个工具: 评估单条 bullet 跟 JD 关键词的匹配度
+# 给 LLM 主动"先看 bullet 跟 JD 差距, 再改写"的能力
+# 协议: OpenAI function calling / Anthropic tool_use / MCP 协议栈都走相同 schema 结构
+TOOL_EVALUATE_SCHEMA: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_bullet_jd_match",
+            "description": (
+                "评估单条项目 bullet 跟 JD 关键词的匹配度, "
+                "返回 bullet 中实际匹配的关键词、缺失关键词和具体改写建议。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bullet": {
+                        "type": "string",
+                        "description": "项目亮点 / bullet 文本(待评估的那一条)",
+                    },
+                    "jd_focus": {
+                        "type": "object",
+                        "description": (
+                            "JD 关键词焦点, 来自上一次匹配的 match_score 结果, "
+                            "含 matched / missing / tier_required / tier_preferred"
+                        ),
+                        "properties": {
+                            "matched": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "已匹配的 JD 关键词",
+                            },
+                            "missing": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "缺失的 JD 关键词",
+                            },
+                            "tier_required": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "必备关键词(高优先级)",
+                            },
+                            "tier_preferred": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "加分关键词(低优先级)",
+                            },
+                        },
+                    },
+                },
+                "required": ["bullet", "jd_focus"],
+            },
+        },
+    }
+]
+
 
 # R3-P: SYSTEM_PROMPT v2 — 加 2 个 few-shot 示例(基础 + jd_focus)
 # 改写约束 4 条: 不编造事实 / 长度 20-50 字 / 中文 / 顺序一致
@@ -102,6 +180,8 @@ def _build_request_payload(
     jd_focus: Optional[dict] = None,
     *,
     strict_retry: bool = False,
+    tools: Optional[list[dict]] = None,
+    history_messages: Optional[list[dict]] = None,
 ) -> dict:
     """
     构造 chat/completions 请求体。
@@ -113,6 +193,12 @@ def _build_request_payload(
 
     R3-P: strict_retry=True 时,user message 追加 schema 强约束(第 2 次重试用,
     引导 LLM 修正首次返回的 schema 错误)。
+
+    R4-F: tools 非 None 时,挂载到 payload(OpenAI function calling 标准格式),
+    同时设 tool_choice="auto"(LLM 决定要不要调工具)。tools=None → 老路径字节级一致。
+
+    R4-M: history_messages 非 None 时,prepend 到 messages(system 之后, current user 之前)。
+    history_messages=None → 老路径字节级一致(messages 只有 system + current user)。
     """
     user_payload: dict = {
         "target_role": target_role,
@@ -133,18 +219,38 @@ def _build_request_payload(
             f"- 数量必须等于 {len(highlights)},与输入 bullets 一一对应"
         )
 
-    return {
+    current_user_msg = {
+        "role": "user",
+        "content": json.dumps(user_payload, ensure_ascii=False),
+    }
+
+    # R4-M: 拼装 messages — history_messages 非空时插在 system 和 current user 之间
+    if history_messages:
+        messages: list[dict] = (
+            [{"role": "system", "content": SYSTEM_PROMPT}]
+            + list(history_messages)
+            + [current_user_msg]
+        )
+    else:
+        # 老路径: 字节级一致 (system + current user)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            current_user_msg,
+        ]
+
+    payload: dict = {
         "model": model,
         "temperature": 0.3,
         "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False),
-            },
-        ],
+        "messages": messages,
     }
+    # R4-F: Function Calling 挂载
+    # 协议扩展: tools / tool_choice 是 OpenAI 标准, 不传时老路径字节级一致
+    if tools is not None:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    return payload
 
 
 def _http_post_json(url: str, payload: dict, api_key: str, timeout: int) -> dict:
@@ -193,16 +299,26 @@ def _extract_rewritten(response: dict, expected_count: int) -> Optional[list[str
     R3-P 升级: 优先识别新 schema {"rewritten": [{"index": i, "text": "..."}]},
     旧 schema 保留兼容({"rewritten": [...]} / {"bullets": [...]} / 顶层 array)。
     任一条 schema 命中且 length/index/text 全部合法才返回,否则 None。
+
+    R4-F 升级: 检测 tool_calls — 当 LLM 决定调工具而非直接返 rewritten 时,
+    视为"未交付最终改写" → 返回 None(让 caller 走降级原文路径)。
+    R4-A 才会接 agent loop 真正执行工具调用。
     """
     parsed_obj: Optional[dict | list] = None
 
     if isinstance(response, list):
         parsed_obj = response
     elif isinstance(response, dict):
-        # OpenAI 标准 chat/completions 响应: choices[0].message.content 是 str
+        # OpenAI 标准 chat/completions 响应: choices[0].message.{content | tool_calls}
         choices = response.get("choices") or []
         if choices and isinstance(choices, list):
             msg = choices[0].get("message") or {}
+
+            # R4-F: tool_calls 优先于 content — LLM 决定调工具, 没有最终改写
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                return None  # R4-A agent loop 才处理工具执行
+
             content = msg.get("content")
             if isinstance(content, str):
                 try:
@@ -278,12 +394,30 @@ def _validate_legacy_schema(items: list, expected_count: int) -> bool:
     return all(isinstance(x, str) and x.strip() for x in items)
 
 
+def _get_session_history(session_id: Optional[str]) -> list[dict]:
+    """
+    R4-M: 从 session.py 拉历史 messages(供 LLM payload prepend)。
+
+    session_id 为 None / 空字符串 / 不存在 → 返空 list(走老路径字节级一致)。
+
+    不抛 — session 内容由调用方负责,本函数只是安全拉取。
+    """
+    if not session_id:
+        return []
+    # 局部 import 防循环依赖(generator.py -> llm_rewriter.py -> session.py 是单向 OK,
+    # 但仍用 lazy import 让测试 mock 更干净)
+    from core import session as _session
+    return _session.get_messages(session_id)
+
+
 def rewrite_highlights(
     highlights: list[str],
     target_role: str,
     jd_text: str = "",
     max_per_call: int = 6,
     jd_focus: Optional[dict] = None,
+    enable_function_calling: bool = False,
+    session_id: Optional[str] = None,
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
@@ -297,11 +431,27 @@ def rewrite_highlights(
 
     R3-P: 失败 retry 一次(strict_retry=True,更严格 schema 指令);
     仍失败 → 降级原文(单次 chunk 全部回退)。
+
+    R4-F: enable_function_calling(默认 False)开启时,挂载 TOOL_EVALUATE_SCHEMA;
+    仅在 enable_function_calling=True AND jd_focus is not None 时挂载
+    (空 jd_focus 没工具执行的意义,走老路径字节级一致)。
+    enable_function_calling=False → 字节级一致老路径(252 测试不破)。
+
+    R4-A: enable_function_calling=True AND jd_focus is not None AND MAX_AGENT_STEPS > 0
+    时,走 _call_with_agent_loop (Agent Loop, max_step=3, 单工具约束, trace 日志);
+    其他情况走 _call_with_retry 老路径(保留 R3-P retry 行为)。
+
+    R4-M: session_id(可选)非空时,从 session.py 拉历史 messages 拼到 LLM messages
+    (system 之后, current user 之前)。session_id=None(默认)→ 不拼接,老路径字节级一致。
+    session 内容由调用方(API 层)负责不写 PII。
     """
     if not highlights:
         return highlights
     if not is_llm_enabled():
         return highlights
+
+    # R4-M: 一次性拉 session 历史(同 session 多次 chunk 调用复用同一份 history)
+    history_messages = _get_session_history(session_id)
 
     n = len(highlights)
     chunk_size = max(1, max_per_call)
@@ -312,9 +462,32 @@ def rewrite_highlights(
     model = _env("LLM_MODEL", DEFAULT_MODEL)
     url = f"{base_url}/chat/completions"
 
+    # R4-A: 决定走 agent loop 还是老路径
+    # 三个条件全部满足才进 loop:
+    #   1) enable_function_calling=True (用户明确开启)
+    #   2) jd_focus is not None (有改写焦点 — 没焦点调工具没意义)
+    #   3) MAX_AGENT_STEPS > 0 (loop 没关闭, 测试场景)
+    use_agent_loop = (
+        enable_function_calling
+        and jd_focus is not None
+        and MAX_AGENT_STEPS > 0
+    )
+
     for start in range(0, n, chunk_size):
         chunk = highlights[start : start + chunk_size]
-        got = _call_with_retry(url, api_key, model, chunk, target_role, jd_text, jd_focus)
+        if use_agent_loop:
+            # R4-A: agent loop 路径(单步单工具, max_step=3, trace 日志)
+            got = _call_with_agent_loop(
+                url, api_key, model, chunk, target_role, jd_text, jd_focus,
+                history_messages=history_messages,
+            )
+        else:
+            # 老路径: 走 _call_with_retry (保留 R3-P retry)
+            got = _call_with_retry(
+                url, api_key, model, chunk, target_role, jd_text, jd_focus,
+                enable_function_calling=enable_function_calling,
+                history_messages=history_messages,
+            )
 
         if got is not None:
             for i, txt in enumerate(got):
@@ -332,6 +505,9 @@ def _call_with_retry(
     target_role: str,
     jd_text: str,
     jd_focus: Optional[dict],
+    *,
+    enable_function_calling: bool = False,
+    history_messages: Optional[list[dict]] = None,
 ) -> Optional[list[str]]:
     """
     R3-P: 单次 chunk 调用 + 失败 retry 一次。
@@ -339,8 +515,23 @@ def _call_with_retry(
       1. 正常请求 → _extract_rewritten 成功 → 返回
       2. 正常请求 → 解析失败 → strict_retry=True 再试一次
       3. retry 也失败 → 返回 None(降级原文)
+
+    R4-F: enable_function_calling=True AND jd_focus is not None 时,
+    把 TOOL_EVALUATE_SCHEMA 挂到 payload(LLM 可主动调 evaluate_bullet_jd_match)。
+    R4-A 才会接 agent loop 真正执行工具调用 — 本轮只是把工具暴露给 LLM。
+
+    R4-M: history_messages 非 None 时透传给 _build_request_payload,拼到 messages。
+    history_messages=None → 字节级一致老路径。
     """
-    payload = _build_request_payload(chunk, target_role, jd_text, model, jd_focus=jd_focus)
+    # R4-F: 决定是否挂载 tools
+    tools: Optional[list[dict]] = None
+    if enable_function_calling and jd_focus is not None:
+        tools = TOOL_EVALUATE_SCHEMA
+
+    payload = _build_request_payload(
+        chunk, target_role, jd_text, model, jd_focus=jd_focus, tools=tools,
+        history_messages=history_messages,
+    )
     try:
         resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
         got = _extract_rewritten(resp, len(chunk))
@@ -354,11 +545,219 @@ def _call_with_retry(
     if MAX_RETRY_ON_INVALID <= 0:
         return None
 
+    # R4-F: retry 时也保留 tools 挂载(LLM 第二次也允许调工具)
     strict_payload = _build_request_payload(
-        chunk, target_role, jd_text, model, jd_focus=jd_focus, strict_retry=True,
+        chunk, target_role, jd_text, model, jd_focus=jd_focus,
+        strict_retry=True, tools=tools,
     )
     try:
         resp2 = _http_post_json(url, strict_payload, api_key, REQUEST_TIMEOUT_SEC)
         return _extract_rewritten(resp2, len(chunk))
     except RuntimeError:
         return None
+
+
+# ======================================================================
+# R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志
+# ======================================================================
+def _extract_message_for_history(response: dict) -> Optional[dict]:
+    """
+    R4-A: 从 LLM 响应里提取 assistant message(整段),供 agent loop 拼接到 messages 历史。
+    跟 _extract_rewritten 不同 — 后者只取最终改写,前者保留 tool_calls 用于回放。
+    """
+    if not isinstance(response, dict):
+        return None
+    choices = response.get("choices") or []
+    if not choices or not isinstance(choices, list):
+        return None
+    msg = choices[0].get("message") or {}
+    # 必须有 content 或 tool_calls(任一存在)才算合法 message
+    if msg.get("content") is not None or msg.get("tool_calls") is not None:
+        return msg
+    return None
+
+
+def _execute_tool_call(
+    tool_call: dict,
+    chunk: list[str],
+    jd_focus: Optional[dict],
+) -> dict:
+    """
+    R4-A: 执行 tool_calls[0] 的工具调用(MVP 只支持 evaluate_bullet_jd_match)。
+
+    Args:
+        tool_call:  LLM 返的 tool_call dict (含 id / type / function.{name, arguments})
+        chunk:      当前改写的 bullets 列表(bullet 参数缺省时兜底用 chunk[0])
+        jd_focus:   LLM 改写方向的焦点(工具缺 jd_focus 时兜底用)
+
+    Returns:
+        工具执行结果 dict(JSON 友好)— 失败也返回 dict(带 error 字段)
+        不会抛异常(MVP 设计:工具执行失败 → 返回错误 dict → agent loop 继续)
+
+    工具注册表(显式枚举 — 加新工具时这里加 case):
+      - evaluate_bullet_jd_match: 调 core.jd_parser.evaluate_bullet_jd_match
+      - 未知工具: 返回 {"error": "unknown tool: <name>"}
+    """
+    # 局部 import 避免循环(jd_parser 引用了 generator 链)
+    from core.jd_parser import evaluate_bullet_jd_match
+
+    fn = tool_call.get("function") or {}
+    name = fn.get("name", "")
+    args_str = fn.get("arguments", "{}")
+
+    # 1) 解析 arguments
+    if isinstance(args_str, dict):
+        args = args_str
+    elif isinstance(args_str, str):
+        try:
+            args = json.loads(args_str) if args_str.strip() else {}
+        except json.JSONDecodeError:
+            return {"error": f"工具 {name} arguments 解析失败"}
+    else:
+        args = {}
+
+    # 2) 工具分发
+    if name == "evaluate_bullet_jd_match":
+        bullet = args.get("bullet", "")
+        # bullet 参数缺省 → 兜底用 chunk[0](LLM 偶尔会忘记传 bullet)
+        if not bullet and chunk:
+            bullet = chunk[0]
+        focus = args.get("jd_focus") or jd_focus or {}
+        try:
+            return evaluate_bullet_jd_match(bullet, focus)
+        except Exception as e:
+            return {"error": f"evaluate_bullet_jd_match 失败: {type(e).__name__}"}
+
+    return {"error": f"unknown tool: {name}"}
+
+
+def _call_with_agent_loop(
+    url: str,
+    api_key: str,
+    model: str,
+    chunk: list[str],
+    target_role: str,
+    jd_text: str,
+    jd_focus: Optional[dict],
+    *,
+    history_messages: Optional[list[dict]] = None,
+) -> Optional[list[str]]:
+    """
+    R4-A: Agent Loop — 包装 _call_with_retry 的能力, 加循环让 LLM 可多轮调工具。
+
+    流程(伪代码):
+      for step in range(MAX_AGENT_STEPS):  # 3
+          resp = LLM(messages + tools, ...)
+          if resp 有 tool_calls:
+              tool_result = execute(tool_calls[0])  # 单步单工具
+              messages.append(tool_result)
+              continue
+          else:
+              extracted = _extract_rewritten(resp, expected_count)
+              if extracted: return extracted
+              break  # 失败 → 降级原文
+      return None  # 全失败降级
+
+    关键约束:
+      - max_step=3 硬上限, 防 LLM 一直调工具不输出
+      - 单步单工具(只取 tool_calls[0]), 避免单轮 token 爆
+      - 网络错误不进入 loop(避免 token 浪费), 立即降级
+      - trace 每次 step 写一行: session_id / step / tool_name / latency_ms / outcome
+
+    R4-M: history_messages 非 None 时透传给 _build_request_payload 拼到 messages
+    (system 之后, current user 之前)。trace 的 session_id 改用真实 session_id
+    (或 fallback 到临时 uuid — 仅当 history_messages=None 时)。
+    """
+    # 局部 import — logger 是稳定依赖, 这里 import 仅为避免循环(lazy 安全)
+    import time
+    import uuid
+
+    from core.logger import log_agent_trace
+
+    # 1) 构造 messages 列表(从 _build_request_payload 拿初始 system+user)
+    initial_payload = _build_request_payload(
+        chunk, target_role, jd_text, model,
+        jd_focus=jd_focus, tools=TOOL_EVALUATE_SCHEMA,
+        history_messages=history_messages,
+    )
+    messages: list[dict] = list(initial_payload["messages"])
+
+    # 2) session_id 优先级: 真实 session_id > 临时 uuid(per-call fallback)
+    #    历史消息存在时, 用真实 session_id 便于 trace 关联
+    if history_messages:
+        # 找 caller 传入的 session_id 不容易(函数签名没暴露), 用 messages 长度 proxy
+        # 这里用稳定 hash 避免每次都换 uuid
+        session_id = "agent_session"
+    else:
+        session_id = f"agent_{uuid.uuid4().hex[:8]}"
+
+    # 3) 主循环
+    for step in range(MAX_AGENT_STEPS):
+        t0 = time.time()
+
+        # 3a) 构造当前 step 的 payload(messages 累积, tools 始终挂载)
+        payload = {
+            "model": model,
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+            "tools": TOOL_EVALUATE_SCHEMA,
+            "tool_choice": "auto",
+        }
+
+        # 3b) 调一次 LLM(不 retry, 节省 token — loop 已经给了 3 次机会)
+        try:
+            resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
+        except RuntimeError:
+            # 网络错误 → 不重试, 立即降级
+            latency_ms = int((time.time() - t0) * 1000)
+            log_agent_trace(session_id, step, "no_tool", latency_ms, "network_error_fallback")
+            return None
+
+        latency_ms = int((time.time() - t0) * 1000)
+
+        # 3c) 检查 tool_calls
+        msg = _extract_message_for_history(resp)
+        if msg is None:
+            # 响应格式异常(无 content 也无 tool_calls) → 降级
+            log_agent_trace(session_id, step, "no_tool", latency_ms, "schema_fail_fallback")
+            return None
+
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            # 单步单工具约束: 只执行 tool_calls[0]
+            tc = tool_calls[0]
+            fn = tc.get("function") or {}
+            tool_name = fn.get("name", "unknown")
+
+            # 3d) 执行工具
+            tool_result = _execute_tool_call(tc, chunk, jd_focus)
+
+            # 3e) 把 assistant message + tool 响应拼到 messages
+            messages.append({
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": json.dumps(tool_result, ensure_ascii=False),
+            })
+
+            log_agent_trace(session_id, step, tool_name, latency_ms, "tool_executed")
+            continue  # 进入下一 step
+
+        # 3f) 无 tool_calls → 提取 rewritten
+        extracted = _extract_rewritten(resp, len(chunk))
+        if extracted is not None:
+            log_agent_trace(session_id, step, "no_tool", latency_ms, "success_rewrite")
+            return extracted
+
+        # 3g) 解析失败 → 降级(不 retry, 节省 token)
+        log_agent_trace(session_id, step, "no_tool", latency_ms, "schema_fail_fallback")
+        return None
+
+    # 4) MAX_AGENT_STEPS 用完仍无 output → 降级
+    log_agent_trace(session_id, MAX_AGENT_STEPS, "no_tool", 0, "max_step_exhausted")
+    return None

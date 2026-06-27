@@ -56,6 +56,10 @@ class PreviewRequest(BaseModel):
     jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
     # R3-M.3: academic 模板 detailed/compact 分支(None = 走 LAYOUT_CONFIG 默认 compact)
     academic_layout: str | None = None
+    # R4-F: 可选 Function Calling 开关(默认 False = 走老路径,字节级一致)
+    enable_function_calling: bool = False
+    # R4-M: 可选 session_id(默认 None = 走老路径,字节级一致)
+    session_id: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -66,6 +70,10 @@ class GenerateRequest(BaseModel):
     jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
     # R3-M.3: academic 模板 detailed/compact 分支(None = 走 LAYOUT_CONFIG 默认 compact)
     academic_layout: str | None = None
+    # R4-F: 可选 Function Calling 开关(默认 False = 走老路径,字节级一致)
+    enable_function_calling: bool = False
+    # R4-M: 可选 session_id(默认 None = 走老路径,字节级一致)
+    session_id: str | None = None
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -137,6 +145,8 @@ def preview(req: PreviewRequest):
             template=req.template,
             jd_text=jd_text,
             academic_layout=req.academic_layout,  # R3-M.3
+            enable_function_calling=req.enable_function_calling,  # R4-F
+            session_id=req.session_id,  # R4-M
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -159,6 +169,8 @@ def generate(req: GenerateRequest):
             template=req.template,
             jd_text=jd_text,
             academic_layout=req.academic_layout,  # R3-M.3
+            enable_function_calling=req.enable_function_calling,  # R4-F
+            session_id=req.session_id,  # R4-M
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

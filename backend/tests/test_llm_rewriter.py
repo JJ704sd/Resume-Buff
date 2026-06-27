@@ -678,3 +678,621 @@ class TestSchemaValidationUnit:
     def test_validate_legacy_schema_empty_string(self):
         items = ["a", "  ", "c"]
         assert llm._validate_legacy_schema(items, 3) is False
+
+
+# ======================================================================
+# R4-F: Function Calling — tools schema 挂载 + tool_calls 解析分支
+# ======================================================================
+def _openai_chat_response_with_tool_calls(tool_calls: list[dict]) -> dict:
+    """
+    R4-F: 构造一个 OpenAI chat/completions 响应,message 含 tool_calls 字段
+    (无 content,模拟 LLM 决定调工具而非直接返文本)
+    """
+    return {
+        "id": "chatcmpl-fake-tool",
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+
+class TestFunctionCalling:
+    """R4-F: Function Calling 协议接入 — 5 case 锁死行为。"""
+
+    def test_tools_schema_structure(self):
+        """TOOL_EVALUATE_SCHEMA 结构:含 1 个 function 工具 + 正确 parameters"""
+        assert isinstance(llm.TOOL_EVALUATE_SCHEMA, list)
+        assert len(llm.TOOL_EVALUATE_SCHEMA) == 1
+        tool = llm.TOOL_EVALUATE_SCHEMA[0]
+        assert tool["type"] == "function"
+        fn = tool["function"]
+        assert fn["name"] == "evaluate_bullet_jd_match"
+        # description 必含, 提示 LLM 工具语义
+        assert "关键词" in fn["description"] or "JD" in fn["description"]
+        # parameters: object 类型 + bullet/jd_focus 必填
+        params = fn["parameters"]
+        assert params["type"] == "object"
+        assert "bullet" in params["properties"]
+        assert "jd_focus" in params["properties"]
+        assert set(params["required"]) == {"bullet", "jd_focus"}
+        # jd_focus 内部 4 个字段 (matched/missing/tier_required/tier_preferred) 都应存在
+        jd_focus_props = params["properties"]["jd_focus"]["properties"]
+        for key in ("matched", "missing", "tier_required", "tier_preferred"):
+            assert key in jd_focus_props, f"jd_focus 必含 {key}"
+
+    def test_default_path_does_not_attach_tools(self, enable_llm, monkeypatch):
+        """enable_function_calling=False(默认)→ payload 不含 tools 字段(老路径字节级一致)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric", jd_text="JD"
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" not in payload, (
+            f"默认路径不应挂 tools 字段,实际: {payload.keys()}"
+        )
+        assert "tool_choice" not in payload
+
+    def test_jd_focus_none_does_not_attach_tools(self, enable_llm, monkeypatch):
+        """jd_focus=None 时即使 enable_function_calling=True 也不挂 tools
+        (空 jd_focus 没工具执行的意义,避免污染老调用路径)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric",
+            enable_function_calling=True,  # 开 FC
+            jd_focus=None,  # 但 jd_focus 缺
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" not in payload, "jd_focus=None 时不应挂 tools"
+
+    def test_enable_function_calling_attaches_tools(self, enable_llm, monkeypatch):
+        """enable_function_calling=True + jd_focus 非空 → payload 含 tools 字段"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": ["Python"], "tier_preferred": []},
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" in payload
+        assert payload["tools"] == llm.TOOL_EVALUATE_SCHEMA
+        assert payload["tool_choice"] == "auto"
+
+    def test_tool_calls_response_falls_back_to_original(self, enable_llm, monkeypatch):
+        """LLM 返 tool_calls(无 content)→ _extract_rewritten 返回 None → 降级原文
+        (R4-A 才接 agent loop 真正执行工具;R4-F 阶段 tool_calls 视为未交付改写)"""
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "evaluate_bullet_jd_match",
+                    "arguments": json.dumps(
+                        {"bullet": "x", "jd_focus": {"matched": [], "missing": []}},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        ]
+        body = json.dumps(
+            _openai_chat_response_with_tool_calls(tool_calls)
+        ).encode("utf-8")
+        _patch_urlopen(monkeypatch, body=body)
+
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # LLM 返 tool_calls → 没交付最终改写 → 降级原文
+        assert out == bullets, (
+            f"tool_calls 响应应降级原文,实际: {out}"
+        )
+
+
+# ======================================================================
+# R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志
+# ======================================================================
+def _patch_http_post_json_step_aware(monkeypatch, response_factory):
+    """
+    R4-A: 替换 _http_post_json 为按 step 返回不同响应的 mock。
+    response_factory: 函(step_index, payload_dict) -> dict (LLM 响应) 或 raise RuntimeError
+
+    返回 captured: dict 含 "calls" 列表(每条 {"step", "url", "messages", "data"})
+
+    为什么要 mock _http_post_json 而不是 urllib.request.urlopen?
+    - _call_with_agent_loop 直接调 _http_post_json (不走 _call_with_retry)
+    - mock _http_post_json 能精确控制每个 step 的响应
+    """
+    captured = {"calls": []}
+
+    def fake_http_post_json(url, payload, api_key, timeout):
+        idx = len(captured["calls"])
+        captured["calls"].append({
+            "step": idx,
+            "url": url,
+            "messages": payload.get("messages", []),
+            "data": payload,
+        })
+        return response_factory(idx, payload)
+
+    monkeypatch.setattr("core.llm_rewriter._http_post_json", fake_http_post_json)
+    return captured
+
+
+def _tool_call_response(tool_name: str, arguments: dict, call_id: str = "call_1") -> dict:
+    """构造一个 LLM tool_calls 响应(无 content)"""
+    return {
+        "id": "chatcmpl-agent",
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                    },
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }
+
+
+def _rewrite_response(bullets: list[str]) -> dict:
+    """构造一个标准 rewrite 响应 (OpenAI chat/completions, 新 schema)"""
+    return _openai_chat_response(bullets)
+
+
+class TestAgentLoop:
+    """R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志 — 8 case 锁死行为。"""
+
+    def test_max_step_exhausted_falls_back(self, enable_llm, monkeypatch, tmp_path):
+        """LLM 连续 3 步都返 tool_calls → 第 4 步被 max_step 截断 → 降级原文 + trace 记 max_step_exhausted"""
+        # 用 tmp_path 重定向 trace 日志,避免污染
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", tmp_path / "agent_trace.log")
+
+        # 每步都返 tool_calls(让 loop 跑满 3 步)
+        captured = _patch_http_post_json_step_aware(
+            monkeypatch,
+            response_factory=lambda step, payload: _tool_call_response(
+                "evaluate_bullet_jd_match",
+                {"bullet": "x", "jd_focus": {"matched": [], "missing": []}},
+            ),
+        )
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # 3 步都调了 LLM, 但都没拿到 output → 降级原文
+        assert len(captured["calls"]) == llm.MAX_AGENT_STEPS
+        assert out == bullets, f"max_step 用完应降级原文, 实际: {out}"
+
+    def test_tool_execution_success_path(self, enable_llm, monkeypatch, tmp_path):
+        """Step 0 返 tool_calls → 工具执行 → Step 1 返 rewritten → 成功拿改写"""
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", tmp_path / "agent_trace.log")
+
+        # 工厂: step 0 返 tool_calls, step 1 返 rewritten
+        def factory(step, payload):
+            if step == 0:
+                return _tool_call_response(
+                    "evaluate_bullet_jd_match",
+                    {"bullet": "原文 1", "jd_focus": {
+                        "matched": ["Python"], "missing": ["PyTorch"]}},
+                )
+            return _rewrite_response(["改写 0", "改写 1"])
+
+        captured = _patch_http_post_json_step_aware(monkeypatch, response_factory=factory)
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # 2 步: step 0 调工具, step 1 拿改写
+        assert len(captured["calls"]) == 2
+        assert out == ["改写 0", "改写 1"]
+        # Step 1 的 messages 应含 step 0 的 tool 响应
+        step1_messages = captured["calls"][1]["messages"]
+        roles = [m["role"] for m in step1_messages]
+        assert "tool" in roles, f"Step 1 messages 应含 tool 角色, 实际: {roles}"
+
+    def test_tool_execution_failure_fallback(self, enable_llm, monkeypatch, tmp_path):
+        """Step 0 返 tool_calls 但 LLM 返的 tool 名字不在注册表 → 工具失败 → step 1 继续 → 拿不到 → 降级"""
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", tmp_path / "agent_trace.log")
+
+        def factory(step, payload):
+            if step == 0:
+                # 未知工具 — _execute_tool_call 会返 {"error": "unknown tool: foo"}
+                return _tool_call_response(
+                    "unknown_tool_foo",
+                    {"arg": "x"},
+                )
+            # step 1 返 schema 失败响应(无 content / 无 tool_calls) → 降级
+            return {
+                "id": "chatcmpl-bad",
+                "model": "gpt-4o-mini",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "garbage"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        captured = _patch_http_post_json_step_aware(monkeypatch, response_factory=factory)
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # 2 步: tool 执行(返 error) + 下次 schema 失败 → 降级
+        assert len(captured["calls"]) == 2
+        assert out == bullets, f"工具执行失败 + schema 失败应降级原文, 实际: {out}"
+
+    def test_trace_log_format_and_fields(self, enable_llm, monkeypatch, tmp_path):
+        """trace 日志写入 backend/logs/agent_trace.log(此处用 tmp_path 模拟)
+        格式: [ISO 时间] session=xxx step=N tool=xxx latency_ms=N outcome=xxx
+        """
+        trace_file = tmp_path / "agent_trace.log"
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", trace_file)
+
+        # Step 0 tool → step 1 rewrite
+        def factory(step, payload):
+            if step == 0:
+                return _tool_call_response(
+                    "evaluate_bullet_jd_match",
+                    {"bullet": "x", "jd_focus": {"matched": [], "missing": []}},
+                )
+            return _rewrite_response(["ok 0", "ok 1"])
+
+        _patch_http_post_json_step_aware(monkeypatch, response_factory=factory)
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": [],
+                      "tier_required": [], "tier_preferred": []},
+        )
+
+        # 验证文件存在 + 内容
+        assert trace_file.exists(), "agent_trace.log 应被创建"
+        content = trace_file.read_text(encoding="utf-8")
+        lines = [l for l in content.strip().split("\n") if l]
+        # 2 步: step 0 tool_executed + step 1 success_rewrite
+        assert len(lines) == 2, f"应有 2 行 trace, 实际: {len(lines)}"
+        # 第 1 行: step 0 + tool_executed
+        import re
+        assert re.match(
+            r"\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] session=agent_[0-9a-f]{8} step=0 "
+            r"tool=evaluate_bullet_jd_match latency_ms=\d+ outcome=tool_executed",
+            lines[0],
+        ), f"第 1 行格式错: {lines[0]}"
+        # 第 2 行: step 1 + success_rewrite
+        assert re.match(
+            r"\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] session=agent_[0-9a-f]{8} step=1 "
+            r"tool=no_tool latency_ms=\d+ outcome=success_rewrite",
+            lines[1],
+        ), f"第 2 行格式错: {lines[1]}"
+        # 隐私验证: 日志不应含 bullet / message 内容
+        assert "原文 0" not in content
+        assert "原文 1" not in content
+        assert "ok 0" not in content
+
+    def test_network_error_no_loop(self, enable_llm, monkeypatch, tmp_path):
+        """Step 0 网络错误 → 不进 loop, 立即降级原文 + trace 记 network_error_fallback"""
+        trace_file = tmp_path / "agent_trace.log"
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", trace_file)
+
+        from urllib.error import URLError
+        captured_calls = {"n": 0}
+
+        def fake_http_post_json(url, payload, api_key, timeout):
+            captured_calls["n"] += 1
+            raise RuntimeError(f"URLError: connection refused")
+
+        monkeypatch.setattr("core.llm_rewriter._http_post_json", fake_http_post_json)
+
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # 只调了 1 次(网络错误立即降级, 不进 loop)
+        assert captured_calls["n"] == 1
+        assert out == bullets
+        # trace 记录 network_error_fallback
+        content = trace_file.read_text(encoding="utf-8")
+        assert "network_error_fallback" in content
+        assert "step=0" in content
+
+    def test_max_step_zero_uses_old_path(self, enable_llm, monkeypatch, tmp_path):
+        """MAX_AGENT_STEPS=0 时 rewrite_highlights 走 _call_with_retry 老路径(不调 agent loop)"""
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", tmp_path / "agent_trace.log")
+
+        # 临时把 MAX_AGENT_STEPS 改成 0 — rewrite_highlights 应走 _call_with_retry
+        monkeypatch.setattr(llm, "MAX_AGENT_STEPS", 0)
+
+        # _call_with_retry 走 _http_post_json, 我们只测它被调
+        captured = _patch_http_post_json_step_aware(
+            monkeypatch,
+            response_factory=lambda step, payload: _rewrite_response(["ok 0", "ok 1"]),
+        )
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": [],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # _call_with_retry 调 1 次(没 retry)
+        assert len(captured["calls"]) == 1
+        assert out == ["ok 0", "ok 1"]
+        # trace 不应有 success_rewrite 等 outcome(走老路径不写 trace)
+        trace_file = tmp_path / "agent_trace.log"
+        if trace_file.exists():
+            content = trace_file.read_text(encoding="utf-8")
+            # 走老路径 _call_with_retry 不调 log_agent_trace
+            assert "success_rewrite" not in content
+
+    def test_single_step_single_tool_constraint(self, enable_llm, monkeypatch, tmp_path):
+        """单步单工具约束: LLM 返 2 个 tool_calls → 只执行 [0], [1] 忽略"""
+        import core.logger
+        monkeypatch.setattr(core.logger, "AGENT_TRACE_PATH", tmp_path / "agent_trace.log")
+
+        def factory(step, payload):
+            if step == 0:
+                # 返 2 个 tool_calls — 只应执行 [0]
+                return {
+                    "id": "chatcmpl-2-tools",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "evaluate_bullet_jd_match",
+                                        "arguments": json.dumps(
+                                            {"bullet": "x", "jd_focus": {"matched": [], "missing": []}},
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                },
+                                {
+                                    "id": "call_2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "evaluate_bullet_jd_match",  # 同名, 应该只执行 1 次
+                                        "arguments": json.dumps(
+                                            {"bullet": "y", "jd_focus": {"matched": [], "missing": []}},
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                },
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }],
+                }
+            return _rewrite_response(["ok 0", "ok 1"])
+
+        captured = _patch_http_post_json_step_aware(monkeypatch, response_factory=factory)
+        out = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": [],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # Step 0: 收到 2 个 tool_calls → 单步单工具 → 执行 [0] → 进 step 1
+        # Step 1: 返 rewritten → 成功
+        assert len(captured["calls"]) == 2
+        # Step 1 的 messages 应只含 1 个 tool 响应(单工具约束)
+        step1_messages = captured["calls"][1]["messages"]
+        tool_messages = [m for m in step1_messages if m["role"] == "tool"]
+        assert len(tool_messages) == 1, (
+            f"单步单工具约束: 应只有 1 个 tool 消息, 实际: {len(tool_messages)}"
+        )
+        assert out == ["ok 0", "ok 1"]
+
+    def test_execute_tool_call_known_tool(self, enable_llm):
+        """_execute_tool_call: 已知工具 (evaluate_bullet_jd_match) 应返 {matched, missing, suggestion}"""
+        tc = {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "evaluate_bullet_jd_match",
+                "arguments": json.dumps(
+                    {"bullet": "基于 Python 做 LLM 评测",
+                     "jd_focus": {"matched": ["Python"], "missing": ["PyTorch"],
+                                  "tier_required": [], "tier_preferred": []}},
+                    ensure_ascii=False,
+                ),
+            },
+        }
+        result = llm._execute_tool_call(
+            tc, chunk=["x"], jd_focus={"matched": ["Python"], "missing": []}
+        )
+        # 返 matched + missing + suggestion(无 error)
+        assert "matched_keywords" in result
+        assert "missing_keywords" in result
+        assert "suggestion" in result
+        assert "error" not in result
+        assert "Python" in result["matched_keywords"]
+        assert "PyTorch" in result["missing_keywords"]
+
+    def test_execute_tool_call_unknown_tool(self, enable_llm):
+        """_execute_tool_call: 未知工具 → 返 {"error": "unknown tool: ..."}"""
+        tc = {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "magic_universe_tool",
+                "arguments": json.dumps({"x": 1}, ensure_ascii=False),
+            },
+        }
+        result = llm._execute_tool_call(tc, chunk=["x"], jd_focus=None)
+        assert "error" in result
+        assert "magic_universe_tool" in result["error"]
+
+
+# ======================================================================
+# R4-M: Session 记忆 (进程内 deque,上限 10) + 隐私隔离 — 集成测试
+# ======================================================================
+@pytest.fixture
+def reset_sessions(monkeypatch):
+    """重置 _SESSIONS 全局 state, 防止测试间污染"""
+    from core import session as session_mod
+    session_mod._SESSIONS.clear()
+    yield
+    session_mod._SESSIONS.clear()
+
+
+class TestSessionIntegration:
+    """R4-M: session_id 拼接到 LLM messages — 3 case 锁死集成行为"""
+
+    def test_session_id_prepends_history_to_messages(
+        self, enable_llm, monkeypatch, reset_sessions
+    ):
+        """session_id 非空时, LLM payload 的 messages 应包含 session 历史
+        (从 session.get_messages 拉出来, prepend 到 system 之后, current user 之前)
+        """
+        from core import session as session_mod
+
+        # 准备 session: 先 append 2 条历史
+        sid = session_mod.create_session()
+        session_mod.append_message(sid, "user", "上一轮的提问")
+        session_mod.append_message(sid, "assistant", "上一轮的回答")
+
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            session_id=sid,
+        )
+
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 应该有 4 条: system + 2 session history + current user
+        assert len(messages) == 4, f"应 4 条消息, 实际: {len(messages)}"
+        # 第 0 条 system (固定 SYSTEM_PROMPT)
+        assert messages[0]["role"] == "system"
+        # 第 1, 2 条 session 历史
+        assert messages[1] == {"role": "user", "content": "上一轮的提问"}
+        assert messages[2] == {"role": "assistant", "content": "上一轮的回答"}
+        # 第 3 条 current user (含 bullets)
+        assert messages[3]["role"] == "user"
+        user_payload = json.loads(messages[3]["content"])
+        assert user_payload["bullets"] == ["原文 0", "原文 1"]
+
+    def test_session_id_none_does_not_prepend(self, enable_llm, monkeypatch):
+        """session_id=None(默认)→ 走无 session 路径, payload 不含额外 messages(字节级一致)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            # session_id 默认 None
+        )
+
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 老路径: 只有 2 条 (system + current user)
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    def test_multiround_session_accumulates(
+        self, enable_llm, monkeypatch, reset_sessions
+    ):
+        """同 session 连续 2 次 rewrite → 第 2 次 LLM payload 应含前 1 次的历史
+        (注: rewrite_highlights 本身不写 session, 这里手动 append 模拟"前端维护 session")
+        """
+        from core import session as session_mod
+
+        sid = session_mod.create_session()
+        # 第 1 轮: 模拟"前端"在拿到改写后, 写 user 原文 + assistant 改写到 session
+        session_mod.append_message(sid, "user", "原文 bullets 0,1")
+        session_mod.append_message(sid, "assistant", json.dumps(
+            {"rewritten": [{"index": 0, "text": "改写 0"}, {"index": 1, "text": "改写 1"}]},
+            ensure_ascii=False,
+        ))
+
+        # 第 2 轮: rewrite_highlights 带同一个 sid
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 2", "改写 3"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["新原文 0", "新原文 1"], target_role="tech_metric",
+            session_id=sid,
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        messages = payload["messages"]
+        # 第 2 轮: 4 条 (system + 2 历史 + current user)
+        assert len(messages) == 4
+        # 第 1, 2 条是上一轮的 user + assistant
+        assert messages[1] == {"role": "user", "content": "原文 bullets 0,1"}
+        # assistant 消息含改写 JSON 字符串
+        assert messages[2]["role"] == "assistant"
+        assert "改写 0" in messages[2]["content"]
+        # 第 3 条是当前 new user
+        user_payload = json.loads(messages[3]["content"])
+        assert user_payload["bullets"] == ["新原文 0", "新原文 1"]

@@ -347,6 +347,8 @@ def build_sections(
     custom_project_ids: Optional[list[str]] = None,
     *,
     jd_context: Optional[dict] = None,
+    enable_function_calling: bool = False,
+    session_id: Optional[str] = None,
 ) -> list[Section]:
     """
     构造完整的简历 sections 列表(可序列化为 JSON 预览,也可喂给 docx 渲染)。
@@ -357,6 +359,13 @@ def build_sections(
       2. 项目内重排 highlights(命中数倒序,维持原顺序在 tie)
       3. 重排 skill group(组内 item 命中数总和倒序)
     不传 jd_context / jd_context 为空 dict → 完全走原路径(向后兼容,字节级一致)。
+
+    R4-F 新增:enable_function_calling(默认 False)透传给 rewrite_highlights,
+    启用时挂载 TOOL_EVALUATE_SCHEMA(LLM 可主动调 evaluate_bullet_jd_match)。
+    默认 False → 老路径字节级一致,252 老测试不破。
+
+    R4-M 新增:session_id(可选)透传给 rewrite_highlights,挂上后从 session.py 拉历史
+    消息拼到 LLM messages,实现多轮对话上下文保持。session_id=None → 老路径字节级一致。
     """
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
@@ -435,6 +444,8 @@ def build_sections(
                     target_role=target_role,
                     jd_text=final_intention,
                     jd_focus=jd_focus,
+                    enable_function_calling=enable_function_calling,  # R4-F
+                    session_id=session_id,  # R4-M
                 )
             except Exception:
                 pass  # 静默降级 — 高层 build_sections 仍返回原文
@@ -1063,6 +1074,8 @@ def preview_resume(
     *,
     jd_text: Optional[str] = None,
     academic_layout: Optional[str] = None,
+    enable_function_calling: bool = False,
+    session_id: Optional[str] = None,
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1074,13 +1087,22 @@ def preview_resume(
 
     R3-M.3: academic_layout 透传 — 临时覆盖 LAYOUT_CONFIG['academic']['academic_layout'](仅 preview 时),
     不影响实际 docx 渲染路径(那由 render_docx 消费)。
+
+    R4-F: enable_function_calling 透传到 build_sections(再到 rewrite_highlights),
+    启用时挂载 TOOL_EVALUATE_SCHEMA;默认 False → 老路径字节级一致。
+
+    R4-M: session_id 透传到 build_sections(再到 rewrite_highlights),实现多轮 LLM 对话上下文。
+    默认 None → 老路径字节级一致。
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
 
     jd_context = _resolve_jd_context(jd_text)
     sections = build_sections(
-        target_role, intention, custom_project_ids, jd_context=jd_context
+        target_role, intention, custom_project_ids,
+        jd_context=jd_context,
+        enable_function_calling=enable_function_calling,  # R4-F
+        session_id=session_id,  # R4-M
     )
 
     out: dict = {
@@ -1103,16 +1125,23 @@ def generate_resume_docx(
     *,
     jd_text: Optional[str] = None,
     academic_layout: Optional[str] = None,
+    enable_function_calling: bool = False,
+    session_id: Optional[str] = None,
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
 
     Round 3 I: jd_text 非空时透传到 build_sections,排序逻辑同上。
     R3-M.3: academic_layout 透传到 render_docx,触发 academic 模板 detailed/compact 分支。
+    R4-F: enable_function_calling 透传到 build_sections,启用时挂载 tools。
+    R4-M: session_id 透传到 build_sections(再到 rewrite_highlights),保持多轮 LLM 对话上下文。
     """
     jd_context = _resolve_jd_context(jd_text)
     sections = build_sections(
-        target_role, intention, custom_project_ids, jd_context=jd_context
+        target_role, intention, custom_project_ids,
+        jd_context=jd_context,
+        enable_function_calling=enable_function_calling,  # R4-F
+        session_id=session_id,  # R4-M
     )
     return render_docx(
         sections, target_role, output_dir,

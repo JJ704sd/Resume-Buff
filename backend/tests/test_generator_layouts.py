@@ -869,3 +869,58 @@ class TestBilingualDispatch:
         assert _LAYOUT_DISPATCH["classic"] is _render_classic, (
             f"classic 仍应走 _render_classic, 实际 {_LAYOUT_DISPATCH['classic']!r}"
         )
+
+
+class TestMaterialsBilingualSchema:
+    """build_sections 透传 _en 字段 + 真实 materials 走 bilingual 模板不抛异常
+
+    Step 3 R3-M.3:
+      - header section content 加 name_en(basics.name_en 缺失给 "")
+      - education section content 加 school_en / major_en(缺失给 "")
+      - project dict 顶层加 title_en(与 id/title 同级)
+      - 真实 materials.json 无 _en 字段,bilingual 模板应 graceful 降级(只渲染中文)
+    """
+
+    def test_real_materials_no_en_fields_bilingual_does_not_raise(self, tmp_path: Path):
+        """真实 materials.json(无 _en 字段)走 bilingual 模板:docx 合法,XML 无英文行(graceful 降级)"""
+        out = generate_resume_docx(
+            target_role="tech_metric",
+            output_dir=tmp_path,
+            template="bilingual",
+        )
+        # 端到端:不抛异常 + docx 合法 + 体积合理
+        assert out.exists()
+        assert zipfile.is_zipfile(out)
+        assert out.stat().st_size > 5_000
+        # graceful 验证:XML 不含英文姓名 / 英文学校 / 英文项目副标题(无 _en 字段时不渲染)
+        xml = _read_xml(out)
+        assert "Mock Name EN" not in xml, "无 name_en 字段时不应渲染英文姓名"
+        assert "Mock University" not in xml, "无 school_en 字段时不应渲染英文学校"
+        assert "Mock Project EN" not in xml, "无 title_en 字段时不应渲染英文项目副标题"
+        # 中文姓名 / 学校 / 项目仍在(降级到单语言)
+        assert "求职意向" in xml, "bilingual header 中文求职意向应保留"
+
+    def test_build_sections_passes_en_fields_through(self):
+        """build_sections 真实 materials 透传 _en 字段:header/education/project 都含空字符串 key(graceful schema)"""
+        sections = build_sections(target_role="tech_metric")
+        # 找 header section
+        header = next(s for s in sections if s.type == "header")
+        assert "name_en" in header.content, "header.content 必须含 name_en key(缺失给空串)"
+        assert header.content["name_en"] == "", "真实 materials 无 name_en 时为 ''"
+        # 找 education section
+        edu = next(s for s in sections if s.type == "education")
+        assert "school_en" in edu.content and "major_en" in edu.content, (
+            "education.content 必须含 school_en / major_en key"
+        )
+        assert edu.content["school_en"] == "" and edu.content["major_en"] == "", (
+            "真实 materials 无 _en 时为 ''"
+        )
+        # 找 project_group section,验证 projects[*].title_en(顶层,不在 content 内)
+        pg = next(s for s in sections if s.type == "project_group")
+        assert pg.content["projects"], "project_group 必须有 projects"
+        for proj in pg.content["projects"]:
+            assert "title_en" in proj, f"project dict 顶层必须含 title_en key: {proj.keys()}"
+            assert proj["title_en"] == "", "真实 materials 无 title_en 时为 ''"
+            assert "title_en" not in proj["content"], (
+                "title_en 必须放 project dict 顶层,不能污染 content"
+            )

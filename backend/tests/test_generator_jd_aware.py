@@ -48,14 +48,20 @@ from main import app
 # ----------------------------------------------------------------------
 # Round 3 I baseline (固化) — 不传 JD 时 6 role 的 build_sections 字节级 hash
 # 任一 baseline hash 漂移都会被抓到
+#
+# Round 3 M.3: build_sections 透传 name_en / school_en / major_en / title_en 字段
+# (Step 3 R3-M.3,header/education/project 三 section.content 都加 _en 字段供
+# bilingual 模板消费,缺失给空字符串走 graceful 降级)。新增 4 个 key 必然让
+# sections 序列化 hash 漂移 — 这是 schema 自然扩展,不是排序路径变化。
+# baseline 在 R3-M.3 重算并固化,排序逻辑不变。
 # ----------------------------------------------------------------------
 _BASELINE_HASHES: dict[str, str] = {
-    "tech_metric": "802b4b6f9737b4ab95de937705913b31eafd9b500c22fa1b2a7d39113fbab7b5",
-    "product":     "0c3a7ecb7a9e4fe46c77c5f67b29d0a393be06bf52dda71e470c2ae0c19dc5ec",
-    "algorithm":   "27ad76735075e9e6e3efcee9a6d28c93559d9c77bc5b735f145b255f4ea4b349",
-    "data_annot":  "8a7bd29992176fb414a98efe8bc585eb48b2f0787e4524f12aa26f56dd7f6ecd",
-    "test_qa":     "4ece82baba130161d147f9ee22daf7e205c80b2ba327f91710a09bdbaee756f1",
-    "general":     "d16906a5589d2d76bde78a7ab134bd9038f50a5d83ece78ae862e88d4bccbe7b",
+    "tech_metric": "2b989956117ba9182cf775607ea6480e54b34eb559da2e7813e32345b5417226",
+    "product":     "296bb978cb2980c6c138b9bd0112d20b092ec8beeaa26e17bee1385fee5f92ac",
+    "algorithm":   "15114e4a3d9e32d3fcaa0593d3576e00bf3cabc61749235ad1f1d3be6cad5949",
+    "data_annot":  "326e56433b88f82cd2bc62685dd832b440e17ff0aaf5925174e7283ac953de54",
+    "test_qa":     "60f7895778985007e096ceed2bdcc4824751790a499a80615508a012407f7e0a",
+    "general":     "9e211132ec52baec52289f5f63bf69fcf99e1fcbe3b7399c20f23015ebdd8d6b",
 }
 
 

@@ -379,6 +379,8 @@ def build_sections(
         title=b["name"],
         content={
             "name": b["name"],
+            # R3-M.3: 透传 name_en 供 bilingual header 消费;缺失给空字符串(graceful 降级)
+            "name_en": b.get("name_en", ""),
             "intention": final_intention,
             "contact": f"{b['phone']}  |  {b['email']}  |  现居 {b['location']}",
         },
@@ -391,6 +393,9 @@ def build_sections(
         title="教育背景",
         content={
             "line": f"{edu['school']} · {edu['college']} · {edu['major']} · {edu['degree']}  |  {edu['period']}({edu['year']})",
+            # R3-M.3: 透传 school_en / major_en 供 bilingual education 消费;缺失给空字符串
+            "school_en": edu.get("school_en", ""),
+            "major_en": edu.get("major_en", ""),
             "courses": "、".join(edu.get("core_courses", [])),
             "highlights": edu.get("highlights", []),
         },
@@ -444,7 +449,14 @@ def build_sections(
                 "tags": p.get("tags", []),
             },
         ))
-    sections.append(Section(type="project_group", title="项目经历", content={"projects": [asdict(s) for s in proj_sections]}))
+    # R3-M.3: project dict 顶层塞 title_en(与 id/title 同级),供 bilingual project_group 消费
+    # 不污染 Section dataclass schema — 在 asdict 之后注入到 dict 顶层
+    project_dicts = []
+    for s, pid in zip(proj_sections, ordered_pids):
+        d = asdict(s)
+        d["title_en"] = proj_map[pid].get("title_en", "")
+        project_dicts.append(d)
+    sections.append(Section(type="project_group", title="项目经历", content={"projects": project_dicts}))
 
     # ----- Skills -----
     skills_content = []

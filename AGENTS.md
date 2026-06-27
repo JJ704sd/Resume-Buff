@@ -64,7 +64,7 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 3-G bug hunt 收尾后有 **183 个用例**（181 R3-G baseline + 1 `test_special_chars_emoji_fullwidth_normalized` + 1 `test_exe_format_raises_unsupported_with_supported_types_in_message`），**183 passed + 0 skipped**（R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率）
+- 后端 `pytest`：Round 3-M.1 MVP 收尾后有 **190 个用例**（181 R3-G baseline + 1 `test_special_chars_emoji_fullwidth_normalized` + 1 `test_exe_format_raises_unsupported_with_supported_types_in_message` + 7 R3-M.1 MVP：3 个 `test_layout_generates_valid_docx` 参数化 + 4 个 visuals `test_academic_larger_font_size` / `test_internet_smaller_font_size` / `test_internet_has_skill_marker` / `test_bilingual_default_margins`），**190 passed + 0 skipped**（R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率）
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余

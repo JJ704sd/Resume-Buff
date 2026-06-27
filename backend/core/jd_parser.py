@@ -718,29 +718,77 @@ def _build_resume_perspective(
       - external_resume_text: 上传简历的全文 (None/空 → 跳过, 返回 None)
       - parsed: parse_jd() 输出 (含 skills/tools/domains 三个 normalized 列表)
       - pool: match_score 计算出的候选关键词池 (role 范围 + borrowed 池)
+        — R3.5+ 之后包含用户所有 role 方向上的经验
+
+    算法:
+      1) 归一化简历全文 (lowercase + 中文标点 → 英文标点)
+      2) required = JD 要求的所有 normalized 关键词 (skills ∪ tools ∪ domains)
+      3) 对每个 required kw:
+         - 找出这个 kw 在 KEYWORD_GROUPS 里的所有 surface (同义词 alias)
+         - 任何 surface 出现在归一化简历里 → have
+         - 否则 → need_candidate
+      4) need = need_candidate - pool (扣掉素材库已经能提供的, 避免双计)
+      5) 返回 have/need 列表 (按字母序, 稳定)
 
     输出:
       - None: external_resume_text 为空 (前端不展示此字段)
       - dict:
-          - have_keywords: list[str]   JD 要求 ∩ 简历里有 ∩ 素材库能提供
+          - have_keywords: list[str]   JD 要求 ∩ 简历里有
           - need_keywords: list[str]   JD 要求 - 简历里有 - 素材库能提供 (真正缺)
           - have_count / need_count:   计数
 
-    设计 (R3-G 计划文档):
-      - 不重复 match_score 的工作: 直接用 parsed + pool
-      - "need" 排除"已有素材库能提供" (避免双计)
-      - Step 1 占位: 返回 None 避免破坏 API, Step 2 实装核心逻辑
+    R3.5+ / R3.5+ (b) 兼容:
+      - 用 match_score 算好的 pool (含 borrowed), 避免"简历没写但素材库有"被算 need
+      - 用当前 KEYWORD_GROUPS (含 'AI' surface + PM 维度 surface), 跟 R3-G 原版同算法
     """
     if not external_resume_text or not external_resume_text.strip():
         return None
 
-    # Step 1 占位: 仅返回简历全文长度, 不做 have/need 计算
-    # Step 2 实装: 复用 _normalize_text + 扫简历文本里的 surface 命中
+    # 1) 归一化简历全文
+    norm_resume = _normalize_text(external_resume_text)
+
+    # 2) JD 要求的全部 normalized 关键词 (跨 group 合并去重)
+    required: set[str] = set()
+    for group_name in ("skills", "tools", "domains"):
+        required.update(parsed.get(group_name, []) or [])
+
+    if not required:
+        # JD 没识别到任何已知关键词 → 简历视角没意义, 返回空
+        return {
+            "have_keywords": [],
+            "need_keywords": [],
+            "have_count": 0,
+            "need_count": 0,
+        }
+
+    # 3) 对每个 required kw, 扫简历全文找 surface 命中
+    have: list[str] = []
+    need_candidates: list[str] = []
+    seen: set[str] = set()
+    for kw in sorted(required):
+        if kw in seen:
+            continue
+        seen.add(kw)
+        # 收集这个 normalized 在 KEYWORD_GROUPS 里的所有 surface
+        # (同义词 alias, 例: "大模型" / "大语言模型" / "LLM" 都归一化到 LLM)
+        surfaces: list[str] = []
+        for group_keywords in KEYWORD_GROUPS.values():
+            for surface, normalized, _w in group_keywords:
+                if normalized == kw:
+                    surfaces.append(surface)
+        # 任何 surface 在归一化简历里出现 → 命中
+        hit = any(s.lower() in norm_resume for s in surfaces)
+        if hit:
+            have.append(kw)
+        else:
+            need_candidates.append(kw)
+
+    # 4) need 扣掉素材库已经能提供的 (避免双计: 简历没写 + 素材库有 → 不算 need)
+    need = [k for k in need_candidates if k not in pool]
+
     return {
-        "have_keywords": [],
-        "need_keywords": [],
-        "have_count": 0,
-        "need_count": 0,
-        "_placeholder": True,  # Step 2 移除
-        "resume_text_length": len(external_resume_text),
+        "have_keywords": sorted(have),
+        "need_keywords": sorted(need),
+        "have_count": len(have),
+        "need_count": len(need),
     }

@@ -2,8 +2,17 @@
 
 > 适用项目: 简历帮  
 > 日期: 2026-06-27  
-> 状态: Draft for next round  
+> 状态: **Phase 1 ✅ + Phase 2 ✅ 已落地**(320 → 352 pytest 全绿,2026-06-27)  
 > 目标: 在现有 Round 4 Agent MVP 基础上,把简历生成链路增强为可规划、可调用工具、可观测、可评测、可回退的本地单用户 Agent 工作流。
+
+## 阶段落地状态
+
+| Phase | 目标 | 状态 | 关键产物 |
+|---|---|---|---|
+| Phase 1 | Agent 编排层与工具注册 | ✅ 已完成(2026-06-27) | `core/agent_tools.py`(AGENT_TOOLS 4 个 + `execute_agent_tool`)+ `core/agent_workflow.py`(`build_task_graph` 确定性 + `run_agent_workflow` 失败降级)+ `enable_agent_workflow` 字段;320 pytest 全绿,283 老测试零回退 |
+| Phase 2 | 结构化 trace 与回放 | ✅ 已完成(2026-06-27) | `log_agent_trace_jsonl` 写 `backend/logs/agent_trace.jsonl` 11 字段 schema + `scripts/replay_agent_trace.py` argparse CLI;352 pytest 全绿(+32 新);安全审查无 P0/P1 阻塞 |
+| Phase 3 | 轻量 RAG evidence | ⏳ 未启动 | 等用户明确启动 |
+| Phase 4 | Agent eval 报告 | ⏳ 未启动 | 等 Phase 3 完成后启动 |
 
 ---
 
@@ -375,7 +384,7 @@ preview 响应可选增加:
 
 ## 9. 分阶段实施
 
-### Phase 1: 编排层与工具注册
+### Phase 1: 编排层与工具注册 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -385,11 +394,18 @@ preview 响应可选增加:
 
 验收:
 
-- 旧路径所有测试保持通过。
-- 新增 workflow 单元测试覆盖任务图、工具调用、未知工具拒绝。
+- 旧路径所有测试保持通过(283 → 283,字节级一致)。
+- 新增 workflow 单元测试覆盖任务图、工具调用、未知工具拒绝(20 新 pytest)。
 - `enable_agent_workflow=false` 时输出结构不变。
 
-### Phase 2: 结构化 trace 与回放
+**落地证据**:
+
+- `core/agent_tools.py`: AGENT_TOOLS 4 个核心 + `execute_agent_tool` 入口(allowlist / 错误分类 / 隐私边界);`ToolResult` 不存 args/input 原文
+- `core/agent_workflow.py`: `build_task_graph(has_jd, enable_function_calling, has_external_resume)` 确定性产任务图(LLM 不参与规划);`run_agent_workflow` 失败时降级到旧路径;`enable_agent_workflow=False`(默认)字节级一致
+- `api/resume.py`: `PreviewRequest.enable_agent_workflow` / `GenerateRequest.enable_agent_workflow` 字段,默认 False
+- 测试: `test_agent_tools.py`(14 case)+ `test_agent_workflow.py`(29 case,含 9 个 Phase 2 trace 行为)= **37 case 全绿**
+
+### Phase 2: 结构化 trace 与回放 ✅ 已完成(2026-06-27)
 
 目标:
 
@@ -402,6 +418,15 @@ preview 响应可选增加:
 - trace 不包含 JD 原文、bullet 原文、姓名、邮箱、电话。
 - replay 能根据 request_id 输出步骤摘要。
 - trace 写失败不影响 preview/generate。
+
+**落地证据**:
+
+- `core/logger.py`: `log_agent_trace_jsonl(event)` 写 `backend/logs/agent_trace.jsonl`;11 字段稳定 schema(`JSONL_TRACE_FIELDS` tuple 常量)—— ts / request_id / session_id / workflow / step / tool / latency_ms / status / error_type / input_size / output_size;写入失败(IO/磁盘满/编码错)由 logger 内部 try/except 静默降级不影响主流程(spec §6.3)
+- `core/agent_workflow.py`: `generate_request_id()` 短 uuid(前缀 "r");`run_agent_workflow` 每个 step(含本地步骤)写一条 JSONL trace;本地步骤 `status="skipped"`,`input_size/output_size=0`;`_estimate_input_size` / `_estimate_output_size` 用 `json.dumps(...).encode("utf-8")` 算字节长度,不存原文
+- `scripts/replay_agent_trace.py`: argparse CLI `--request-id` / `--session-id` / `--path`;输出 markdown 摘要(顶部 metadata + 7 列表格 + 错误汇总);只渲染 schema 字段,不输出 event 整体 dict;坏行静默跳过,文件不存在返空
+- 测试: `test_logger.py`(14 case,含 11 Phase 2)+ `test_agent_workflow.py`(29 case,含 9 Phase 2 trace 行为)+ `test_agent_trace_replay.py`(10 case 新增)= **53 case 涵盖 Phase 2**
+- **安全审查无 P0/P1 阻塞**(JSONL 不存原文 PII / 写入失败不阻断 / replay 不输出敏感内容 / request_id+session_id 都是 uuid 短串无 PII)
+- 旧 R4-A `log_agent_trace` / `agent_trace.log` 完全不动兼容共存
 
 ### Phase 3: 轻量 RAG evidence
 

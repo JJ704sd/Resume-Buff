@@ -314,3 +314,228 @@ class TestPrivacyGuarantee:
                 assert forbidden not in d, (
                     f"step {step.name} 携带 forbidden 字段 {forbidden}, PII 泄漏风险"
                 )
+
+
+# =========================================================================
+# R5-A Phase 2: JSONL trace 行为锁定
+# =========================================================================
+import json
+import re
+
+
+class TestWorkflowJsonlTrace:
+    """R5-A Phase 2: workflow 每次生成 request_id + 每个 step 写 JSONL trace"""
+
+    def test_request_id_format_is_r_prefix_8hex(self):
+        """generate_request_id() 必须返 'r' + 8 位 hex"""
+        from core.agent_workflow import generate_request_id
+        rid = generate_request_id()
+        assert re.match(r"^r[0-9a-f]{8}$", rid), f"request_id 格式异常: {rid!r}"
+        # 多次调用返不同 id
+        ids = {generate_request_id() for _ in range(50)}
+        assert len(ids) > 1, "request_id 没有随机性"
+
+    def test_workflow_writes_jsonl_trace_per_step(self, tmp_path, monkeypatch):
+        """跑一次 workflow → JSONL 文件含每个 step 的 trace, 含本地 + 工具步骤"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        # 重定向 JSONL 到 tmp_path
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测",
+        )
+        assert isinstance(result, dict)
+        assert "sections" in result
+
+        # JSONL 文件应被创建
+        assert jsonl_path.exists()
+        lines = jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) >= 3, f"workflow 至少应写 3 条 trace(本地+工具), 实际 {len(lines)}"
+
+        # 验证每条 event 含 11 schema 字段
+        for line in lines:
+            event = json.loads(line)
+            assert "ts" in event
+            assert "request_id" in event
+            assert "session_id" in event
+            assert "workflow" in event
+            assert "step" in event
+            assert "tool" in event  # None 也算有
+            assert "latency_ms" in event
+            assert "status" in event
+            assert "error_type" in event
+            assert "input_size" in event
+            assert "output_size" in event
+
+        # 验证 request_id 全程一致(同一次 workflow)
+        rids = {json.loads(l)["request_id"] for l in lines}
+        assert len(rids) == 1, f"同 workflow 的 request_id 应一致, 实际 {rids}"
+
+        # 验证 workflow 字段正确
+        workflows = {json.loads(l)["workflow"] for l in lines}
+        assert workflows == {"preview"}, f"workflow 应为 preview, 实际 {workflows}"
+
+    def test_workflow_jsonl_trace_includes_local_and_tool_steps(self, tmp_path, monkeypatch):
+        """JSONL trace 应含本地步骤(status=skipped)+ 工具步骤(status=success/error)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text="熟悉 LLM 评测",
+        )
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        ]
+        # 至少要有本地步骤(3 个: parse_user_intent / retrieve_materials / aggregate_preview)
+        local_steps = [e for e in events if e.get("tool") is None]
+        assert len(local_steps) >= 3, f"本地步骤不足, 实际 {len(local_steps)}"
+        for ls in local_steps:
+            assert ls["status"] == "skipped", f"本地步骤 status 应为 skipped, 实际 {ls['status']}"
+
+        # 工具步骤至少要有 parse_jd / match_score / rewrite_highlights
+        tool_names = {e.get("tool") for e in events if e.get("tool") is not None}
+        assert "parse_jd" in tool_names
+        assert "match_score" in tool_names
+        assert "rewrite_highlights" in tool_names
+
+    def test_workflow_generate_path_writes_generate_workflow(self, tmp_path, monkeypatch):
+        """generate 路径 → workflow 字段 = "generate" """
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        out = run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text=None,
+            output_dir=tmp_path / "out",
+        )
+        assert out.exists()
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        ]
+        workflows = {e["workflow"] for e in events}
+        assert workflows == {"generate"}, f"workflow 应为 generate, 实际 {workflows}"
+
+    def test_workflow_session_id_in_jsonl(self, tmp_path, monkeypatch):
+        """session_id 非空时 → JSONL trace 应带正确 session_id"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text=None,
+            session_id="stest1234",
+        )
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        ]
+        sids = {e["session_id"] for e in events}
+        assert sids == {"stest1234"}, f"session_id 应为 stest1234, 实际 {sids}"
+
+    def test_workflow_session_id_empty_string_when_none(self, tmp_path, monkeypatch):
+        """session_id=None → JSONL session_id 应为空字符串"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text=None,
+            session_id=None,
+        )
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        ]
+        sids = {e["session_id"] for e in events}
+        assert sids == {""}, f"session_id 应为空串, 实际 {sids}"
+
+    def test_jsonl_trace_failure_does_not_break_workflow(self, tmp_path, monkeypatch):
+        """JSONL 写入失败 → workflow 仍正常返回 preview dict(spec §6.3)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        # 让 open() 抛 OSError 模拟磁盘满 / 权限错(避开 WindowsPath.mkdir 只读限制)
+        real_open = open
+        def failing_open(*args, **kwargs):
+            # 只在写 agent_trace.jsonl 时失败,其他文件放行
+            if len(args) > 0 and "agent_trace.jsonl" in str(args[0]):
+                raise OSError("simulated disk full")
+            return real_open(*args, **kwargs)
+        monkeypatch.setattr("builtins.open", failing_open)
+
+        # 不应抛 — workflow 仍正常完成
+        result = run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text="熟悉大模型评测",
+        )
+        assert isinstance(result, dict)
+        assert "sections" in result
+
+    def test_jsonl_trace_does_not_contain_jd_text_or_bullets(self, tmp_path, monkeypatch):
+        """隐私边界: JSONL trace 不含 JD 原文 / bullet 原文 / 姓名 / 邮箱 / 电话"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        # 用敏感字符串构造 jd_text
+        sensitive_jd = (
+            "张三 13800138000 zhang.san@example.com "
+            "熟悉大模型评测 完整的 JD 描述 含敏感信息"
+        )
+        run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text=sensitive_jd,
+        )
+        content = jsonl_path.read_text(encoding="utf-8")
+        # PII 字符串不应在 trace 里出现(原文)
+        assert "13800138000" not in content, "电话不应入 trace"
+        assert "zhang.san@example.com" not in content, "邮箱不应入 trace"
+        assert "张三" not in content, "姓名不应入 trace"
+        assert "完整的 JD 描述" not in content, "JD 原文不应入 trace"
+
+    def test_jsonl_trace_input_size_matches_real_jd_length(self, tmp_path, monkeypatch):
+        """input_size 应大致反映 jd_text 的字节长度(误差为其他 args)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        jd = "熟悉大模型评测" * 50  # 较长 JD
+        run_agent_workflow(
+            target_role="tech_metric", template="classic",
+            jd_text=jd,
+        )
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        ]
+        # parse_jd 步骤的 input_size 应至少 ≥ len(jd.encode())
+        parse_jd_events = [e for e in events if e.get("tool") == "parse_jd"]
+        assert parse_jd_events, "应至少有 1 条 parse_jd trace"
+        pj = parse_jd_events[0]
+        assert pj["input_size"] >= len(jd.encode("utf-8")), (
+            f"parse_jd input_size={pj['input_size']} < jd 长度 {len(jd.encode('utf-8'))}"
+        )

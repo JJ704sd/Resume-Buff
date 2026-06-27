@@ -19,23 +19,36 @@ R5-A Phase 1: Agent Workflow 编排层(受控 Plan-and-Execute)
   | rewrite    | rewrite_highlights             | LLM 可用 | rewritten bullets |
   | aggregate  | aggregate_preview(本地)       | 是     | preview sections    |
 
+R5-A Phase 2 增量(对齐 spec §7.1):
+  - run_agent_workflow 每次生成唯一 request_id(短 uuid,前缀 "r")
+  - 每个 step(本地 + 工具)写一条结构化 JSONL trace 到
+    backend/logs/agent_trace.jsonl(供 scripts/replay_agent_trace.py 解析)
+  - JSONL trace 只写长度(input_size/output_size)、工具名、错误分类,
+    **绝不写**完整 JD / 完整 bullet / 简历内容 / 姓名 / 邮箱 / 电话
+  - trace 写失败 → 静默降级(由 logger.log_agent_trace_jsonl 内部 try/except),
+    不影响 preview/generate 主流程
+  - 保留 R4-A 旧 agent_trace.log(不动),新格式走 jsonl
+
 公开 API:
-  - build_task_graph(...)  — 纯函数,根据请求字段返回 step 列表
-  - run_agent_workflow(...) — 执行任务图,失败 fallback 到旧路径
+  - build_task_graph(...)           — 纯函数,根据请求字段返回 step 列表
+  - run_agent_workflow(...)         — 执行任务图,失败 fallback 到旧路径
+  - generate_request_id()           — 短 uuid 工具(prefix "r"),给 request_id 用
 
 隐私边界(对齐 spec §6.4):
   - AgentStep 不存 input / output 原文(只存 input_ref/output_ref 名字)
   - error_msg 只含异常类型名,不含 args 原文
   - jd_text / bullet 仅作为 args 传给工具,不进 step 结构
+  - JSONL trace 也只存长度(不存原文)— 调用方负责 size 计算
 
 不引入:
   - 不引入新 LLM 调用(LLM 只走既有 rewrite_highlights 路径)
   - 不引入异步队列(本地单用户 MVP,同步即可)
-  - 不引入持久化(无 sqlite / redis / file storage)
+  - 不引入持久化(无 sqlite / redis / file storage)— jsonl 是可丢弃的 trace
   - 不引入账号 / 多用户 / 公网部署
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -44,6 +57,7 @@ from core.agent_tools import (
     ToolResult,
     execute_agent_tool,
 )
+from core.logger import log_agent_trace_jsonl
 
 
 # ----------------------------------------------------------------------
@@ -234,6 +248,24 @@ def build_task_graph(
 
 
 # ----------------------------------------------------------------------
+# Request ID 生成(Phase 2 JSONL trace 用)
+# ----------------------------------------------------------------------
+def generate_request_id() -> str:
+    """
+    R5-A Phase 2: 生成一次 workflow 的 request_id(短 uuid,前缀 "r")
+
+    短串设计(对齐 spec §7.1):
+      - "r" + uuid4 hex 8 位 = 9 字符
+      - 32 bit 熵 — 本地单用户足够区分
+      - 不带任何 PII / 时间戳 / 请求内容(纯随机)— 防泄漏
+
+    用于 JSONL trace 的 request_id 字段,供 scripts/replay_agent_trace.py
+    按 request_id 拉出同一次 workflow 的所有 step。
+    """
+    return "r" + uuid.uuid4().hex[:8]
+
+
+# ----------------------------------------------------------------------
 # Workflow 执行(失败走 fallback)
 # ----------------------------------------------------------------------
 def run_agent_workflow(
@@ -249,11 +281,21 @@ def run_agent_workflow(
     output_dir: Optional[Path] = None,
 ) -> Any:
     """
-    R5-A Phase 1: 执行 Agent workflow,失败 fallback 到旧路径。
+    R5-A Phase 1 + Phase 2: 执行 Agent workflow,失败 fallback 到旧路径,每个 step
+    写一条结构化 JSONL trace 到 backend/logs/agent_trace.jsonl。
 
     Returns:
         - output_dir is None: dict(preview, 跟 generator.preview_resume() 字节级一致)
         - output_dir is not None: Path(docx, 跟 generator.generate_resume_docx() 字节级一致)
+
+    R5-A Phase 2 增量(spec §7.1):
+      - 每次调用生成唯一 request_id(短 uuid,前缀 "r")
+      - 每个 step(本地 + 工具)写一条 JSONL trace,字段:
+        ts / request_id / session_id / workflow / step / tool /
+        latency_ms / status / error_type / input_size / output_size
+      - input_size / output_size 只算字节数,**绝不存 args / output 原文**
+      - JSONL trace 写入失败(磁盘满 / IO 错)由 logger 内部静默吞掉
+        **不影响主流程 preview / generate 输出**
 
     关键约束:
       - 失败时返 generator 旧 API 的输出(走 build_sections + render_docx)
@@ -263,12 +305,42 @@ def run_agent_workflow(
     has_jd = bool(jd_text and jd_text.strip())
     has_external_resume = False  # Phase 1 MVP 不消费外部简历,留 P2
 
+    # R5-A Phase 2: 每次 workflow 生成唯一 request_id(spec §7.1 JSONL schema)
+    request_id = generate_request_id()
+    workflow_kind = "generate" if output_dir is not None else "preview"
+    # session_id 可为空串(无 session 时)— JSONL schema 字段保留
+    session_id_trace: str = session_id or ""
+
     # 1) 构造任务图
     steps = build_task_graph(
         has_jd=has_jd,
         enable_function_calling=enable_function_calling,
         has_external_resume=has_external_resume,
     )
+
+    # R5-A Phase 2: trace 构造辅助(只写长度 / 工具名 / 错误分类,不写原文)
+    # 每个本地步骤也都写一条 trace(让 replay 能看到完整任务图,不丢节点)
+    def _emit_trace(step_obj, *, status: str, error_type, latency_ms: int,
+                     input_size: int = 0, output_size: int = 0) -> None:
+        """写一条 JSONL trace。失败由 logger 内部 try/except 静默吞掉,不影响主流程。"""
+        log_agent_trace_jsonl({
+            "request_id": request_id,
+            "session_id": session_id_trace,
+            "workflow": workflow_kind,
+            "step": step_obj.step,
+            "tool": step_obj.tool,  # None 时序列化为 null
+            "latency_ms": latency_ms,
+            "status": status,
+            "error_type": error_type,
+            "input_size": input_size,
+            "output_size": output_size,
+        })
+
+    # 先把所有本地步骤 trace 出来(intent / retrieve / aggregate / parse_external_resume)
+    # 让 replay 能看到完整任务图节点(状态=skipped,latency=0)
+    for step_obj in steps:
+        if step_obj.tool is None:
+            _emit_trace(step_obj, status="skipped", error_type=None, latency_ms=0)
 
     # 2) 加载 materials(本地,无需工具)
     #    放循环外避免重复 IO
@@ -288,7 +360,7 @@ def run_agent_workflow(
             # JD 解析失败 — 不阻断,降级到无 jd 路径
             jd_context = None
 
-    # 4) 逐步执行(只跑"工具步骤",本地步骤跳过)
+    # 4) 逐步执行(只跑"工具步骤",本地步骤跳过执行)
     tool_results: dict[str, ToolResult] = {}
     fallback_used = False
     fallback_reason: Optional[str] = None
@@ -310,13 +382,36 @@ def run_agent_workflow(
             materials=materials,
         )
 
+        # R5-A Phase 2: 计算入参长度(只算 bytes,不存原文)— input_size 用于 trace
+        try:
+            input_size = _estimate_input_size(step.tool, tool_args)
+        except Exception:
+            input_size = 0  # 防御性:长度算不出也不阻断
+
+        # 工具执行(走 execute_agent_tool 内部计时)
+        import time as _t
+        t0 = _t.time()
         try:
             tr = execute_agent_tool(step.tool, tool_args)
         except Exception as e:
             # execute_agent_tool 自身设计为不抛,但保险起见再包一层
+            latency_ms = int((_t.time() - t0) * 1000)
+            _emit_trace(step, status="error", error_type=type(e).__name__,
+                        latency_ms=latency_ms, input_size=input_size, output_size=0)
             fallback_used = True
             fallback_reason = f"{step.name}:{type(e).__name__}"
             break
+
+        # R5-A Phase 2: 写出参长度(只算 bytes,不存原文)
+        output_size = _estimate_output_size(tr.output) if tr.output is not None else 0
+        _emit_trace(
+            step,
+            status=tr.status,
+            error_type=tr.error_type,
+            latency_ms=tr.latency_ms,
+            input_size=input_size,
+            output_size=output_size,
+        )
 
         tool_results[step.name] = tr
 
@@ -430,6 +525,58 @@ def _pick_representative_bullet(materials: dict, target_role: str) -> str:
         if bullets:
             return bullets[0]
     return ""
+
+
+# ----------------------------------------------------------------------
+# R5-A Phase 2: trace 长度估算(只算 bytes,不存原文)
+# ----------------------------------------------------------------------
+def _estimate_input_size(tool_name: str, args: dict) -> int:
+    """
+    计算工具入参的近似字节数(只算长度,不存原文)。
+
+    隐私边界:
+      - 只把 args dict 序列化成 str 后算字节数,绝不入 trace
+      - 不打印 args 内容,不上报日志
+
+    Args:
+        tool_name: 工具名(目前未使用,留作按工具类型分别限制)
+        args:      工具入参 dict
+
+    Returns:
+        int - 序列化后的 UTF-8 字节数
+        出错(对象不可序列化)返 0,不抛
+    """
+    try:
+        import json as _json
+        return len(_json.dumps(args, ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        # 不可序列化(materials 含 docx Document 对象 / set 等)→ 返 0
+        # 不阻断 workflow(spec §6.3)
+        return 0
+
+
+def _estimate_output_size(output: Any) -> int:
+    """
+    计算工具出参的近似字节数(只算长度,不存原文)。
+
+    Args:
+        output: ToolResult.output(可能是 dict / list / str / 任意对象)
+
+    Returns:
+        int - 序列化后的 UTF-8 字节数
+        出错返 0
+    """
+    if output is None:
+        return 0
+    try:
+        import json as _json
+        return len(_json.dumps(output, ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        # 不可序列化 → 退到 len(str()) 近似(不会崩)
+        try:
+            return len(str(output).encode("utf-8"))
+        except Exception:
+            return 0
 
 
 def _make_jd_focus(jd_context: Optional[dict]) -> dict:

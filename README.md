@@ -42,7 +42,7 @@
 | **R3.5 阈值调优**(基于 8 份 ground truth 验证,80/60 阈值锁死 + 11 回归测试防回潮) | ✅ Round 3.5 |
 | **R3.5+ 修 match_score 漏匹配 bug**(borrowed pool 跨 role 经验自动纳入 + `KEYWORD_GROUPS` 加 'AI' surface;3 个 bugfix 回归测试;baiyun_qa 修后 score=100 ✓,baiyun_product 修后 score=100 但 label 待 user 复核) | ✅ Round 3.5+ |
 | **R3.5+ (b) PM 维度 surface**(`KEYWORD_GROUPS['domains']` 加 物流/工业工程/原型/流程图 4 个 surface;baiyun_product 修后 score=33 + missing/suggestions 精确给"补 PM 维度"指引;3 个 pm_dimensions 回归测试) | ✅ Round 3.5+ (b) |
-| **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 改实跑 `match_score(text, role_id_hint, materials)`, 不读 jd_samples.json frozen top_score;8 份 eval 实跑准确率 7/8 = 88%;5 个 score_thresholds_live 回归测试含篡改 frozen 字段验证实跑模式锁死) | ✅ Round 3.5.1 |
+| **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 改实跑 `match_score(text, role_id_hint, materials)`, 不读 jd_samples.json frozen top_score;8 份 eval 实跑准确率 R3.5.1 时点 7/8 = 88% → **R3.6.2 baiyun_product label 第三次复核改 '别投' 后变 8/8 = 100%**;5 个 score_thresholds_live 回归测试含篡改 frozen 字段验证实跑模式锁死) | ✅ Round 3.5.1 |
 | **R3-G 外部简历上传 + 简历视角评分**(`POST /api/resume/parse-external` 解析 .docx/.pdf/.txt + `match_score` 增加 `external_resume_text` 参数 + 返回 `resume_perspective` 块 {have/need_keywords, have/need_count} + 前端 `<ResumeUploader>` el-upload drag + App.vue 评分结果区加 have/need 卡片 + 扣除素材库能补的避免 false negative) | ✅ Round 3-G |
 
 ---

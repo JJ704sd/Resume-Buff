@@ -849,6 +849,78 @@ class TestMatchScoreBugfixR35Plus:
 
 
 # ======================================================================
+# R3.5+ (b): PM 维度 surface — 验证 match_score 精确识别 PM 维度缺失
+# ======================================================================
+class TestMatchScorePMDimensions:
+    """R3.5+ (b) 选项: 加 PM 维度 surface 后, match_score 能精确识别
+    baiyun_2026_product 的 PM 维度缺失, suggestions 给具体"补 PM 维度"指引。
+
+    背景:
+      - baiyun_2026_product JD 文本提到 '物流' / '工业工程' / '原型' / '流程图'
+      - user 实际没这些 PM 素材 (materials.json 全技术向)
+      - 加 surface 后: parse_jd 命中这些 surface → score/missing/suggestions 反映
+      - user label='建议补充' (期望'中'), match_score 实际给 score=33 ('低')
+        仍是 gap, 但 missing 列表 + suggestions 让 user 明确知道'补什么'
+
+    锁死: 如果未来有人删了 PM surface, 下面 3 个测试会 fail 提示。
+    """
+
+    BAIYUN_PRODUCT_TEXT = (
+        "岗位职责:1. 协助梳理逻辑物流业务流程, 识别 AI 提效点;"
+        "2. 负责 AI 模块(如智能客服、自动单据识别)的原型设计与文档编写;"
+        "3. 协调开发与算法进行功能验证。"
+        "招聘要求:1. 工业工程、物流管理或计算机相关专业优先, 本科大三及以上;"
+        "2. 逻辑严密, 能画流程图或高质量原型;"
+        "3. 对 AI 落地有热情, 能熟练使用各种 AI 效率工具。"
+    )
+
+    def test_baiyun_product_identifies_pm_missing(self):
+        """baiyun_2026_product: missing 必须包含 PM 维度 4 项。
+
+        防回潮: KEYWORD_GROUPS['domains'] 删了任一 PM surface 都 fail。
+        """
+        result = match_score(
+            self.BAIYUN_PRODUCT_TEXT,
+            "product",
+        )  # 用真实 materials.json
+        missing = result["missing_keywords"]
+        for kw in ["物流", "工业工程", "原型", "流程图"]:
+            assert kw in missing, (
+                f"PM surface 失效: '{kw}' 不在 missing_keywords = {missing}"
+            )
+
+    def test_baiyun_product_suggestions_mention_pm(self):
+        """baiyun_2026_product: suggestions 必须包含"补 PM 维度"指引。
+
+        锁死 user 实际体验: match_score 不光给分, 还告诉 user 缺什么怎么补。
+        """
+        result = match_score(
+            self.BAIYUN_PRODUCT_TEXT,
+            "product",
+        )
+        suggestions_text = " ".join(result["suggestions"])
+        # suggestions 至少提到 1 个 PM 维度关键词 (用 in 而不是 == 多个, 避免顺序敏感)
+        pm_keywords = ["物流", "工业工程", "原型", "流程图"]
+        mentioned = [kw for kw in pm_keywords if kw in suggestions_text]
+        assert len(mentioned) >= 1, (
+            f"suggestions 没提到任何 PM 维度: {result['suggestions']}"
+        )
+
+    def test_pm_surfaces_in_keyword_groups(self):
+        """KEYWORD_GROUPS['domains'] 必须包含所有 PM 维度 surface (字典级锁死)。
+
+        最直接防回潮: 直接断言字典里有这 4 个 surface, 不依赖 match_score 行为。
+        """
+        domains = KEYWORD_GROUPS["domains"]
+        domain_surfaces = {surface for surface, _norm, _w in domains}
+        for expected in ["物流", "工业工程", "原型", "流程图"]:
+            assert expected in domain_surfaces, (
+                f"KEYWORD_GROUPS['domains'] 缺 PM surface '{expected}', "
+                f"现有: {domain_surfaces}"
+            )
+
+
+# ======================================================================
 # 辅助:最小素材库
 # ======================================================================
 def _minimal_materials(**skill_groups: list[str]) -> dict:

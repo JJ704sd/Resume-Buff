@@ -52,10 +52,14 @@ GROUND_TRUTH = [
     ("baiyun_2026_fullstack",   "general",   "高", False),
     # R3.5+ 修后 baiyun_qa score=100 → '高', 与 ground truth label='推荐投' 一致 ✓
     ("baiyun_2026_qa",          "test_qa",   "高", False),
-    # R3.5+ 修后 baiyun_product score=100 → '高', 但 ground truth label='建议补充' (期望 '中')
-    # 保留 is_bug=True 标 skip: 原 label 是 R3.5 时基于 score=0 反推的, 修后 user 需复核
-    # (KEYWORD_GROUPS 暂无 PM 维度关键词, match_score 不能识别 '物流/工业工程/原型工具' 缺失)
-    ("baiyun_2026_product",     "product",   "中", True),  # R3.5+ 已修 bug, label 待 user 复核
+    # R3.5+ (b) 加 PM 维度 surface 后, baiyun_product:
+    #   - parse_jd 命中 LLM (matched) + 4 个 PM 维度 (missing: 物流/工业工程/原型/流程图)
+    #   - score=33 → '低', 但 ground truth label='建议补充' 期望 '中'
+    # 仍 skip: 差距源于 user 素材库实际缺 PM 经验 (R3.5+ (b) 已加 surface, 但 user
+    # 未在 materials.json 里加 PM 维度 items); 修后 match_score 能精确告诉 user
+    # '缺什么、怎么补', 业务上等价于'建议补充'
+    # 下一步: user 补 PM 素材 (or 改 label='低' / 接受 skip) 任一即可 un-skip
+    ("baiyun_2026_product",     "product",   "中", True),  # R3.5+ (b) 已加 surface, 待 user 补 PM 素材
     ("deepseek_2026_agi_match", "algorithm", "高", False),
     ("deepseek_2026_data_label","data_annot","高", False),
     ("alibaba_2026_data_eng",   "data_annot","中", False),
@@ -90,10 +94,11 @@ class TestGroundTruthThreshold:
         if sample.get("label") == "公告型":
             pytest.skip(f"{sid} 是公告型 JD, match_score 不适用")
         if is_bug:
-            # R3.5+ 已修 match_score 漏匹配 bug, 但 ground truth label 待 user 复核
-            # (见 GROUND_TRUTH 注释: 原 label 基于 score=0 反推, 修后 score=100 但
-            #  KEYWORD_GROUPS 暂无 PM 维度关键词, match_score 不能反映"补 PM 维度"语义)
-            pytest.skip(f"{sid}: R3.5+ 修后 score=100, label 待 user 复核")
+            # R3.5+ (b) 已加 PM 维度 surface, match_score 现在能精确告诉 user 缺什么;
+            # baiyun_product score=33 ('低') vs ground truth '中' 仍 gap, 源于 user
+            # 素材库实际缺 PM 经验 (不是 match_score 算法问题)。待 user 补 PM 素材
+            # 或改 label 后 un-skip
+            pytest.skip(f"{sid}: R3.5+ (b) 加 surface 后, 待 user 补 PM 素材或改 label")
 
         # 跑 match_score 取 score
         result = match_score(sample["text"], role, materials)

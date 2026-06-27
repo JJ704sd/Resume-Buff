@@ -92,6 +92,12 @@ KEYWORD_GROUPS: dict[str, list[tuple[str, str, float]]] = {
         ("心电", "ECG", 0.5),
         ("NLP", "NLP", 0.5),
         ("评测", "评测", 0.5),
+        # R3.5+ (PM 维度):baiyun_2026_product JD 提到, 修复后 match_score
+        # 能精确识别这些 missing 关键词, suggestions 提示"补 PM 维度素材"
+        ("物流", "物流", 0.5),
+        ("工业工程", "工业工程", 0.5),
+        ("原型", "原型", 0.5),
+        ("流程图", "流程图", 0.5),
     ],
 }
 

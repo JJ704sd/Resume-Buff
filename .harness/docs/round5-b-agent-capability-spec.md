@@ -2,8 +2,8 @@
 
 > 适用项目: 简历帮  
 > 日期: 2026-06-27  
-> 状态: Future spec / 未启动  
-> 前置: R5-A Phase 1-4 代码与测试已在当前工作区出现,但 Phase 4 相关文件仍处于未提交状态  
+> 状态: Future spec / R5-B.0 文档基线已校准;下一轮推荐从 Phase 2A 启动
+> 前置: R5-A Phase 1-4 + closeout 已合并到 `main`(merge `12dfcf1`),当前基线 441 passed + 0 skipped
 > 目标: 在不改变本地单用户与隐私边界的前提下,把 R5-A 已落地的 Agent 后端能力整理成稳定 API 契约、真实工具数据流、可解释 UI 和更可靠评测闭环。
 
 ---
@@ -17,19 +17,25 @@
 - `backend/core/logger.py`: `JSONL_TRACE_FIELDS` 11 字段 schema + `log_agent_trace_jsonl()`。
 - `backend/core/evidence.py`: 轻量 RAG evidence snippets + lexical retrieval + prompt summary。
 - `scripts/replay_agent_trace.py`: request/session 级 markdown replay。
-- `scripts/evaluate_agent_workflow.py` + `backend/tests/test_agent_eval.py` + `AI岗位JD库_agent_eval报告.md`: Phase 4 eval 已在工作区出现。
+- `scripts/evaluate_agent_workflow.py` + `backend/tests/test_agent_eval.py` + `AI岗位JD库_agent_eval报告.md`: Phase 4 eval 已合并。
+- R5-A closeout(commit `b60a215`): 已补 `agent_summary`、`enable_external_resume` 整链透传、required args validation,并修复 `match_score` 工具 schema 从 `role` 到 `target_role` 的参数命名 bug。
 
-同时存在 9 个需要下一轮处理的差距:
+R5-A closeout 已先行解决的差距:
 
-1. `agent-enhancement-spec.md` 顶部仍写 Phase 4 未启动,后文又写 Phase 4 已完成,文档状态自相矛盾。
-2. 同一 spec 的推荐下一步仍建议从 Phase 1 + Phase 2 开始,已过期。
-3. spec 提到 `agent_trace` 请求字段,但 API 模型没有该字段。
-4. spec 提到 `agent_summary` 响应,但 preview 目前只在 workflow 路径返回 `evidence_summary`,没有 request_id / tools / fallback / latency 汇总。
-5. 前端 API 类型和 UI 尚未暴露 `enable_agent_workflow` / `enable_function_calling` / `session_id` / `agent_summary` / `evidence_summary`。
-6. `ToolSpec.input_schema` 目前主要是元数据,`execute_agent_tool()` 未主动做 schema 校验或上下文权限校验。
-7. workflow 内 `has_external_resume = False` 固定,外部简历诊断尚未纳入 Agent 编排。
-8. `evaluate_bullet_jd_match` 在 workflow 里仍是 representative 单步,不是逐 bullet 评估。
-9. eval 脚本需要从 JSONL 反推工具调用,因为 preview 响应没有稳定 `request_id`。
+1. `agent_summary` 已在 workflow preview 返回,含 request_id / steps_executed / tools_used / fallback_used / latency_ms,且不含 JD/bullet/evidence 原文。
+2. `enable_external_resume` 已从 API / generator / workflow 整链透传,但仍是编排开关层面的占位,尚未把外部简历文本作为 Agent 工具数据流。
+3. `execute_agent_tool()` 已做 required args validation,但还没有类型、范围、数组项、权限 context 的完整轻量校验。
+4. `match_score` 工具 schema 已对齐真实函数签名 `target_role`,避免工具注册表与领域函数脱节。
+
+仍建议 Round 5-B 处理的差距:
+
+1. 文档基线需校准: `agent-enhancement-spec.md` / `ROADMAP.md` 中仍有 Phase 4 状态和下一步建议的旧文本。
+2. 前端 API 类型和 UI 尚未暴露 `enable_agent_workflow` / `enable_function_calling` / `session_id` / `agent_summary` / `evidence_summary`。
+3. 不新增后端 `agent_trace` 请求字段;下一轮只把是否展示 trace 作为前端高级面板 UI 状态。
+4. `ToolSpec.input_schema` 仍需升级为可校验的 schema 子集,并接入 context 权限边界。
+5. 外部简历能力目前只是透传开关,还没有 `external_resume_text` workflow 输入、`parse_external_resume` / `compare_resume_jd` 工具和隐私测试。
+6. `evaluate_bullet_jd_match` 在 workflow 里仍是 representative single-step,不是逐 bullet / top bullets 的真实评估数据流。
+7. eval 报告当前可跑真实 LLM,但下一版应优先使用 `agent_summary.request_id` 关联 JSONL trace,并把 fallback 分类与有效工具链统计做细。
 
 ---
 
@@ -37,11 +43,11 @@
 
 Round 5-B 聚焦"把 Agent 能力变得可用、可解释、可信":
 
-1. 建立稳定的 Agent API 契约:请求字段、响应字段、trace request_id、前端类型全部对齐。
-2. 让工具注册表从"能调"升级为"可校验、可授权、可审计"。
+1. 巩固稳定的 Agent API 契约:后端已有 `agent_summary.request_id`,下一步补前端类型、eval 精确关联和文档闭环。
+2. 让工具注册表从"required 字段可校验"升级为"类型可校验、可授权、可审计"。
 3. 把外部简历诊断纳入 Agent workflow,形成 JD / 素材库 / 已有简历三方对比。
 4. 提供默认收起的前端高级 Agent 面板,展示摘要而非原文。
-5. 升级 eval 报告,从"能跑"变成"能真实衡量 fallback、工具链、延迟和证据约束"。
+5. 升级 eval 报告,从"能跑真实 LLM"变成"能稳定关联 request_id、区分 fallback 类别、衡量有效工具链和证据约束"。
 
 非目标:
 
@@ -53,24 +59,20 @@ Round 5-B 聚焦"把 Agent 能力变得可用、可解释、可信":
 
 ---
 
-## 2. Phase 1 — Agent API 契约与文档收口
+## 2. Phase 1 — Agent API 契约与文档收口 ✅ 已由 R5-A closeout + R5-B.0 覆盖
 
-### 2.1 后端响应新增 `agent_summary`
+### 2.1 后端响应 `agent_summary` 当前基线
 
-`preview_resume(enable_agent_workflow=True)` 返回:
+`preview_resume(enable_agent_workflow=True)` 已返回:
 
 ```json
 {
   "agent_summary": {
     "request_id": "rabcdef12",
-    "workflow": "preview",
-    "steps": 7,
+    "steps_executed": 7,
     "tools_used": ["parse_jd", "match_score", "retrieve_evidence"],
     "fallback_used": false,
-    "fallback_reason": null,
-    "latency_ms": 18,
-    "evidence_count": 4,
-    "trace_available": true
+    "latency_ms": 18
   }
 }
 ```
@@ -102,17 +104,18 @@ Round 5-B 聚焦"把 Agent 能力变得可用、可解释、可信":
 
 - `.harness/docs/agent-enhancement-spec.md`: 修正 Phase 4 状态,删除/改写过期的"下一步从 Phase 1 + Phase 2 开始"。
 - `.harness/docs/ROADMAP.md`: 测试数、Phase 4 状态、后续候选同步为 R5-B。
-- `AGENTS.md` / `README.md`: 只同步稳定事实,不重复大段 spec。
+- `AI岗位JD库_agent_eval报告.md`: 补充 R5-A closeout 后的解读和下一轮 eval 关联建议。
+- `AGENTS.md` / `README.md`: 已包含稳定事实时不重复大段 spec。
 
 ### 验收
 
-- 新增 `TestAgentSummaryContract`: request_id 格式、tools_used、fallback 字段、隐私字段缺失。
-- 新增 `TestPreviewAgentSummary`: `enable_agent_workflow=True` 时响应含 `agent_summary`,False 时旧路径不含。
-- replay 脚本可用 preview 返回的 `request_id` 拉出同一次 workflow。
+- R5-A closeout 已有 `TestAgentSummaryField` 覆盖 request_id、tools_used、fallback、latency 和隐私字段缺失。
+- R5-A closeout 已有 `TestEnableExternalResumePassthrough` 覆盖 `enable_external_resume` 透传。
+- R5-B.0 文档校准后,四份文档不再出现过期 Phase 状态、旧本地分支状态或 Phase 1+2 旧启动建议等矛盾文本。
 
 ---
 
-## 3. Phase 2 — 工具契约、权限与真实数据流
+## 3. Phase 2A — 工具契约、权限与真实数据流(推荐下一轮启动)
 
 ### 3.1 Schema 校验
 
@@ -243,9 +246,9 @@ external_resume_text: str | None = None
 
 ## 6. Phase 5 — Eval 报告升级
 
-### 6.1 稳定 request_id
+### 6.1 使用稳定 request_id
 
-eval 脚本不再从 JSONL 反推最近 request:
+R5-A closeout 后 preview 已返回 `agent_summary.request_id`;eval 脚本下一版不再从 JSONL 反推最近 request:
 
 - 直接读取 preview 返回的 `agent_summary.request_id`。
 - 用 request_id 精确 replay。
@@ -286,15 +289,15 @@ eval 脚本不再从 JSONL 反推最近 request:
 
 推荐顺序:
 
-1. Phase 1: 先做 API 契约和文档收口。没有 request_id / agent_summary,后面的 UI 和 eval 都会继续绕路。
-2. Phase 2: 再做 schema/权限和真实工具数据流。它能把 Agent 从"可演示"推进到"可审计"。
-3. Phase 3: 接外部简历诊断。后端已经有 R3-G 基础,增量可控。
-4. Phase 5: 升级 eval 报告。此时 request_id 与 fallback 分类已经稳定。
+1. R5-B.0: 先完成文档基线校准,让 `agent-enhancement-spec.md` / ROADMAP / eval 报告 / 本 spec 站在同一事实基线上。
+2. Phase 2A: 做 schema 子集校验、context 权限和有效 `tools_used` 语义。它能把 Agent 从"可演示"推进到"可审计"。
+3. Phase 5A: 把 eval 脚本改为优先使用 `agent_summary.request_id`,并细分 fallback 类别。此时不需要先做 GUI。
+4. Phase 3: 接外部简历诊断。后端已有 R3-G 基础,但要补 Agent 工具和隐私测试。
 5. Phase 4: 前端高级面板最后做,且等用户明确启动 GUI。
 
 最小可交付切片:
 
-- Phase 1 + Phase 2 的后端测试全部通过。
+- Phase 2A 的后端测试全部通过。
 - 不做前端 UI,只补 TypeScript API 类型也可以先暂停。
 - 不改默认行为,不开 `enable_agent_workflow` 时用户体验完全不变。
 
@@ -305,7 +308,7 @@ eval 脚本不再从 JSONL 反推最近 request:
 后端:
 
 - `cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
-- 新增行为至少覆盖 agent_summary、schema validation、permission context、external resume privacy、eval request_id。
+- 新增行为至少覆盖 schema validation、permission context、effective tools_used、external resume privacy、eval request_id。
 
 前端:
 
@@ -341,7 +344,7 @@ eval 脚本不再从 JSONL 反推最近 request:
 Round 5-B 完成时应满足:
 
 - 当前 `agent-enhancement-spec.md` 状态与代码一致,不再出现 Phase 状态矛盾。
-- preview workflow 返回稳定 `agent_summary`,且 request_id 能 replay。
+- preview workflow 已返回稳定 `agent_summary`,且 eval/replay 都能用同一个 request_id 精确关联。
 - 工具输入 schema 和权限 context 有测试锁定。
 - 外部简历能进入 Agent workflow,但不泄露原文。
 - eval 报告不再靠脆弱 trace 反推,能精确关联 request_id。

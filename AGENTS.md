@@ -64,7 +64,7 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 3.5+(b) 收尾后有 **131 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + 3 bugfix_r35plus + **3 pm_dimensions**），**131 passed + 1 skipped**（baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验）
+- 后端 `pytest`：Round 3.5.1 收尾后有 **136 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + 3 bugfix_r35plus + 3 pm_dimensions + **5 score_thresholds_live**），**136 passed + 1 skipped**（baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验）
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余
@@ -73,6 +73,7 @@
   - **R3.5 起：阈值 80/60 锁死 + 6 份 ground truth 验证** —— `tests/test_threshold_tuning.py` 锁 `_classify_recommendation` 在 `≥80 高 / ≥60 中 / 否则低`;基于 `简历帮知识库/jd_samples.json` 8 份 ground truth（排除 2 份公告型）跑 match_score 断言分类正确
   - **R3.5+ 起：borrowed pool + 'AI' surface 锁死** —— `match_score(text, role, materials, include_borrowed=True)` 默认开 borrowed pool（全素材库扫描，缓解跨 role false negative）；`KEYWORD_GROUPS['skills']` 加 `('AI', 'LLM', 0.5)`；`TestMatchScoreBugfixR35Plus` 3 个测试覆盖 baiyun_qa / baiyun_product 修后 score>0 + include_borrowed=False 旧行为保留
   - **R3.5+ (b) 起：PM 维度 surface 锁死** —— `KEYWORD_GROUPS['domains']` 加 4 个 PM 维度 surface（物流/工业工程/原型/流程图，0.5 加分）让 match_score 精确识别 baiyun_2026_product 等 PM 岗位缺失;suggestions 给"补 PM 维度素材"指引;`TestMatchScorePMDimensions` 3 个测试锁死 missing 含 PM 4 项 + suggestions 提到 PM 关键词 + KEYWORD_GROUPS 字典级断言
+  - **R3.5.1 起：score_thresholds.py 实跑模式锁死** —— `scripts/score_thresholds.py` 跑 `match_score(text, role_id_hint, materials)` 拿 score / coverage, 不再读 jd_samples.json frozen top_score;`tests/test_score_thresholds.py::TestScoreThresholdsLive` 5 个测试锁死 (含 `test_live_mode_ignores_frozen_top_score` 篡改 frozen 字段验证实跑分数不变, 核心防回潮)
 - 后端冒烟：`python main.py` 启动后访问 `http://127.0.0.1:8000/api/health` 应返回 `{"status":"ok"}`
 - 前端类型检查：`cd frontend && npx vue-tsc --noEmit` 必须 0 error
 - 前端构建：`cd frontend && npm run build` 必须成功

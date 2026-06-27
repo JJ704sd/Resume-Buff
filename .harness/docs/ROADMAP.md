@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3.5+ (b) 收尾)
+## 0. 当前项目快照(2026-06-27 R3.5.1 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -16,16 +16,17 @@
 - 5 套简历模板:classic / single_column / two_column / minimal / technical
 - JD 加权 score + tier 分组 + 业务阈值 banner(高≥80 / 中 60-79 / 低<60,**R3.5 调优锁死**)
 - **borrowed pool + 'AI' surface + PM 维度 surface**(R3.5+ / R3.5+ (b) 修复 false negative + 让 match_score 精确告诉 user 缺什么)
+- **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 不再读 frozen top_score, 实时跑 match_score 出报告, 反映当前实现 + 真实素材库)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **131 个 pytest 全绿**(128 baseline + 3 R3.5+ bugfix + 3 R3.5+ (b) pm_dimensions),1 skipped(baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验, 等 user 补素材或改 label)
+- **136 个 pytest 全绿**(131 baseline + 5 R3.5.1 score_thresholds_live),1 skipped(baiyun_2026_product 修后 score='低' vs label='中' 仍 gap, 根因 user 素材库缺 PM 经验, 等 user 补素材或改 label)
 
 **最近 4 个 commit**:
+- `44bd370` feat(round3.5.1): score_thresholds.py 改实跑 match_score
 - `ed57e25` feat(round3.5+b): PM 维度 surface — match_score 精确识别 baiyun_product 缺失
 - `502661f` docs(round3.5+): sync ROADMAP + AGENTS + README + MEMORY to R3.5+ closeout
 - `2889dd9` fix(round3.5+): match_score 漏匹配 bug — borrowed pool + 'AI' surface
-- `bdefd97` docs: ROADMAP.md 可持续更新的未来规划文档
 
 ---
 
@@ -49,7 +50,13 @@
 - **效果**:baiyun_2026_product 实跑: score=33, matched=['LLM'], missing=['原型', '工业工程', '流程图', '物流'];suggestions 精确给"补 PM 维度素材"指引 (提到物流/工业工程/原型)
 - **8 份 eval live 准确率保持 7/8 = 88%**;baiyun_product 仍 skip (score='低' vs label='中' 仍 gap, 根因是 user 素材库实际缺 PM 经验, 不是算法问题)
 - **3 个回归测试**:`tests/test_jd_parser.py::TestMatchScorePMDimensions` 锁死 baiyun_product missing 含 PM 4 项 + suggestions 提到 PM 关键词 + KEYWORD_GROUPS 字典级断言
-- **未修(留给 user)**:baiyun_2026_product 严格阈值校验留待 user 补 PM 素材 (or 改 label='低') 后再 un-skip;`scripts/score_thresholds.py` 仍读 frozen top_score 需 R3.5.1 改实跑模式
+
+### R3.5.1 — score_thresholds.py 改实跑 ✅ 完成 (2026-06-27, commit `44bd370`)
+- **背景**:R3.5 写的 score_thresholds.py 读 jd_samples.json 里的 frozen top_score (R3.5 时 AI 推断写死的 score),R3.5+ / R3.5+ (b) 修 match_score 后, frozen top_score 跟实跑结果不一致, 报告失去参考价值
+- **修法**:`scripts/score_thresholds.py` 移除 `s['top_score']` 读取, 改跑 `match_score(s['text'], s['role_id_hint'], materials)` 拿 score / coverage;role 沿用 role_id_hint (user 标定的期望 role), 不再 6 role 取最高 (简化);sys.path 注入 backend/ 让 scripts/ 下脚本能 import core.* (跟 match_golden_targets.py 同样处理);报告 markdown 顶部加 "R3.5.1 (实跑模式)" 标识 + "R3.5.1 vs R3.5 差异说明" 段
+- **效果**:**8 份 eval 实跑准确率 7/8 = 88%** (R3.5 frozen 6/8 = 75%, +13pp);提升核心是 baiyun_2026_qa 从 frozen 0 → 实跑 100 (修后 '高' 跟 label '推荐投' 一致);报告含详细 coverage (skills/tools/domains 三维), 比 R3.5 报告信息量更丰富;baiyun_2026_product 仍 fail (实跑 33 '低' vs label '中')
+- **5 个回归测试**:`tests/test_score_thresholds.py::TestScoreThresholdsLive` 锁死 (含 `test_live_mode_ignores_frozen_top_score` 篡改 frozen 字段后实跑分数不变, 核心防回潮)
+- **未修(留给 user)**:baiyun_2026_product 严格阈值校验留待 user 补 PM 素材 (or 改 label='低') 后再 un-skip;frozen top_score / top_role / top_coverage 字段保留在 jd_samples.json 作为 R3.5 时点历史 snapshot
 
 ### R3-G — 重启 cherry-pick
 - **背景**:`feat/r3g-resume-upload` 分支保留 1467 行 MVP(外部简历实时读取 + JD 评分联动),worktree `D:/简历帮/r3g-resume-upload` HEAD `eb7e841`;用户 2026-06-26 选完 scope 后主动 cancel,R3-G cancelled 但 MVP commit 在分支保留

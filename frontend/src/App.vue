@@ -13,6 +13,7 @@ import {
   type JdMatchResult,
   type Section,
 } from './api'
+import ResumeUploader from './components/ResumeUploader.vue'  // R3-G
 
 const summary = ref<MaterialSummary | null>(null)
 const roles = ref<Role[]>([])
@@ -30,6 +31,10 @@ const customIntention = ref<string>('')
 const jdText = ref<string>('')
 const jdLoading = ref(false)
 const jdResult = ref<JdMatchResult | null>(null)
+
+// R3-G: 外部简历全文 (从 ResumeUploader 组件 emit 填入)
+const externalResumeText = ref<string>('')
+const externalResumeFilename = ref<string>('')
 
 // Round 3 I: 按 JD 智能排序(checkbox) — 默认 unchecked,unchecked 时不传 jd_text
 const jdAware = ref(false)
@@ -107,13 +112,37 @@ async function onScoreJd() {
   }
   jdLoading.value = true
   try {
-    jdResult.value = await jdApi.match(text, selectedRole.value)
+    // R3-G: 透传 external_resume_text (上传简历后才有)
+    jdResult.value = await jdApi.match(
+      text,
+      selectedRole.value,
+      externalResumeText.value.trim() || null,
+    )
   } catch (e: any) {
     ElMessage.error(`评分失败: ${e?.response?.data?.detail ?? e?.message ?? '未知错误'}`)
     jdResult.value = null
   } finally {
     jdLoading.value = false
   }
+}
+
+// R3-G: 处理 ResumeUploader emit('parsed') 事件
+function onResumeParsed(payload: {
+  filename: string
+  text: string
+  paragraphs: any[]
+}) {
+  externalResumeFilename.value = payload.filename
+  externalResumeText.value = payload.text
+  ElMessage.success(
+    `已上传简历: ${payload.filename} (${payload.paragraphs.length} 段, ${payload.text.length} 字符)`,
+  )
+}
+
+// R3-G: 清除已上传简历
+function onClearResume() {
+  externalResumeFilename.value = ''
+  externalResumeText.value = ''
 }
 
 // 分数 → 颜色 (高/中/低)
@@ -398,6 +427,21 @@ function skillMatchCount(groupIndex: number): number {
                   />
                 </el-form-item>
 
+                <!-- R3-G: 外部简历上传 (可选, 触发简历视角评分) -->
+                <el-form-item label="或上传现有简历 (可选, 触发简历视角 have/need 分析)">
+                  <ResumeUploader @parsed="onResumeParsed" @clear="onClearResume" />
+                  <div v-if="externalResumeFilename" class="hint" style="margin-top: 4px">
+                    已上传: <b>{{ externalResumeFilename }}</b> (评分时会展示"简历已有 / 还缺什么")
+                    <el-button
+                      link
+                      type="danger"
+                      size="small"
+                      style="margin-left: 8px"
+                      @click="onClearResume"
+                    >清除</el-button>
+                  </div>
+                </el-form-item>
+
                 <el-form-item>
                   <el-button
                     type="success"
@@ -481,6 +525,33 @@ function skillMatchCount(groupIndex: number): number {
                     </div>
                   </el-col>
                 </el-row>
+
+                <!-- R3-G: 简历视角 (上传简历后才有) -->
+                <template v-if="jdResult.resume_perspective">
+                  <el-divider />
+                  <div class="rp-box">
+                    <div class="rp-title">
+                      <span>
+                        <el-tag size="small" type="info" effect="dark">R3-G 简历视角</el-tag>
+                        基于已上传简历的"已有 / 还缺"分析
+                      </span>
+                      <span style="margin-left: 16px">
+                        <el-tag size="small" type="success">已有 {{ jdResult.resume_perspective.have_count }}</el-tag>
+                        <el-tag size="small" type="danger" style="margin-left: 4px">还缺 {{ jdResult.resume_perspective.need_count }}</el-tag>
+                      </span>
+                    </div>
+                    <div class="rp-row">
+                      <span class="rp-lbl">简历里有:</span>
+                      <span v-for="k in jdResult.resume_perspective.have_keywords" :key="'rp-h-'+k" class="kw-chip matched">{{ k }}</span>
+                      <span v-if="jdResult.resume_perspective.have_keywords.length === 0" class="hint">(无)</span>
+                    </div>
+                    <div class="rp-row">
+                      <span class="rp-lbl">简历里没提 (已扣除素材库能提供的):</span>
+                      <span v-for="k in jdResult.resume_perspective.need_keywords" :key="'rp-n-'+k" class="kw-chip missing">{{ k }}</span>
+                      <span v-if="jdResult.resume_perspective.need_keywords.length === 0" class="hint">(无 — 简历覆盖所有 JD 要求)</span>
+                    </div>
+                  </div>
+                </template>
 
                 <el-alert
                   v-if="jdResult.suggestions.length"

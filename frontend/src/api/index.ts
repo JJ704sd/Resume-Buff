@@ -57,6 +57,14 @@ export interface JdParseResult {
   tier_info: { required: string[]; preferred: string[]; bonus: string[] }
 }
 
+export interface ResumePerspective {
+  // R3-G 新增: 简历视角 (上传简历后才有, None 时 match 响应不返回)
+  have_keywords: string[]   // JD 要求 ∩ 简历里有
+  need_keywords: string[]   // JD 要求 - 简历里有 - 素材库能提供
+  have_count: number
+  need_count: number
+}
+
 export interface JdMatchResult {
   score: number
   matched_keywords: string[]
@@ -67,6 +75,24 @@ export interface JdMatchResult {
   // ----- Round 3 A: tier 透传 + 业务阈值建议 -----
   tier_info: { required: string[]; preferred: string[]; bonus: string[] }
   recommendation: '高' | '中' | '低'
+  // ----- R3-G: 简历视角 (外部简历全文非空时存在) -----
+  resume_perspective: ResumePerspective | null
+}
+
+// ----- R3-G: 外部简历解析 -----
+export interface ParsedParagraph {
+  idx: number
+  text: string
+  is_heading: boolean
+  page?: number
+}
+
+export interface ParsedResume {
+  filename: string
+  size_bytes: number
+  paragraphs: ParsedParagraph[]
+  page_count?: number
+  note?: string
 }
 
 export const materialsApi = {
@@ -89,14 +115,27 @@ export const resumeApi = {
     api
       .post('/resume/generate', { target_role, intention, template, jd_text }, { responseType: 'blob' })
       .then(r => r.data as Blob),
+  // R3-G 新增: 解析外部简历 (.docx/.pdf/.txt)
+  parseExternal: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post<ParsedResume>('/resume/parse-external', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then(r => r.data)
+  },
 }
 
 // ----- Round 2 #2: JD API -----
 export const jdApi = {
   parse: (text: string) =>
     api.post<JdParseResult>('/jd/parse', { text }).then(r => r.data),
-  match: (text: string, target_role: string) =>
-    api.post<JdMatchResult>('/jd/match', { text, target_role }).then(r => r.data),
+  // R3-G 改: external_resume_text 可选 (上传简历的全文, 触发简历视角)
+  match: (text: string, target_role: string, external_resume_text?: string | null) =>
+    api
+      .post<JdMatchResult>('/jd/match', { text, target_role, external_resume_text: external_resume_text || null })
+      .then(r => r.data),
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

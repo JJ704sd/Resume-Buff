@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R3.6.2 收尾)
+## 0. 当前项目快照(2026-06-27 R3-G 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -19,16 +19,18 @@
 - **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 不再读 frozen top_score, 实时跑 match_score 出报告, 反映当前实现 + 真实素材库)
 - **R3.6 扩库 + 质量清理: 88 份 JD**(v3 86 → R3.6 +10 → R3.6.1 清理 -8 = 88, **A 级 86 / B 级 2**, 无 placeholder 无 C 级, 4 级标签 strong=53 / campus_to_intern=7 / weak=20 / none=8)
 - **R3.6.2 baiyun_product label 复核完成**(第三次复核改 '别投', un-skip → **8/8 = 100% 准确率, 0 skipped**)
+- **R3-G 外部简历上传 + 简历视角评分**(`POST /api/resume/parse-external` 解析 .docx/.pdf/.txt → `match_score` 增加 `external_resume_text` 参数 → 返回 `resume_perspective` 块 {have_keywords, need_keywords, have_count, need_count} → 前端 `ResumeUploader` drag 组件 + App.vue 评分结果区加 "已有/还缺" 卡片, 扣除素材库能补的避免 false negative)
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - LLM 智能改写(无 key 静默降级)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **137 个 pytest 全绿 + 0 skipped**(131 baseline + 5 R3.5.1 score_thresholds_live + 1 R3.6.2 un-skip baiyun_product 重新 active)
+- **181 个 pytest 全绿 + 0 skipped**(137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext`, 全移植自 R3-G worktree `eb7e841` + 当前 main 的 R3.5+ borrowed pool / KEYWORD_GROUPS 适配)
 
-**最近 4 个 commit**:
+**最近 5 个 commit**:
+- `c3b2807` feat(round3-g#3): 前端集成 ResumeUploader + resume_perspective 展示
+- `d81c71e` feat(round3#g step2): 实装 _build_resume_perspective + 移植 R3-G 测试 (181 passed)
+- `b15dec5` feat(round3#g step1): resume upload 端点 + match_score 透传 external_resume_text
+- `2813505` docs(round3.6.2): sync ROADMAP + AGENTS + README to R3.6.2 closeout (137/0 skipped)
 - `b254611` chore(round3.6.2): baiyun_product label 第三次复核改 '别投' + un-skip
-- `a3eb9d4` chore(round3.6.1): v4 主库清理 8 份低质量 JD (96 → 88, A=86/B=2/无 C)
-- `a4a1619` feat(round3.6): 10 份大厂 JD 入库(阿里 4 + 腾讯 2 + 字节 4)
-- `44bd370` feat(round3.5.1): score_thresholds.py 改实跑 match_score
 
 ---
 
@@ -60,13 +62,19 @@
 - **5 个回归测试**:`tests/test_score_thresholds.py::TestScoreThresholdsLive` 锁死 (含 `test_live_mode_ignores_frozen_top_score` 篡改 frozen 字段后实跑分数不变, 核心防回潮)
 - **未修(留给 user)**:baiyun_2026_product 严格阈值校验留待 user 补 PM 素材 (or 改 label='低') 后再 un-skip;frozen top_score / top_role / top_coverage 字段保留在 jd_samples.json 作为 R3.5 时点历史 snapshot
 
-### R3-G — 重启 cherry-pick
+### R3-G — 外部简历上传 + 简历视角评分 ✅ 完成 (2026-06-27, commits `b15dec5` + `d81c71e` + `c3b2807`)
 - **背景**:`feat/r3g-resume-upload` 分支保留 1467 行 MVP(外部简历实时读取 + JD 评分联动),worktree `D:/简历帮/r3g-resume-upload` HEAD `eb7e841`;用户 2026-06-26 选完 scope 后主动 cancel,R3-G cancelled 但 MVP commit 在分支保留
-- **重启工作**:cherry-pick `eb7e841` 到 main + 集成测试(简历解析不破 generator)+ UI 适配(上传简历 → 跑 match_score → 给建议)
-- **触发条件**:你想做"上传简历自动打分"功能(投递前最后一道检查)
-- **依赖**:无前置(分支已就绪)
-- **工作量**:中(cherry-pick 可能冲突 ~30 文件,集成测试 ~200 行)
-- **价值**:简历→JD 一站式,减少"投错简历"风险
+- **实施路径**(不走 git cherry-pick 改"功能移植"):R3-G base 是 R3-I 之前的旧 base,eb7e841 自身只 +1467/-5(worker 提前做了"剥离"工作),用 `git show <commit>:<file>` 提取纯新增文件 + 手动合并修改文件(避开 ~30 文件冲突)
+- **实施成果**(3 commit 顺序落地):
+  1. `b15dec5` Step 1: 纯新增 `backend/core/resume_parser.py` (250 行 docx/pdf/txt 解析) + `frontend/src/components/ResumeUploader.vue` (227 行 el-upload drag) + `backend/api/resume.py` 加 `POST /parse-external` + `backend/api/jd.py` MatchRequest 加 `external_resume_text` 字段 + `backend/core/jd_parser.py` `match_score` 加 `external_resume_text` 关键字参数(占位 `_build_resume_perspective`)
+  2. `d81c71e` Step 2: 实装 `_build_resume_perspective` 核心逻辑(归一化简历文本 + 扫 required keywords 的 surface 命中 → have, 否则 need_candidate, need 扣掉 match_score 的 borrowed pool 避免 false negative) + 移植 44 个 R3-G 测试(`test_parse_external.py` 30 + `test_jd_match_ext.py` 14)
+  3. `c3b2807` Step 3: 前端集成 `api/index.ts` 加 `ParsedResume` / `ResumePerspective` 类型 + `resumeApi.parseExternal(file)` + `jdApi.match` 第 3 参 + `App.vue` 加 `ResumeUploader` + `externalResumeText` ref + 评分结果区加 have/need 卡片
+- **实施坑**(已写进 MEMORY.md):
+  1. PowerShell `>` 重定向 git show 文件会写 UTF-16 with BOM → pytest "source code string cannot contain null bytes", 改用 `python -c "subprocess.check_output + open('wb')"`
+  2. PowerShell `git commit -m` body 里 `**xx**:` 触发 pathspec 吞字段, 改用 `git commit -F <tmp_file>` 传多行 message
+  3. `parse_resume_bytes` 返回 dict 不是 list, API endpoint 必须提取 `parsed["paragraphs"]` 不能直接传整个 dict
+  4. UTF-16 → UTF-8 转码:6959 个 null bytes 让 pytest 报 "source code string cannot contain null bytes"
+- **效果**:**181 passed, 0 skipped**;端到端冒烟: 上传简历 (.txt 218 字符/10 段) → score=95 / recommendation='高' / have=10 关键词 / need=0 (简历覆盖所有 JD 要求);不传 / 空字符串 → `resume_perspective: None` (前端 v-if 隐藏)
 
 ---
 

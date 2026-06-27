@@ -64,7 +64,7 @@
 
 ## Testing instructions
 
-- 后端 `pytest`：Round 3.6.2 收尾后有 **137 个用例**（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + 3 bugfix_r35plus + 3 pm_dimensions + 5 score_thresholds_live），**137 passed + 0 skipped**（baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, un-skip 后 8/8 = 100% 准确率）
+- 后端 `pytest`：Round 3-G 收尾后有 **181 个用例**（137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext`），**181 passed + 0 skipped**（R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率）
   - 跑：`cd backend && D:\python3.11\python.exe -m pytest tests/ -v`
   - 新增行为必须有 pytest 覆盖（核心逻辑 / 边界 / 集成），thin wrapper / URL 字面量 / mock 自指 → 不写
   - **每轮独立验证 + 清理冗余测试**：跑全量绿后审视新增文件是否冗余

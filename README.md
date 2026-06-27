@@ -26,7 +26,7 @@
 
 ---
 
-## Round 3.5+ 当前能力(2026-06-27)
+## Round 3-G 当前能力(2026-06-27)
 
 | 功能 | 状态 |
 |---|---|
@@ -43,6 +43,7 @@
 | **R3.5+ 修 match_score 漏匹配 bug**(borrowed pool 跨 role 经验自动纳入 + `KEYWORD_GROUPS` 加 'AI' surface;3 个 bugfix 回归测试;baiyun_qa 修后 score=100 ✓,baiyun_product 修后 score=100 但 label 待 user 复核) | ✅ Round 3.5+ |
 | **R3.5+ (b) PM 维度 surface**(`KEYWORD_GROUPS['domains']` 加 物流/工业工程/原型/流程图 4 个 surface;baiyun_product 修后 score=33 + missing/suggestions 精确给"补 PM 维度"指引;3 个 pm_dimensions 回归测试) | ✅ Round 3.5+ (b) |
 | **R3.5.1 score_thresholds 实跑模式**(`scripts/score_thresholds.py` 改实跑 `match_score(text, role_id_hint, materials)`, 不读 jd_samples.json frozen top_score;8 份 eval 实跑准确率 7/8 = 88%;5 个 score_thresholds_live 回归测试含篡改 frozen 字段验证实跑模式锁死) | ✅ Round 3.5.1 |
+| **R3-G 外部简历上传 + 简历视角评分**(`POST /api/resume/parse-external` 解析 .docx/.pdf/.txt + `match_score` 增加 `external_resume_text` 参数 + 返回 `resume_perspective` 块 {have/need_keywords, have/need_count} + 前端 `<ResumeUploader>` el-upload drag + App.vue 评分结果区加 have/need 卡片 + 扣除素材库能补的避免 false negative) | ✅ Round 3-G |
 
 ---
 
@@ -55,7 +56,7 @@
 | **3. 工具** | python-docx(写 docx) + pymupdf(读 docx/pdf) + FastAPI + Vue 3 + Element Plus + **OpenAI 兼容 HTTP(urllib stdlib,无第三方包)** + jieba-ready(预留 Round 3) |
 | **4. 权限** | 本地单用户;素材库和输出目录按 user 权限隔离(不需要账号系统) |
 | **5. 人工确认** | 强制两段式:`POST /preview` → 渲染 → `POST /generate`;**Round 2 加 JD 评分卡预览**(0-100 分 + 三维覆盖率 + 命中/缺失关键词);**R3-A 加业务阈值 banner**(高≥80 / 中 60-79 / 低<60,与 scoreColor/scoreTag 阈值一致) |
-| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 137 个 pytest 用例**(53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts + 25 generator_jd_aware + 11 threshold_tuning + 3 bugfix_r35plus + 3 pm_dimensions + 5 score_thresholds_live),**137 passed + 0 skipped**(baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, un-skip 后 8/8 = 100% 准确率),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归** + **R3.5+ (b) PM 维度 surface 锁死 + 3 pm_dimensions 回归** + **R3.5.1 score_thresholds 实跑模式锁死 + 5 score_thresholds_live 回归** |
+| **6. 评测** | Round 1 仅"事实覆盖自检";**当前 181 个 pytest 用例**(137 R3.6.2 baseline + 30 `test_parse_external` + 14 `test_jd_match_ext`),**181 passed + 0 skipped**(R3-G 移植自 worktree `eb7e841` + 当前 main R3.5+ borrowed pool / KEYWORD_GROUPS 适配;baiyun_product 第三次复核改 '别投' label 跟 match_score score=33 '低' 一致, 8/8 = 100% 准确率),含 R2#1 baseline 锁死 + R3-A 加权 score/tier/recommendation/bugfix 回归 + R3-J layout dispatcher 视觉差异回归 + **R3-I 6 role 字节级 baseline hash 锁死 jd_context=None 路径** + **R3.5 阈值 80/60 锁死 + 6 份 ground truth 验证** + **R3.5+ borrowed pool + 'AI' surface 锁死 + 3 bugfix 回归** + **R3.5+ (b) PM 维度 surface 锁死 + 3 pm_dimensions 回归** + **R3.5.1 score_thresholds 实跑模式锁死 + 5 score_thresholds_live 回归** + **R3-G resume_parser 锁死 .docx/.pdf/.txt 解析边界 + resume_perspective 同义词 alias 算法 + 借调池去重 false negative** |
 | **7. 监测** | `backend/logs/generation.log` 记录每次生成(时间/role/文件/大小/状态);**Round 2 加 LLM 失败降级事件计数**(改写失败时回原文,不写日志防 PII 泄漏) |
 | **8. 监控** | FastAPI 默认 exception handler;前端 `ElMessage.error` 捕获 |
 

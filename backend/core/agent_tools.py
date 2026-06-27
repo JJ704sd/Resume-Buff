@@ -18,9 +18,14 @@ R5-A Phase 1: Agent 工具注册表 + 统一执行入口
   - privacy_violation   : 试图写入敏感内容日志或越权访问(预留,本轮不主动用)
   - max_step_exhausted  : Agent 循环达到上限
 
+R5-A Phase 3 新增:
+  - retrieve_evidence  : 轻量 RAG — 从 materials 切 evidence snippets 并按 JD 关键词检索
+  - 输出 evidence_snippet dict 列表(只含 source_type/source_id/text/matched_keywords/confidence)
+  - pii_risk="medium" (evidence 含真实素材片段, 跟 match_score 同级)
+
 注意:
   - 本模块不引入任何 LLM 调用,纯工具注册 / 调用包装
-  - 导入 jd_parser / llm_rewriter 是稳定的下游,无循环依赖风险
+  - 导入 jd_parser / llm_rewriter / evidence 是稳定的下游,无循环依赖风险
   - Phase 1 不在 ToolResult 里存 args / input 原文(隐私)
 """
 from __future__ import annotations
@@ -35,6 +40,10 @@ from core.jd_parser import (
     parse_jd,
 )
 from core.llm_rewriter import rewrite_highlights
+from core.evidence import (
+    retrieve_evidence,
+    evidence_to_dict_list,
+)
 
 
 # ----------------------------------------------------------------------
@@ -103,14 +112,16 @@ class ToolResult:
 # ----------------------------------------------------------------------
 # AGENT_TOOLS 注册表(对齐 spec §4.2 推荐任务图 + §5.1)
 # ----------------------------------------------------------------------
-# 首批 4 个工具:
+# Phase 1 首批 4 个工具:
 #   - parse_jd                    : 结构化抽取 JD 的硬性要求 / 关键词
 #   - match_score                 : JD ↔ 素材库匹配打分(返回 score + coverage)
 #   - evaluate_bullet_jd_match    : 内容理解 — 单条 bullet 对 JD 关键词覆盖度
 #   - rewrite_highlights          : 生成与编辑 — 改写 bullets
 #
+# Phase 3 新增:
+#   - retrieve_evidence           : 检索 — 从 materials 切 evidence snippets 并按 JD 关键词检索
+#
 # 后续 P2 可能加:
-#   - retrieve_materials          : 检索 — 从素材库找候选 evidence(Phase 3 RAG 时接入)
 #   - parse_external_resume       : 结构化抽取 — 外部简历 docx/pdf/txt(已有 core.resume_parser)
 #   - render_docx                 : 发布/保存 — 实际生成 docx(MVP 用 generator.render_docx)
 AGENT_TOOLS: dict[str, ToolSpec] = {
@@ -153,6 +164,26 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
             "required": ["bullet", "jd_focus"],
         },
     ),
+    "retrieve_evidence": ToolSpec(
+        name="retrieve_evidence",
+        # 包一层把 EvidenceSnippet 序列化成 dict list (ToolResult.output 要可序列化)
+        # frozen=True dataclass 的 tuple field 不能直接 json.dumps
+        callable=lambda **kw: evidence_to_dict_list(retrieve_evidence(**kw)),
+        permission="read_materials_and_jd_keywords",
+        pii_risk="medium",  # evidence 含真实素材片段, 跟 match_score 同级
+        timeout_ms=300,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "jd_keywords": {"type": "array", "items": {"type": "string"}},
+                "role": {"type": "string"},
+                "materials": {"type": "object"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 50},
+                "min_confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+            "required": ["jd_keywords", "role", "materials"],
+        },
+    ),
     "rewrite_highlights": ToolSpec(
         name="rewrite_highlights",
         callable=rewrite_highlights,
@@ -168,6 +199,7 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
                 "jd_focus": {"type": "object"},
                 "enable_function_calling": {"type": "boolean"},
                 "session_id": {"type": "string"},
+                "evidence": {"type": "array"},  # R5-A Phase 3: EvidenceSnippet dict 列表
             },
             "required": ["highlights", "target_role"],
         },

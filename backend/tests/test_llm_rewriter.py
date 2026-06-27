@@ -1296,3 +1296,294 @@ class TestSessionIntegration:
         # 第 3 条是当前 new user
         user_payload = json.loads(messages[3]["content"])
         assert user_payload["bullets"] == ["新原文 0", "新原文 1"]
+# =========================================================================
+# R5-A Phase 3: evidence 透传到 rewrite_highlights
+# =========================================================================
+class TestEvidenceIntegration:
+    """R5-A Phase 3: evidence kwarg 接入 rewrite_highlights
+
+    锁点(spec §5.3 + Phase 3 任务约束):
+      1. evidence=None → payload 字节级一致(老路径 252 老测试不破)
+      2. evidence=[] (空 list) → 等同 evidence=None,不激活约束
+      3. evidence=[Snippet...] → user_payload 含 evidence_summary 字段
+      4. evidence=[Snippet...] → system prompt 末尾追加 evidence 约束后缀
+      5. evidence dict list (来自 workflow) → 重建 EvidenceSnippet 后正常激活
+      6. _build_request_payload evidence_summary kwarg 透传
+      7. evidence 不影响 schema / retry / FC 等其他 R4 行为
+    """
+
+    def test_evidence_none_payload_byte_identical_to_baseline(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence=None → payload 与 R4 baseline 字节级一致(老路径)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            evidence=None,  # Phase 3 默认
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+
+        # 验证 user_payload 不含 evidence_summary 字段
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert "evidence_summary" not in user_payload, (
+            "evidence=None 时 user_payload 不应有 evidence_summary 字段"
+        )
+
+        # 验证 system message 是 SYSTEM_PROMPT 原版(不含 EVIDENCE_CONSTRAINT_SUFFIX)
+        system_content = payload["messages"][0]["content"]
+        from core.llm_rewriter import SYSTEM_PROMPT, EVIDENCE_CONSTRAINT_SUFFIX
+        assert system_content == SYSTEM_PROMPT, (
+            "evidence=None 时 system message 必须是 SYSTEM_PROMPT 原版"
+        )
+        assert EVIDENCE_CONSTRAINT_SUFFIX not in system_content
+
+    def test_evidence_empty_list_equivalent_to_none(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence=[] (空 list) → 等同 evidence=None,不激活约束"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["原文 0"], target_role="tech_metric",
+            evidence=[],  # 空 list
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert "evidence_summary" not in user_payload, (
+            "evidence=空 list 时也不应激活 evidence_summary 注入"
+        )
+
+    def test_evidence_with_snippets_injects_summary_field(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence=[EvidenceSnippet...] → user_payload 含 evidence_summary 字段"""
+        from core.evidence import EvidenceSnippet
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0", "改写 1"])
+            ).encode("utf-8"),
+        )
+        evidence_list = [
+            EvidenceSnippet(
+                source_type="project",
+                source_id="company_medical_eval",
+                text="构建包含 100 个测试用例的医疗评测集",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            ),
+            EvidenceSnippet(
+                source_type="skill",
+                source_id="ai_ml",
+                text="PyTorch 深度学习框架",
+                matched_keywords=("LLM",),
+                confidence=0.5,
+            ),
+        ]
+        llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            evidence=evidence_list,
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert "evidence_summary" in user_payload, (
+            "evidence 非空时 user_payload 应有 evidence_summary 字段"
+        )
+        ev_summary = user_payload["evidence_summary"]
+        assert "[1]" in ev_summary, "summary 应包含 [1] 标识"
+        assert "company_medical_eval" in ev_summary, "summary 应含 source_id"
+        assert "构建包含 100 个测试用例" in ev_summary
+
+    def test_evidence_with_dict_list_from_workflow(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence=dict list (来自 workflow evidence_to_dict_list) → 重建 Snippet 正常激活"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0"])
+            ).encode("utf-8"),
+        )
+        dict_evidence = [
+            {
+                "source_type": "project",
+                "source_id": "test_project",
+                "text": "test evidence text",
+                "matched_keywords": ["LLM"],
+                "confidence": 1.0,
+            }
+        ]
+        llm.rewrite_highlights(
+            ["原文 0"], target_role="tech_metric",
+            evidence=dict_evidence,
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert "evidence_summary" in user_payload
+        assert "test_project" in user_payload["evidence_summary"]
+
+    def test_evidence_summary_in_system_prompt_suffix(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence 非空 → system prompt 末尾追加 EVIDENCE_CONSTRAINT_SUFFIX"""
+        from core.evidence import EvidenceSnippet
+        from core.llm_rewriter import EVIDENCE_CONSTRAINT_SUFFIX
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["原文 0"], target_role="tech_metric",
+            evidence=[EvidenceSnippet(
+                source_type="project",
+                source_id="p1",
+                text="evidence",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            )],
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        system_content = payload["messages"][0]["content"]
+        assert EVIDENCE_CONSTRAINT_SUFFIX in system_content, (
+            "evidence 非空时 system prompt 应追加约束后缀"
+        )
+        from core.llm_rewriter import SYSTEM_PROMPT
+        assert system_content.startswith(SYSTEM_PROMPT), (
+            "system prompt 应以 SYSTEM_PROMPT 开头, 约束后缀追加在末尾"
+        )
+
+    def test_evidence_does_not_break_retry_path(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence 非空时 retry 路径仍保留 evidence_summary (不丢约束)"""
+        from core.evidence import EvidenceSnippet
+        captured = {"calls": []}
+
+        def fake_urlopen(req, timeout=None):
+            captured["calls"].append(req.data)
+            payload_str = req.data.decode("utf-8")
+            if "_retry_hint" not in payload_str:
+                bad_body = json.dumps({
+                    "id": "chatcmpl-bad",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"rewritten": [{"index": 0, "text": "只返 1 条"}]}, ensure_ascii=False),
+                        },
+                        "finish_reason": "stop",
+                    }],
+                }).encode("utf-8")
+            else:
+                good_body = json.dumps(
+                    _openai_chat_response(["改写 0", "改写 1"])
+                ).encode("utf-8")
+                return _FakeResp(good_body, 200)
+            return _FakeResp(bad_body, 200)
+
+        monkeypatch.setattr("core.llm_rewriter.urllib.request.urlopen", fake_urlopen)
+
+        result = llm.rewrite_highlights(
+            ["原文 0", "原文 1"], target_role="tech_metric",
+            evidence=[EvidenceSnippet(
+                source_type="project",
+                source_id="p1",
+                text="evidence",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            )],
+        )
+        assert result == ["改写 0", "改写 1"], "retry 应最终成功"
+        assert len(captured["calls"]) == 2, "应有 2 次 LLM 调用 (第 1 次失败 + 第 2 次 retry)"
+        retry_payload = json.loads(captured["calls"][1].decode("utf-8"))
+        retry_user = json.loads(retry_payload["messages"][1]["content"])
+        assert "evidence_summary" in retry_user, (
+            "retry 时也保留 evidence_summary (约束不丢)"
+        )
+
+    def test_evidence_does_not_break_function_calling(
+        self, enable_llm, monkeypatch
+    ):
+        """evidence + enable_function_calling + jd_focus 同时启用 → 三个都生效"""
+        from core.evidence import EvidenceSnippet
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["改写 0"])
+            ).encode("utf-8"),
+        )
+        jd_focus = {"matched": ["LLM"], "missing": ["Prompt"], "tier_required": [], "tier_preferred": []}
+        llm.rewrite_highlights(
+            ["原文 0"], target_role="tech_metric",
+            jd_focus=jd_focus,
+            enable_function_calling=True,
+            evidence=[EvidenceSnippet(
+                source_type="project",
+                source_id="p1",
+                text="evidence",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            )],
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert "evidence_summary" in user_payload, "evidence 生效"
+        assert "jd_focus" in user_payload, "jd_focus 生效"
+        assert "tools" in payload, "enable_function_calling=True + jd_focus → tools 挂载"
+        assert payload.get("tool_choice") == "auto"
+        from core.llm_rewriter import EVIDENCE_CONSTRAINT_SUFFIX
+        system_content = payload["messages"][0]["content"]
+        assert EVIDENCE_CONSTRAINT_SUFFIX in system_content
+
+    def test_build_request_payload_evidence_summary_kwarg(self):
+        """_build_request_payload evidence_summary kwarg 透传规则"""
+        highlights = ["b0", "b1"]
+        # 1) None → 字节级一致 baseline
+        payload_none = llm._build_request_payload(
+            highlights, "tech_metric", "jd", "model",
+            evidence_summary=None,
+        )
+        user_none = json.loads(payload_none["messages"][1]["content"])
+        assert "evidence_summary" not in user_none
+        from core.llm_rewriter import SYSTEM_PROMPT, EVIDENCE_CONSTRAINT_SUFFIX
+        assert payload_none["messages"][0]["content"] == SYSTEM_PROMPT
+        assert EVIDENCE_CONSTRAINT_SUFFIX not in payload_none["messages"][0]["content"]
+
+        # 2) str → user_payload 含字段 + system 含 suffix
+        payload_str = llm._build_request_payload(
+            highlights, "tech_metric", "jd", "model",
+            evidence_summary="[1] (project/p1) test evidence",
+        )
+        user_str = json.loads(payload_str["messages"][1]["content"])
+        assert user_str["evidence_summary"] == "[1] (project/p1) test evidence"
+        assert EVIDENCE_CONSTRAINT_SUFFIX in payload_str["messages"][0]["content"]
+
+    def test_evidence_with_no_key_falls_back_to_original(self, monkeypatch):
+        """evidence 非空但 is_llm_enabled()=False → 返原 highlights,不调 LLM"""
+        from core.evidence import EvidenceSnippet
+        monkeypatch.setenv("LLM_API_KEY", "")
+        monkeypatch.setenv("LLM_ENABLED", "false")
+
+        result = llm.rewrite_highlights(
+            ["原文 0"], target_role="tech_metric",
+            evidence=[EvidenceSnippet(
+                source_type="project",
+                source_id="p1",
+                text="evidence",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            )],
+        )
+        assert result == ["原文 0"], "无 key 时 evidence 也无法触发 LLM, 返原文"

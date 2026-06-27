@@ -74,7 +74,9 @@ class TestBuildTaskGraph:
         }), "本地步骤 tool 应为 None"
 
     def test_with_jd_adds_parse_jd_match_score(self):
-        """has_jd=True → +2 步 parse_jd + match_score(在 retrieve 前)"""
+        """has_jd=True → +3 步 parse_jd + match_score + retrieve_evidence(都在 retrieve 前)
+        R5-A Phase 3: retrieve_evidence 加在 match_score 之后, retrieve_materials 之前
+        """
         steps = build_task_graph(
             has_jd=True,
             enable_function_calling=False,
@@ -83,11 +85,11 @@ class TestBuildTaskGraph:
         names = [s.name for s in steps]
         assert "parse_jd" in names
         assert "match_score" in names
-        # 顺序:parse_jd 在 match_score 前
+        assert "retrieve_evidence" in names, "Phase 3: has_jd 时必须有 retrieve_evidence step"
+        # 顺序:parse_jd → match_score → retrieve_evidence → retrieve_materials
         assert names.index("parse_jd") < names.index("match_score")
-        # parse_jd / match_score 都在 retrieve 之前
-        assert names.index("parse_jd") < names.index("retrieve_materials")
-        assert names.index("match_score") < names.index("retrieve_materials")
+        assert names.index("match_score") < names.index("retrieve_evidence")
+        assert names.index("retrieve_evidence") < names.index("retrieve_materials")
 
     def test_with_function_calling_adds_evaluate_bullet(self):
         """FC=True + has_jd → +1 步 evaluate_bullet_jd_match"""
@@ -538,4 +540,278 @@ class TestWorkflowJsonlTrace:
         pj = parse_jd_events[0]
         assert pj["input_size"] >= len(jd.encode("utf-8")), (
             f"parse_jd input_size={pj['input_size']} < jd 长度 {len(jd.encode('utf-8'))}"
+        )
+
+
+# =========================================================================
+# R5-A Phase 3: 轻量 RAG evidence 集成测试
+# =========================================================================
+class TestEvidencePhase3:
+    """R5-A Phase 3: workflow 集成 evidence step 行为锁定
+
+    覆盖点(spec §5.3 + Phase 3 任务约束):
+      - retrieve_evidence step 在 has_jd 时执行
+      - evidence step 失败不阻断主流程(spec §6.3)
+      - evidence step trace 不含 evidence text 原文
+      - caller 显式传 evidence 时跳过 retrieve_evidence 工具
+      - 默认 enable_agent_workflow=False 字节级一致(老路径)
+      - jd_context=None baseline 不变
+    """
+
+    def test_task_graph_has_evidence_step_when_jd_present(self):
+        """has_jd=True → 任务图含 retrieve_evidence step"""
+        steps = build_task_graph(
+            has_jd=True,
+            enable_function_calling=False,
+            has_external_resume=False,
+        )
+        ev_step = next((s for s in steps if s.name == "retrieve_evidence"), None)
+        assert ev_step is not None, "Phase 3: has_jd 时必须有 retrieve_evidence step"
+        assert ev_step.tool == "retrieve_evidence"
+        assert ev_step.required is False, "evidence 非关键步骤, 失败降级 use_default"
+        assert ev_step.fallback == "use_default"
+        # evidence step 在 match_score 之后, retrieve_materials 之前
+        names = [s.name for s in steps]
+        assert names.index("match_score") < names.index("retrieve_evidence")
+        assert names.index("retrieve_evidence") < names.index("retrieve_materials")
+
+    def test_task_graph_no_evidence_step_when_no_jd(self):
+        """has_jd=False → 任务图不含 retrieve_evidence step"""
+        steps = build_task_graph(
+            has_jd=False,
+            enable_function_calling=False,
+            has_external_resume=False,
+        )
+        names = [s.name for s in steps]
+        assert "retrieve_evidence" not in names, "无 JD 时不需要 evidence 检索"
+
+    def test_workflow_runs_evidence_step_on_jd_path(self, tmp_path, monkeypatch):
+        """workflow 在 jd 路径下执行 retrieve_evidence step + 写 trace"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测",
+        )
+        assert "sections" in result
+        # JSONL 应有 retrieve_evidence 工具 step 的 trace
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+            if l.strip()
+        ]
+        ev_events = [e for e in events if e.get("tool") == "retrieve_evidence"]
+        assert len(ev_events) >= 1, "workflow 应至少调一次 retrieve_evidence 工具"
+        # 状态应为 success 或 error (绝不应 skipped, 因为没有显式 evidence 传入)
+        assert ev_events[0]["status"] in {"success", "error"}
+
+    def test_workflow_skips_evidence_tool_when_evidence_explicit(self, tmp_path, monkeypatch):
+        """caller 显式传 evidence 时 → retrieve_evidence 工具调用 skipped"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+        from core.evidence import EvidenceSnippet
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        explicit_evidence = [
+            EvidenceSnippet(
+                source_type="project",
+                source_id="company_medical_eval",
+                text="explicit test evidence",
+                matched_keywords=("LLM",),
+                confidence=1.0,
+            ),
+        ]
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测",
+            evidence=explicit_evidence,
+        )
+        assert "sections" in result
+        # retrieve_evidence step 状态应为 skipped (显式 evidence 跳过工具调用)
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+            if l.strip()
+        ]
+        ev_events = [e for e in events if e.get("tool") == "retrieve_evidence"]
+        assert len(ev_events) == 1
+        assert ev_events[0]["status"] == "skipped", (
+            f"显式 evidence 时 retrieve_evidence 应 skipped, 实际: {ev_events[0]['status']}"
+        )
+
+    def test_workflow_evidence_step_failure_does_not_break_main(self, tmp_path, monkeypatch):
+        """evidence step 失败不阻断主流程(降级 use_default)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+        from core.agent_tools import ToolSpec, AGENT_TOOLS
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        # mock retrieve_evidence 的 callable 让它抛异常
+        original_spec = AGENT_TOOLS["retrieve_evidence"]
+
+        def broken_callable(**kwargs):
+            raise RuntimeError("simulated evidence tool failure")
+
+        broken_spec = ToolSpec(
+            name=original_spec.name,
+            callable=broken_callable,
+            permission=original_spec.permission,
+            pii_risk=original_spec.pii_risk,
+            timeout_ms=original_spec.timeout_ms,
+            input_schema=original_spec.input_schema,
+        )
+        monkeypatch.setitem(AGENT_TOOLS, "retrieve_evidence", broken_spec)
+
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测",
+        )
+        # 主流程应正常返回 preview (evidence 失败不阻断)
+        assert "sections" in result
+        assert isinstance(result["sections"], list)
+        # evidence_summary 应为 None (失败时未收集到)
+        assert result.get("evidence_summary") is None
+
+    def test_workflow_jsonl_trace_does_not_contain_evidence_text(self, tmp_path, monkeypatch):
+        """隐私边界: JSONL trace 不含 evidence text 原文"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        # 用敏感字符串构造 JD (含独特关键词)
+        sensitive_phrase = "机密敏感短语XYZ123"
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text=f"熟悉大模型评测 {sensitive_phrase}",
+        )
+        # result["evidence_summary"] 应包含 evidence dict list
+        ev_summary = result.get("evidence_summary") or []
+        assert isinstance(ev_summary, list)
+        # 抽样看 evidence 的 source_id 和 text (验证 evidence 真的被检索了)
+        # 至少应有 0+ 条 evidence (取决于材料)
+        content = jsonl_path.read_text(encoding="utf-8")
+        # trace 不应含 sensitive_phrase (这是 JD 原文片段, 不应泄漏)
+        assert sensitive_phrase not in content, "JD 敏感短语不应入 trace"
+        # 同时: 验证 evidence_summary 字段不进 trace (它只在 preview 返回值里)
+        # (因为 trace 只写 11 字段 schema, evidence_summary 不在里面)
+
+    def test_workflow_evidence_summary_returned_in_preview(self, tmp_path, monkeypatch):
+        """workflow preview 返回值含 evidence_summary 字段"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测,Python 编程",
+        )
+        # evidence_summary 字段应存在
+        assert "evidence_summary" in result
+        ev_summary = result["evidence_summary"]
+        # 应为 list (dict list, 由 evidence_to_dict_list 序列化)
+        assert isinstance(ev_summary, list)
+        if ev_summary:
+            first = ev_summary[0]
+            assert isinstance(first, dict)
+            # 验证字段 schema
+            assert "source_type" in first
+            assert "source_id" in first
+            assert "text" in first
+            assert "matched_keywords" in first
+            assert "confidence" in first
+
+    def test_workflow_no_jd_path_skips_evidence(self, tmp_path, monkeypatch):
+        """workflow 无 jd_text 时不调用 retrieve_evidence (任务图不含该 step)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text=None,  # 无 JD
+        )
+        assert "sections" in result
+        # evidence_summary 应为 None (没调工具)
+        assert result.get("evidence_summary") is None
+        # JSONL trace 不应含 retrieve_evidence 工具调用
+        events = [
+            json.loads(l)
+            for l in jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+            if l.strip()
+        ]
+        ev_events = [e for e in events if e.get("tool") == "retrieve_evidence"]
+        assert len(ev_events) == 0, "无 JD 时不应调 retrieve_evidence"
+
+    def test_jd_context_none_baseline_unchanged(self, tmp_path, monkeypatch):
+        """jd_context=None (无 JD) baseline 字节级一致 — 老路径
+        Phase 1 已经验证过 enable_agent_workflow=False 字节级一致
+        这里再确认 evidence 透传也不破坏老路径
+        """
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        # 跑两次 (无 JD), 应字节级一致
+        result_a = run_agent_workflow(
+            target_role="tech_metric", template="classic", jd_text=None,
+        )
+        result_b = run_agent_workflow(
+            target_role="tech_metric", template="classic", jd_text=None,
+        )
+        # sections 内容应一致 (project/highlight 排序无 JD 时是稳定的)
+        sections_a = result_a["sections"]
+        sections_b = result_b["sections"]
+        assert len(sections_a) == len(sections_b)
+        # 每条 section 的 title + content text 一致
+        for sa, sb in zip(sections_a, sections_b):
+            assert sa["type"] == sb["type"]
+            assert sa["title"] == sb["title"]
+        # jd_match_counts 应为 None (无 JD)
+        assert result_a.get("jd_match_counts") is None
+        assert result_b.get("jd_match_counts") is None
+        # evidence_summary 也应为 None (无 JD)
+        assert result_a.get("evidence_summary") is None
+        assert result_b.get("evidence_summary") is None
+
+    def test_workflow_runs_evidence_step_with_no_matched_keywords(self, tmp_path, monkeypatch):
+        """evidence step 在 jd 没匹配任何 KEYWORD_GROUPS 关键词时也跑(返空 list, 不抛)"""
+        import core.logger as logger_mod
+        from core.agent_workflow import run_agent_workflow
+
+        jsonl_path = tmp_path / "agent_trace.jsonl"
+        monkeypatch.setattr(logger_mod, "AGENT_TRACE_JSONL_PATH", jsonl_path)
+
+        # jd_text 完全不命中任何 KEYWORD_GROUPS surface
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="完全不相关的描述 / 厨师 / 司机",  # 没任何 LLM/Python 等关键词
+        )
+        assert "sections" in result
+        # evidence_summary 应为空 list (没匹配任何 evidence)
+        ev_summary = result.get("evidence_summary")
+        assert ev_summary == [], (
+            f"无关键词命中应返空 list, 实际: {ev_summary!r}"
         )

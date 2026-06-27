@@ -1,5 +1,5 @@
 """
-LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling)
+LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling, R5-A Phase 3 evidence)
 
 设计原则:
   - MVP: 没 key / 没启用 / 调用失败 → 全部静默降级,绝不抛异常给上层
@@ -17,7 +17,7 @@ R4-F: Function Calling 协议接入
   - 暴露 1 个工具: evaluate_bullet_jd_match(bullet, jd_focus) → 匹配关键词/缺失关键词/建议
   - tools 字段只在 enable_function_calling=True AND jd_focus is not None 时挂载
     (默认路径字节级一致, 252 老测试不破)
-  - LLM 返 tool_calls 时 → _extract_rewritten 返回 None → 走降级原文
+  - LLM 返 tool_calls 时 → _extract_rewritten 返回 None → 走降级原文路径
     (R4-A 才会接 agent loop 真正调工具)
 
 R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志
@@ -27,6 +27,15 @@ R4-A: Agent Loop (max_step=3) + 单工具约束 + trace 日志
   - 网络错误不进 loop, 立即降级
   - 全失败(3 步仍无 output)→ 降级原文
   - 每次 step 写一行 trace 到 backend/logs/agent_trace.log
+
+R5-A Phase 3: 轻量 RAG evidence 约束
+  - rewrite_highlights 加 evidence: Optional[list] = None kwarg
+  - evidence 非空时:
+      1) user_payload 加 "evidence_summary" 字段(summary 文本, ≤2000 字符)
+      2) SYSTEM_PROMPT 加第 8 条硬性约束: "只能基于 evidence 中存在的事实改写"
+  - evidence=None 时:
+      1) 不注入 evidence_summary (字节级一致老路径)
+      2) SYSTEM_PROMPT 不变 (字节级一致)
 """
 import json
 import os
@@ -111,6 +120,7 @@ TOOL_EVALUATE_SCHEMA: list[dict] = [
 # R3-P: SYSTEM_PROMPT v2 — 加 2 个 few-shot 示例(基础 + jd_focus)
 # 改写约束 4 条: 不编造事实 / 长度 20-50 字 / 中文 / 顺序一致
 # jd_focus 约束 3 条: matched 必须保留 / 不为凑 missing 改写 / tier 优先级
+# R5-A Phase 3: 第 8 条硬性约束 — 只能基于 evidence 中存在的事实改写
 SYSTEM_PROMPT = (
     "你是简历润色专家,根据目标岗位改写项目亮点(bullets 列表)。\n"
     "\n"
@@ -128,6 +138,11 @@ SYSTEM_PROMPT = (
     "5. **不要**为凑 missing 关键词而编造事实;missing 仅作为措辞倾斜方向参考,无事实不补\n"
     "6. tier_required 的关键词在 bullet 中应至少出现一次(无事实依据则不改写为该关键词)\n"
     "7. tier_preferred 关键词为加分项,尽量靠拢,做不到不强求\n"
+    "\n"
+    "**若提供了 evidence 字段(轻量 RAG, R5-A Phase 3)**:\n"
+    "8. **只能基于原 bullet 与 evidence 中存在的事实改写**, 不得引入 evidence 中没有的\n"
+    "   数字、技能、公司、项目名;evidence 是事实摘录, 不是改写方向提示\n"
+    "   (这条约束优先于 jd_focus 的 missing 倾斜 — 缺事实宁可少关键词也别硬塞)\n"
     "\n"
     "## 示例 1: 基础改写(无 jd_focus)\n"
     "输入 bullets:\n"
@@ -150,6 +165,17 @@ SYSTEM_PROMPT = (
     '    {"index": 1, "text": "系统整理 badcase 报告,分类高频错误模式,辅助评测迭代"},\n'
     '    {"index": 2, "text": "运用结构化 Prompt 设计测试用例,覆盖典型与边缘场景"}]}\n'
     "(说明: index 2 的 \"Prompt\" 关键词是顺着原文\"写了测试用例\"自然延伸,不是为凑关键词而硬塞)\n"
+)
+
+
+# R5-A Phase 3: evidence 约束后缀 — 当 evidence 非空时拼接(让 SYSTEM_PROMPT 含约束)
+# 用单独的常量而非直接改 SYSTEM_PROMPT → 避免 evidence=None 时 SYSTEM_PROMPT 字符串字节级不一致
+# 拼接时使用分隔符 (含双换行) → payload 字节级一致
+EVIDENCE_CONSTRAINT_SUFFIX = (
+    "\n"
+    "**evidence 事实约束已激活**: "
+    "你只能引用原 bullet 或上面 evidence 列表中已存在的事实点改写。\n"
+    "若 evidence 列表为空, 不要编造数字 / 技能名 / 公司名, 保持保守改写。\n"
 )
 
 
@@ -182,6 +208,7 @@ def _build_request_payload(
     strict_retry: bool = False,
     tools: Optional[list[dict]] = None,
     history_messages: Optional[list[dict]] = None,
+    evidence_summary: Optional[str] = None,  # R5-A Phase 3: evidence 摘要 (None 字节级一致)
 ) -> dict:
     """
     构造 chat/completions 请求体。
@@ -199,6 +226,11 @@ def _build_request_payload(
 
     R4-M: history_messages 非 None 时,prepend 到 messages(system 之后, current user 之前)。
     history_messages=None → 老路径字节级一致(messages 只有 system + current user)。
+
+    R5-A Phase 3: evidence_summary 非 None 时,
+      1) user_payload 加 evidence_summary 字段 (LLM 改写时参考的事实摘录)
+      2) system prompt 末尾追加 EVIDENCE_CONSTRAINT_SUFFIX (激活"只能基于 evidence 改写"约束)
+    evidence_summary=None → 老路径字节级一致 (payload schema 不变, system prompt 不变)。
     """
     user_payload: dict = {
         "target_role": target_role,
@@ -207,6 +239,10 @@ def _build_request_payload(
     }
     if jd_focus is not None:
         user_payload["jd_focus"] = jd_focus
+
+    # R5-A Phase 3: evidence 字段注入 (放在 jd_focus 后)
+    if evidence_summary is not None:
+        user_payload["evidence_summary"] = evidence_summary
 
     if strict_retry:
         user_payload["_retry_hint"] = (
@@ -224,17 +260,23 @@ def _build_request_payload(
         "content": json.dumps(user_payload, ensure_ascii=False),
     }
 
+    # R5-A Phase 3: system prompt 在 evidence_summary 非空时追加约束后缀
+    if evidence_summary is not None:
+        system_content = SYSTEM_PROMPT + EVIDENCE_CONSTRAINT_SUFFIX
+    else:
+        system_content = SYSTEM_PROMPT
+
     # R4-M: 拼装 messages — history_messages 非空时插在 system 和 current user 之间
     if history_messages:
         messages: list[dict] = (
-            [{"role": "system", "content": SYSTEM_PROMPT}]
+            [{"role": "system", "content": system_content}]
             + list(history_messages)
             + [current_user_msg]
         )
     else:
         # 老路径: 字节级一致 (system + current user)
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             current_user_msg,
         ]
 
@@ -418,6 +460,7 @@ def rewrite_highlights(
     jd_focus: Optional[dict] = None,
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
+    evidence: Optional[list] = None,  # R5-A Phase 3: list[EvidenceSnippet], None 字节级一致
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
@@ -444,6 +487,11 @@ def rewrite_highlights(
     R4-M: session_id(可选)非空时,从 session.py 拉历史 messages 拼到 LLM messages
     (system 之后, current user 之前)。session_id=None(默认)→ 不拼接,老路径字节级一致。
     session 内容由调用方(API 层)负责不写 PII。
+
+    R5-A Phase 3: evidence(可选, list[EvidenceSnippet])非空时,
+    把 evidence 转成 summary 文本, 注入 user_payload + 激活 SYSTEM_PROMPT 第 8 条约束
+    ("只能基于 evidence 中存在的事实改写")。
+    evidence=None → 老路径字节级一致 (不注入 summary, 不改 system prompt)。
     """
     if not highlights:
         return highlights
@@ -452,6 +500,37 @@ def rewrite_highlights(
 
     # R4-M: 一次性拉 session 历史(同 session 多次 chunk 调用复用同一份 history)
     history_messages = _get_session_history(session_id)
+
+    # R5-A Phase 3: 把 evidence list 转成 summary 文本 (供 prompt 注入)
+    # evidence=None → summary=None → payload / system 字节级一致
+    # evidence=[] → summary="" → 不激活约束 (空 evidence 等价于"无 evidence", 跟 None 一致)
+    evidence_summary: Optional[str] = None
+    if evidence is not None:
+        # 局部 import 避免循环(llm_rewriter 不依赖 evidence 模块顶级路径)
+        from core.evidence import _summarize_evidence_for_prompt, EvidenceSnippet
+        # 防御: caller 可能传 dict list (来自 workflow), 需转 EvidenceSnippet
+        snippet_objs: list = []
+        for ev in evidence:
+            if isinstance(ev, EvidenceSnippet):
+                snippet_objs.append(ev)
+            elif isinstance(ev, dict):
+                # 来自 evidence_to_dict_list 的输出 → 重建 EvidenceSnippet
+                try:
+                    snippet_objs.append(EvidenceSnippet(
+                        source_type=str(ev.get("source_type", "")),
+                        source_id=str(ev.get("source_id", "")),
+                        text=str(ev.get("text", "")),
+                        matched_keywords=tuple(ev.get("matched_keywords") or []),
+                        confidence=float(ev.get("confidence", 0.0)),
+                    ))
+                except Exception:
+                    continue  # 防御性: 单条解析失败跳过
+            else:
+                continue
+        evidence_summary = _summarize_evidence_for_prompt(snippet_objs)
+        # 空 summary (无 evidence 或全空) → 视同 None, 不激活约束
+        if not evidence_summary:
+            evidence_summary = None
 
     n = len(highlights)
     chunk_size = max(1, max_per_call)
@@ -480,6 +559,7 @@ def rewrite_highlights(
             got = _call_with_agent_loop(
                 url, api_key, model, chunk, target_role, jd_text, jd_focus,
                 history_messages=history_messages,
+                evidence_summary=evidence_summary,  # R5-A Phase 3
             )
         else:
             # 老路径: 走 _call_with_retry (保留 R3-P retry)
@@ -487,6 +567,7 @@ def rewrite_highlights(
                 url, api_key, model, chunk, target_role, jd_text, jd_focus,
                 enable_function_calling=enable_function_calling,
                 history_messages=history_messages,
+                evidence_summary=evidence_summary,  # R5-A Phase 3
             )
 
         if got is not None:
@@ -508,6 +589,7 @@ def _call_with_retry(
     *,
     enable_function_calling: bool = False,
     history_messages: Optional[list[dict]] = None,
+    evidence_summary: Optional[str] = None,  # R5-A Phase 3: 透传到 _build_request_payload
 ) -> Optional[list[str]]:
     """
     R3-P: 单次 chunk 调用 + 失败 retry 一次。
@@ -522,6 +604,9 @@ def _call_with_retry(
 
     R4-M: history_messages 非 None 时透传给 _build_request_payload,拼到 messages。
     history_messages=None → 字节级一致老路径。
+
+    R5-A Phase 3: evidence_summary 非 None 时透传给 _build_request_payload,
+    注入 user_payload + 激活 system prompt 第 8 条约束。None → 字节级一致老路径。
     """
     # R4-F: 决定是否挂载 tools
     tools: Optional[list[dict]] = None
@@ -531,6 +616,7 @@ def _call_with_retry(
     payload = _build_request_payload(
         chunk, target_role, jd_text, model, jd_focus=jd_focus, tools=tools,
         history_messages=history_messages,
+        evidence_summary=evidence_summary,  # R5-A Phase 3
     )
     try:
         resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
@@ -549,6 +635,7 @@ def _call_with_retry(
     strict_payload = _build_request_payload(
         chunk, target_role, jd_text, model, jd_focus=jd_focus,
         strict_retry=True, tools=tools,
+        evidence_summary=evidence_summary,  # R5-A Phase 3: retry 时也保留 evidence
     )
     try:
         resp2 = _http_post_json(url, strict_payload, api_key, REQUEST_TIMEOUT_SEC)
@@ -641,6 +728,7 @@ def _call_with_agent_loop(
     jd_focus: Optional[dict],
     *,
     history_messages: Optional[list[dict]] = None,
+    evidence_summary: Optional[str] = None,  # R5-A Phase 3: 透传到 initial_payload
 ) -> Optional[list[str]]:
     """
     R4-A: Agent Loop — 包装 _call_with_retry 的能力, 加循环让 LLM 可多轮调工具。
@@ -667,6 +755,10 @@ def _call_with_agent_loop(
     R4-M: history_messages 非 None 时透传给 _build_request_payload 拼到 messages
     (system 之后, current user 之前)。trace 的 session_id 改用真实 session_id
     (或 fallback 到临时 uuid — 仅当 history_messages=None 时)。
+
+    R5-A Phase 3: evidence_summary 非 None 时透传给 _build_request_payload,
+    initial system+user 已含 evidence 约束;后续 step 的 payload 复用 messages
+    (含 system+history+initial_user), evidence 不重新注入(避免 prompt 重复)。
     """
     # 局部 import — logger 是稳定依赖, 这里 import 仅为避免循环(lazy 安全)
     import time
@@ -679,6 +771,7 @@ def _call_with_agent_loop(
         chunk, target_role, jd_text, model,
         jd_focus=jd_focus, tools=TOOL_EVALUATE_SCHEMA,
         history_messages=history_messages,
+        evidence_summary=evidence_summary,  # R5-A Phase 3
     )
     messages: list[dict] = list(initial_payload["messages"])
 

@@ -678,3 +678,139 @@ class TestSchemaValidationUnit:
     def test_validate_legacy_schema_empty_string(self):
         items = ["a", "  ", "c"]
         assert llm._validate_legacy_schema(items, 3) is False
+
+
+# ======================================================================
+# R4-F: Function Calling — tools schema 挂载 + tool_calls 解析分支
+# ======================================================================
+def _openai_chat_response_with_tool_calls(tool_calls: list[dict]) -> dict:
+    """
+    R4-F: 构造一个 OpenAI chat/completions 响应,message 含 tool_calls 字段
+    (无 content,模拟 LLM 决定调工具而非直接返文本)
+    """
+    return {
+        "id": "chatcmpl-fake-tool",
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+
+class TestFunctionCalling:
+    """R4-F: Function Calling 协议接入 — 5 case 锁死行为。"""
+
+    def test_tools_schema_structure(self):
+        """TOOL_EVALUATE_SCHEMA 结构:含 1 个 function 工具 + 正确 parameters"""
+        assert isinstance(llm.TOOL_EVALUATE_SCHEMA, list)
+        assert len(llm.TOOL_EVALUATE_SCHEMA) == 1
+        tool = llm.TOOL_EVALUATE_SCHEMA[0]
+        assert tool["type"] == "function"
+        fn = tool["function"]
+        assert fn["name"] == "evaluate_bullet_jd_match"
+        # description 必含, 提示 LLM 工具语义
+        assert "关键词" in fn["description"] or "JD" in fn["description"]
+        # parameters: object 类型 + bullet/jd_focus 必填
+        params = fn["parameters"]
+        assert params["type"] == "object"
+        assert "bullet" in params["properties"]
+        assert "jd_focus" in params["properties"]
+        assert set(params["required"]) == {"bullet", "jd_focus"}
+        # jd_focus 内部 4 个字段 (matched/missing/tier_required/tier_preferred) 都应存在
+        jd_focus_props = params["properties"]["jd_focus"]["properties"]
+        for key in ("matched", "missing", "tier_required", "tier_preferred"):
+            assert key in jd_focus_props, f"jd_focus 必含 {key}"
+
+    def test_default_path_does_not_attach_tools(self, enable_llm, monkeypatch):
+        """enable_function_calling=False(默认)→ payload 不含 tools 字段(老路径字节级一致)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric", jd_text="JD"
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" not in payload, (
+            f"默认路径不应挂 tools 字段,实际: {payload.keys()}"
+        )
+        assert "tool_choice" not in payload
+
+    def test_jd_focus_none_does_not_attach_tools(self, enable_llm, monkeypatch):
+        """jd_focus=None 时即使 enable_function_calling=True 也不挂 tools
+        (空 jd_focus 没工具执行的意义,避免污染老调用路径)"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric",
+            enable_function_calling=True,  # 开 FC
+            jd_focus=None,  # 但 jd_focus 缺
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" not in payload, "jd_focus=None 时不应挂 tools"
+
+    def test_enable_function_calling_attaches_tools(self, enable_llm, monkeypatch):
+        """enable_function_calling=True + jd_focus 非空 → payload 含 tools 字段"""
+        captured = _patch_urlopen(
+            monkeypatch,
+            body=json.dumps(
+                _openai_chat_response(["r0", "r1"])
+            ).encode("utf-8"),
+        )
+        llm.rewrite_highlights(
+            ["x", "y"], target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": ["Python"], "tier_preferred": []},
+        )
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "tools" in payload
+        assert payload["tools"] == llm.TOOL_EVALUATE_SCHEMA
+        assert payload["tool_choice"] == "auto"
+
+    def test_tool_calls_response_falls_back_to_original(self, enable_llm, monkeypatch):
+        """LLM 返 tool_calls(无 content)→ _extract_rewritten 返回 None → 降级原文
+        (R4-A 才接 agent loop 真正执行工具;R4-F 阶段 tool_calls 视为未交付改写)"""
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "evaluate_bullet_jd_match",
+                    "arguments": json.dumps(
+                        {"bullet": "x", "jd_focus": {"matched": [], "missing": []}},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        ]
+        body = json.dumps(
+            _openai_chat_response_with_tool_calls(tool_calls)
+        ).encode("utf-8")
+        _patch_urlopen(monkeypatch, body=body)
+
+        bullets = ["原文 1", "原文 2"]
+        out = llm.rewrite_highlights(
+            bullets, target_role="tech_metric",
+            enable_function_calling=True,
+            jd_focus={"matched": ["Python"], "missing": ["PyTorch"],
+                      "tier_required": [], "tier_preferred": []},
+        )
+        # LLM 返 tool_calls → 没交付最终改写 → 降级原文
+        assert out == bullets, (
+            f"tool_calls 响应应降级原文,实际: {out}"
+        )

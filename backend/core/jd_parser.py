@@ -792,3 +792,87 @@ def _build_resume_perspective(
         "have_count": len(have),
         "need_count": len(need),
     }
+
+
+# ----------------------------------------------------------------------
+# R4-F: 单条 bullet 跟 JD 关键词的匹配度评估(供 Function Calling / Agent Loop 调用)
+# ----------------------------------------------------------------------
+def evaluate_bullet_jd_match(bullet: str, jd_focus: dict) -> dict:
+    """
+    R4-F: 评估单条 bullet 跟 JD 关键词的匹配度(轻量版,供 Function Calling / Agent Loop 调用)。
+
+    设计目标:
+      - 给 LLM 一个"我帮你看 bullet 跟 JD 关键词的差距"的工具 — 供改写前自我评估
+      - 复用 KEYWORD_GROUPS surface 扫描逻辑(从 _build_resume_perspective 抽 surface 匹配)
+      - 输出结构稳定 → LLM 解析简单
+
+    输入:
+      - bullet:      单条项目亮点文本(中文/英文/中英混排均可)
+      - jd_focus:    dict, 来自 _build_jd_focus, 必含 matched / missing
+                     (tier_required / tier_preferred 可选, 用于细化建议)
+
+    输出:
+      - matched_keywords:   list[str]  bullet 中实际出现的关键词
+      - missing_keywords:   list[str]  jd_focus 关键词清单中 bullet 缺失的
+      - suggestion:         str        1 句人话建议(包含具体关键词指引)
+
+    隐私:
+      - 只读 bullet + jd_focus 关键词, 不写日志, 不落盘
+      - 调用方负责控制调用频率(避免 LLM 短时间内反复调)
+    """
+    # 边界:空 bullet 或空 jd_focus → 返回空结果
+    if not bullet or not bullet.strip():
+        return {"matched_keywords": [], "missing_keywords": [], "suggestion": ""}
+    if not jd_focus or not isinstance(jd_focus, dict):
+        return {"matched_keywords": [], "missing_keywords": [], "suggestion": ""}
+
+    # 1) 收集 jd_focus 关键词清单(matched ∪ missing 合并去重,保持稳定顺序)
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for k in (jd_focus.get("matched") or []) + (jd_focus.get("missing") or []):
+        if isinstance(k, str) and k and k not in seen:
+            keywords.append(k)
+            seen.add(k)
+
+    if not keywords:
+        return {"matched_keywords": [], "missing_keywords": [], "suggestion": "JD 关键词清单为空"}
+
+    # 2) 归一化 bullet,逐关键词扫描
+    norm_bullet = _normalize_text(bullet)
+    matched: list[str] = []
+    missing: list[str] = []
+    for kw in keywords:
+        if kw.lower() in norm_bullet:
+            matched.append(kw)
+        else:
+            missing.append(kw)
+
+    # 3) 拼建议(根据 matched / missing 给出 1 句人话指引)
+    tier_required = jd_focus.get("tier_required") or []
+    if matched and not missing:
+        suggestion = (
+            f"当前 bullet 已涵盖 JD 关键词({', '.join(matched)}),可考虑精简表达"
+        )
+    elif missing and tier_required:
+        # 缺的是必备关键词 → 高优先级建议
+        critical = [k for k in missing if k in tier_required]
+        if critical:
+            suggestion = (
+                f"建议自然带入必备关键词: {', '.join(critical)}"
+            )
+        else:
+            suggestion = (
+                f"可考虑强化关键词: {', '.join(missing[:3])}"
+            )
+    elif missing:
+        suggestion = (
+            f"可考虑强化关键词: {', '.join(missing[:3])}"
+        )
+    else:
+        suggestion = "bullet 与 JD 关键词无直接关联"
+
+    return {
+        "matched_keywords": matched,
+        "missing_keywords": missing,
+        "suggestion": suggestion,
+    }

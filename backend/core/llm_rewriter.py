@@ -1,5 +1,5 @@
 """
-LLM 智能改写模块 (Round 2 #3, R3-P 升级)
+LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling)
 
 设计原则:
   - MVP: 没 key / 没启用 / 调用失败 → 全部静默降级,绝不抛异常给上层
@@ -12,6 +12,13 @@ R3-P 升级:
   - 显式 JSON schema: {"rewritten": [{"index": i, "text": "..."}]} 唯一规范
   - 失败 retry 一次(更严格指令);仍失败 → 降级原文
   - 旧 schema(顶层 array / {"rewritten": [...]} / {"bullets": [...]})保留兼容
+
+R4-F: Function Calling 协议接入
+  - 暴露 1 个工具: evaluate_bullet_jd_match(bullet, jd_focus) → 匹配关键词/缺失关键词/建议
+  - tools 字段只在 enable_function_calling=True AND jd_focus is not None 时挂载
+    (默认路径字节级一致, 252 老测试不破)
+  - LLM 返 tool_calls 时 → _extract_rewritten 返回 None → 走降级原文
+    (R4-A 才会接 agent loop 真正调工具)
 """
 import json
 import os
@@ -29,6 +36,65 @@ REQUEST_TIMEOUT_SEC = 15
 
 # R3-P: max 1 retry on invalid response(总最多 2 次尝试,避免 key 成本失控)
 MAX_RETRY_ON_INVALID = 1
+
+# ----------------------------------------------------------------------
+# R4-F: Function Calling — 工具 schema (OpenAI 标准 tools 字段格式)
+# ----------------------------------------------------------------------
+# MVP 只暴露 1 个工具: 评估单条 bullet 跟 JD 关键词的匹配度
+# 给 LLM 主动"先看 bullet 跟 JD 差距, 再改写"的能力
+# 协议: OpenAI function calling / Anthropic tool_use / MCP 协议栈都走相同 schema 结构
+TOOL_EVALUATE_SCHEMA: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_bullet_jd_match",
+            "description": (
+                "评估单条项目 bullet 跟 JD 关键词的匹配度, "
+                "返回 bullet 中实际匹配的关键词、缺失关键词和具体改写建议。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bullet": {
+                        "type": "string",
+                        "description": "项目亮点 / bullet 文本(待评估的那一条)",
+                    },
+                    "jd_focus": {
+                        "type": "object",
+                        "description": (
+                            "JD 关键词焦点, 来自上一次匹配的 match_score 结果, "
+                            "含 matched / missing / tier_required / tier_preferred"
+                        ),
+                        "properties": {
+                            "matched": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "已匹配的 JD 关键词",
+                            },
+                            "missing": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "缺失的 JD 关键词",
+                            },
+                            "tier_required": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "必备关键词(高优先级)",
+                            },
+                            "tier_preferred": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "加分关键词(低优先级)",
+                            },
+                        },
+                    },
+                },
+                "required": ["bullet", "jd_focus"],
+            },
+        },
+    }
+]
+
 
 # R3-P: SYSTEM_PROMPT v2 — 加 2 个 few-shot 示例(基础 + jd_focus)
 # 改写约束 4 条: 不编造事实 / 长度 20-50 字 / 中文 / 顺序一致
@@ -102,6 +168,7 @@ def _build_request_payload(
     jd_focus: Optional[dict] = None,
     *,
     strict_retry: bool = False,
+    tools: Optional[list[dict]] = None,
 ) -> dict:
     """
     构造 chat/completions 请求体。
@@ -113,6 +180,9 @@ def _build_request_payload(
 
     R3-P: strict_retry=True 时,user message 追加 schema 强约束(第 2 次重试用,
     引导 LLM 修正首次返回的 schema 错误)。
+
+    R4-F: tools 非 None 时,挂载到 payload(OpenAI function calling 标准格式),
+    同时设 tool_choice="auto"(LLM 决定要不要调工具)。tools=None → 老路径字节级一致。
     """
     user_payload: dict = {
         "target_role": target_role,
@@ -133,7 +203,7 @@ def _build_request_payload(
             f"- 数量必须等于 {len(highlights)},与输入 bullets 一一对应"
         )
 
-    return {
+    payload: dict = {
         "model": model,
         "temperature": 0.3,
         "response_format": {"type": "json_object"},
@@ -145,6 +215,13 @@ def _build_request_payload(
             },
         ],
     }
+    # R4-F: Function Calling 挂载
+    # 协议扩展: tools / tool_choice 是 OpenAI 标准, 不传时老路径字节级一致
+    if tools is not None:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    return payload
 
 
 def _http_post_json(url: str, payload: dict, api_key: str, timeout: int) -> dict:
@@ -193,16 +270,26 @@ def _extract_rewritten(response: dict, expected_count: int) -> Optional[list[str
     R3-P 升级: 优先识别新 schema {"rewritten": [{"index": i, "text": "..."}]},
     旧 schema 保留兼容({"rewritten": [...]} / {"bullets": [...]} / 顶层 array)。
     任一条 schema 命中且 length/index/text 全部合法才返回,否则 None。
+
+    R4-F 升级: 检测 tool_calls — 当 LLM 决定调工具而非直接返 rewritten 时,
+    视为"未交付最终改写" → 返回 None(让 caller 走降级原文路径)。
+    R4-A 才会接 agent loop 真正执行工具调用。
     """
     parsed_obj: Optional[dict | list] = None
 
     if isinstance(response, list):
         parsed_obj = response
     elif isinstance(response, dict):
-        # OpenAI 标准 chat/completions 响应: choices[0].message.content 是 str
+        # OpenAI 标准 chat/completions 响应: choices[0].message.{content | tool_calls}
         choices = response.get("choices") or []
         if choices and isinstance(choices, list):
             msg = choices[0].get("message") or {}
+
+            # R4-F: tool_calls 优先于 content — LLM 决定调工具, 没有最终改写
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                return None  # R4-A agent loop 才处理工具执行
+
             content = msg.get("content")
             if isinstance(content, str):
                 try:
@@ -284,6 +371,7 @@ def rewrite_highlights(
     jd_text: str = "",
     max_per_call: int = 6,
     jd_focus: Optional[dict] = None,
+    enable_function_calling: bool = False,
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
@@ -297,6 +385,11 @@ def rewrite_highlights(
 
     R3-P: 失败 retry 一次(strict_retry=True,更严格 schema 指令);
     仍失败 → 降级原文(单次 chunk 全部回退)。
+
+    R4-F: enable_function_calling(默认 False)开启时,挂载 TOOL_EVALUATE_SCHEMA;
+    仅在 enable_function_calling=True AND jd_focus is not None 时挂载
+    (空 jd_focus 没工具执行的意义,走老路径字节级一致)。
+    enable_function_calling=False → 字节级一致老路径(252 测试不破)。
     """
     if not highlights:
         return highlights
@@ -314,7 +407,10 @@ def rewrite_highlights(
 
     for start in range(0, n, chunk_size):
         chunk = highlights[start : start + chunk_size]
-        got = _call_with_retry(url, api_key, model, chunk, target_role, jd_text, jd_focus)
+        got = _call_with_retry(
+            url, api_key, model, chunk, target_role, jd_text, jd_focus,
+            enable_function_calling=enable_function_calling,
+        )
 
         if got is not None:
             for i, txt in enumerate(got):
@@ -332,6 +428,8 @@ def _call_with_retry(
     target_role: str,
     jd_text: str,
     jd_focus: Optional[dict],
+    *,
+    enable_function_calling: bool = False,
 ) -> Optional[list[str]]:
     """
     R3-P: 单次 chunk 调用 + 失败 retry 一次。
@@ -339,8 +437,19 @@ def _call_with_retry(
       1. 正常请求 → _extract_rewritten 成功 → 返回
       2. 正常请求 → 解析失败 → strict_retry=True 再试一次
       3. retry 也失败 → 返回 None(降级原文)
+
+    R4-F: enable_function_calling=True AND jd_focus is not None 时,
+    把 TOOL_EVALUATE_SCHEMA 挂到 payload(LLM 可主动调 evaluate_bullet_jd_match)。
+    R4-A 才会接 agent loop 真正执行工具调用 — 本轮只是把工具暴露给 LLM。
     """
-    payload = _build_request_payload(chunk, target_role, jd_text, model, jd_focus=jd_focus)
+    # R4-F: 决定是否挂载 tools
+    tools: Optional[list[dict]] = None
+    if enable_function_calling and jd_focus is not None:
+        tools = TOOL_EVALUATE_SCHEMA
+
+    payload = _build_request_payload(
+        chunk, target_role, jd_text, model, jd_focus=jd_focus, tools=tools,
+    )
     try:
         resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
         got = _extract_rewritten(resp, len(chunk))
@@ -354,8 +463,10 @@ def _call_with_retry(
     if MAX_RETRY_ON_INVALID <= 0:
         return None
 
+    # R4-F: retry 时也保留 tools 挂载(LLM 第二次也允许调工具)
     strict_payload = _build_request_payload(
-        chunk, target_role, jd_text, model, jd_focus=jd_focus, strict_retry=True,
+        chunk, target_role, jd_text, model, jd_focus=jd_focus,
+        strict_retry=True, tools=tools,
     )
     try:
         resp2 = _http_post_json(url, strict_payload, api_key, REQUEST_TIMEOUT_SEC)

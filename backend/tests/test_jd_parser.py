@@ -24,6 +24,7 @@ import pytest
 from core.generator import ENABLED_ROLES, ROLE_CONFIG, load_materials
 from core.jd_parser import (
     KEYWORD_GROUPS,
+    evaluate_bullet_jd_match,
     match_score,
     parse_jd,
 )
@@ -945,3 +946,59 @@ def _minimal_materials(**skill_groups: list[str]) -> dict:
         "skills": skills,
         "honors": [],
     }
+
+
+# ======================================================================
+# R4-F: evaluate_bullet_jd_match — Function Calling 工具执行逻辑
+# ======================================================================
+class TestEvaluateBulletJdMatch:
+    """R4-F: 单条 bullet 跟 JD 关键词的匹配度评估(供 LLM 调工具时执行)"""
+
+    def test_full_match_no_missing(self):
+        """bullet 覆盖所有 jd_focus 关键词 → missing 空 + suggestion 提示已涵盖"""
+        jd_focus = {
+            "matched": ["Python", "LLM"],
+            "missing": [],
+            "tier_required": ["Python"],
+            "tier_preferred": [],
+        }
+        bullet = "基于 Python 构建 LLM 评测框架"
+        out = evaluate_bullet_jd_match(bullet, jd_focus)
+        assert out["matched_keywords"] == ["Python", "LLM"]
+        assert out["missing_keywords"] == []
+        assert "已涵盖" in out["suggestion"]
+
+    def test_partial_match_with_critical_missing(self):
+        """bullet 缺必备关键词 → suggestion 标"必备"高优先级"""
+        jd_focus = {
+            "matched": ["LLM"],
+            "missing": ["PyTorch", "Python"],
+            "tier_required": ["PyTorch"],  # 必备
+            "tier_preferred": ["Python"],
+        }
+        bullet = "基于 LLM 做评测,准确率 90%"
+        out = evaluate_bullet_jd_match(bullet, jd_focus)
+        # matched 应含 LLM
+        assert "LLM" in out["matched_keywords"]
+        # missing 应含 PyTorch + Python
+        assert "PyTorch" in out["missing_keywords"]
+        assert "Python" in out["missing_keywords"]
+        # suggestion 应包含 "必备" + 缺 PyTorch(必备优先)
+        assert "必备" in out["suggestion"]
+        assert "PyTorch" in out["suggestion"]
+
+    def test_empty_inputs_return_safe_defaults(self):
+        """bullet / jd_focus 空 → 返回空结果 + 安全默认 suggestion"""
+        # 空 bullet
+        out1 = evaluate_bullet_jd_match("", {"matched": ["Python"], "missing": []})
+        assert out1 == {"matched_keywords": [], "missing_keywords": [], "suggestion": ""}
+        # 空 jd_focus
+        out2 = evaluate_bullet_jd_match("做了 100 题", {})
+        assert out2 == {"matched_keywords": [], "missing_keywords": [], "suggestion": ""}
+        # jd_focus 是空 dict 但有 matched/missing 空列表
+        out3 = evaluate_bullet_jd_match(
+            "x", {"matched": [], "missing": []}
+        )
+        assert out3["matched_keywords"] == []
+        assert out3["missing_keywords"] == []
+        assert "为空" in out3["suggestion"]

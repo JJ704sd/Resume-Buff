@@ -305,6 +305,7 @@ def run_agent_workflow(
     session_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     evidence: Optional[list] = None,  # R5-A Phase 3: 显式传入 evidence 时跳过 retrieve_evidence 工具
+    enable_external_resume: bool = False,  # R5-A closeout: 外部简历透传,默认 False 字节级一致
 ) -> Any:
     """
     R5-A Phase 1 + Phase 2 + Phase 3: 执行 Agent workflow,失败 fallback 到旧路径,每个 step
@@ -336,13 +337,18 @@ def run_agent_workflow(
       - AgentStep / ToolResult 不存 args / input 原文
     """
     has_jd = bool(jd_text and jd_text.strip())
-    has_external_resume = False  # Phase 1 MVP 不消费外部简历,留 P2
+    # R5-A closeout: enable_external_resume 透传到任务图(默认 False → 字节级一致,P2 占位未消费)
+    has_external_resume = bool(enable_external_resume)
 
     # R5-A Phase 2: 每次 workflow 生成唯一 request_id(spec §7.1 JSONL schema)
     request_id = generate_request_id()
     workflow_kind = "generate" if output_dir is not None else "preview"
     # session_id 可为空串(无 session 时)— JSONL schema 字段保留
     session_id_trace: str = session_id or ""
+
+    # R5-A closeout: 记录 workflow 总耗时,供 agent_summary.latency_ms 字段(spec §8.2)
+    import time as _time
+    _t_start = _time.time()
 
     # R5-A Phase 3: caller 预传 evidence(可选)→ 跳过 retrieve_evidence 工具调用
     evidence_explicit = evidence is not None
@@ -496,6 +502,16 @@ def run_agent_workflow(
     if output_dir is None:
         # preview 路径
         from core.generator import ROLE_CONFIG
+        # R5-A closeout: 收集 tools_used (从 tool_results 拿 tool 名, 去重保序)
+        tools_used: list[str] = []
+        seen_tools: set[str] = set()
+        for _tr in tool_results.values():
+            if _tr.tool and _tr.tool not in seen_tools:
+                tools_used.append(_tr.tool)
+                seen_tools.add(_tr.tool)
+        # R5-A closeout: 计算 workflow 总耗时
+        total_latency_ms = int((_time.time() - _t_start) * 1000)
+
         preview: dict = {
             "target_role": target_role,
             "template": template,
@@ -509,8 +525,17 @@ def run_agent_workflow(
             # R5-A Phase 3: evidence_summary 透传 (供前端高级信息区展示, 默认不渲染)
             # evidence_collected 是 dict list(由 wrapper 序列化), 跟 rewrite_highlights 收到的同结构
             "evidence_summary": evidence_collected,
+            # R5-A closeout: agent_summary (spec §8.2) — 供前端高级信息区展示 Agent 工具调用摘要
+            # 含 request_id / 步骤数 / 工具调用列表 / 降级状态 / 总耗时
+            "agent_summary": {
+                "request_id": request_id,
+                "steps_executed": len(steps),
+                "tools_used": tools_used,
+                "fallback_used": fallback_used,
+                "fallback_reason": fallback_reason,
+                "latency_ms": total_latency_ms,
+            },
         }
-        # Phase 1 不返回 agent_summary(spec §8.2 留 Phase 2)
         return preview
     else:
         # generate 路径(返回 docx Path)
@@ -541,7 +566,8 @@ def _build_tool_args(
     if tool_name == "match_score":
         return {
             "text": jd_text or "",
-            "role": target_role,
+            # R5-A closeout bugfix: 用 target_role 匹配 match_score 函数签名(不是 role)
+            "target_role": target_role,
             "materials": materials,
         }
     if tool_name == "retrieve_evidence":
@@ -671,6 +697,7 @@ def _fallback_to_old_path(
     output_dir: Optional[Path],
     reason: str,
     evidence: Optional[list] = None,  # R5-A Phase 3: 透传 evidence
+    enable_external_resume: bool = False,  # R5-A closeout: 透传
 ) -> Any:
     """workflow 失败 → 委托 generator 老路径(字节级一致)"""
     # 局部 import 避免循环
@@ -692,6 +719,7 @@ def _fallback_to_old_path(
             # 注意: enable_agent_workflow 显式 False,避免 workflow 内部再调自己(死循环)
             enable_agent_workflow=False,
             evidence=evidence,  # R5-A Phase 3
+            enable_external_resume=enable_external_resume,  # R5-A closeout
         )
     else:
         return _generate_resume_docx(
@@ -706,4 +734,5 @@ def _fallback_to_old_path(
             session_id=session_id,
             enable_agent_workflow=False,
             evidence=evidence,  # R5-A Phase 3
+            enable_external_resume=enable_external_resume,  # R5-A closeout
         )

@@ -62,6 +62,8 @@ class PreviewRequest(BaseModel):
     session_id: str | None = None
     # R5-A Phase 1: 可选 Agent workflow 开关(默认 False = 走老路径,字节级一致)
     enable_agent_workflow: bool = False
+    # R5-A closeout: 可选外部简历诊断(默认 False = P2 占位未消费,字节级一致)
+    enable_external_resume: bool = False
 
 
 class GenerateRequest(BaseModel):
@@ -78,6 +80,8 @@ class GenerateRequest(BaseModel):
     session_id: str | None = None
     # R5-A Phase 1: 可选 Agent workflow 开关(默认 False = 走老路径,字节级一致)
     enable_agent_workflow: bool = False
+    # R5-A closeout: 可选外部简历诊断(默认 False = P2 占位未消费,字节级一致)
+    enable_external_resume: bool = False
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -152,6 +156,7 @@ def preview(req: PreviewRequest):
             enable_function_calling=req.enable_function_calling,  # R4-F
             session_id=req.session_id,  # R4-M
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
+            enable_external_resume=req.enable_external_resume,  # R5-A closeout
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -177,6 +182,7 @@ def generate(req: GenerateRequest):
             enable_function_calling=req.enable_function_calling,  # R4-F
             session_id=req.session_id,  # R4-M
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
+            enable_external_resume=req.enable_external_resume,  # R5-A closeout
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

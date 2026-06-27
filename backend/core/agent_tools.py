@@ -143,10 +143,13 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
             "type": "object",
             "properties": {
                 "text": {"type": "string"},
-                "role": {"type": "string"},
+                # R5-A closeout bugfix: schema 必须跟 match_score 函数签名一致(用 target_role,不是 role)
+                # 原 schema 写 role 但 match_score(text, target_role, ...) 真实参数名是 target_role
+                # 导致 workflow _build_tool_args 传 "role" 时 callable 抛 TypeError
+                "target_role": {"type": "string"},
                 "materials": {"type": "object"},
             },
-            "required": ["text", "role", "materials"],
+            "required": ["text", "target_role", "materials"],
         },
     ),
     "evaluate_bullet_jd_match": ToolSpec(
@@ -210,6 +213,28 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
 # ----------------------------------------------------------------------
 # 统一执行入口
 # ----------------------------------------------------------------------
+def _validate_required_args(spec: ToolSpec, args: dict) -> Optional[str]:
+    """
+    R5-A closeout: 基于 spec.input_schema.required 字段做轻量 JSON schema 校验,
+    在调用 callable 前先检查 args 是否齐全。只校验 required 字段存在性,
+    不强校验 type / properties(避免破坏既有调用)。
+
+    Returns:
+        None 如果 args 满足 required 字段
+        str 错误描述(不包含 args 原文,只列缺失字段名),如果不满足
+    """
+    schema = spec.input_schema
+    if not schema or not isinstance(schema, dict):
+        return None
+    required = schema.get("required") or []
+    if not required:
+        return None
+    missing = [k for k in required if k not in args]
+    if missing:
+        return f"missing required args: {missing}"
+    return None
+
+
 def execute_agent_tool(
     tool_name: str,
     args: Optional[dict] = None,
@@ -220,10 +245,12 @@ def execute_agent_tool(
 
     流程:
       1. allowlist 校验: tool_name 不在 AGENT_TOOLS → TOOL_NOT_ALLOWED
-      2. 计时
-      3. 调 spec.callable(**args) — 失败也返 ToolResult,绝不抛
-      4. TypeError  → TOOL_ARGS_INVALID(args 类型 / 名字错)
-      5. 其他异常   → TOOL_RUNTIME_ERROR
+      2. R5-A closeout: 校验 args 必填字段(input_schema.required)
+         → TOOL_ARGS_INVALID(早于 callable 调用,给出明确字段名)
+      3. 计时
+      4. 调 spec.callable(**args) — 失败也返 ToolResult,绝不抛
+      5. TypeError  → TOOL_ARGS_INVALID(args 类型 / 名字错)
+      6. 其他异常   → TOOL_RUNTIME_ERROR
 
     Args:
         tool_name:  工具名(必须在 AGENT_TOOLS)
@@ -236,7 +263,7 @@ def execute_agent_tool(
 
     隐私(对齐 spec §6.4):
       - ToolResult 不存 args 原文(本模块不缓存)
-      - error_msg 仅含异常类型名,不含 args 内容
+      - error_msg 仅含异常类型名 / 缺失字段名,不含 args 内容
     """
     args = args or {}
     context = context or {}
@@ -254,12 +281,24 @@ def execute_agent_tool(
 
     spec = AGENT_TOOLS[tool_name]
 
-    # 2) 计时 + 执行
+    # 2) R5-A closeout: args 必填字段校验(早于 callable 调用)
+    validation_err = _validate_required_args(spec, args)
+    if validation_err:
+        return ToolResult(
+            tool=tool_name,
+            status="error",
+            output=None,
+            error_type=ToolErrorType.TOOL_ARGS_INVALID,
+            latency_ms=0,
+            error_msg=validation_err,  # 只含缺失字段名,不含 args 原文
+        )
+
+    # 3) 计时 + 执行
     t0 = time.time()
     try:
         output = spec.callable(**args)
     except TypeError as e:
-        # args 缺失或类型错 — 例如少传了 required 参数
+        # args 缺失或类型错 — 例如少传了 required 参数(spec 校验后剩余的边界情况)
         latency_ms = int((time.time() - t0) * 1000)
         return ToolResult(
             tool=tool_name,

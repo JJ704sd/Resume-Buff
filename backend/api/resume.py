@@ -54,6 +54,8 @@ class PreviewRequest(BaseModel):
     custom_project_ids: list[str] | None = None
     template: str = "classic"  # Round 3 J
     jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
+    # R3-M.3: academic 模板 detailed/compact 分支(None = 走 LAYOUT_CONFIG 默认 compact)
+    academic_layout: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -62,6 +64,8 @@ class GenerateRequest(BaseModel):
     custom_project_ids: list[str] | None = None
     template: str = "classic"  # Round 3 J
     jd_text: str | None = None  # Round 3 I: 可选 JD 触发排序
+    # R3-M.3: academic 模板 detailed/compact 分支(None = 走 LAYOUT_CONFIG 默认 compact)
+    academic_layout: str | None = None
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -132,6 +136,7 @@ def preview(req: PreviewRequest):
             custom_project_ids=req.custom_project_ids,
             template=req.template,
             jd_text=jd_text,
+            academic_layout=req.academic_layout,  # R3-M.3
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -153,6 +158,7 @@ def generate(req: GenerateRequest):
             output_dir=OUTPUT_DIR,
             template=req.template,
             jd_text=jd_text,
+            academic_layout=req.academic_layout,  # R3-M.3
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -166,6 +172,7 @@ def generate(req: GenerateRequest):
         size_bytes=out_path.stat().st_size,
         status="success",
         template=req.template,
+        academic_layout=req.academic_layout,  # R3-M.3: 仅 template=academic 时附加到日志
     )
 
     return FileResponse(

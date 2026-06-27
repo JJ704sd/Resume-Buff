@@ -1017,8 +1017,14 @@ def render_docx(
     target_role: str,
     output_dir: Path,
     template: str = "classic",
+    *,
+    academic_layout: Optional[str] = None,
 ) -> Path:
-    """根据 sections 生成 .docx(template: classic / single_column / two_column / minimal / technical)"""
+    """根据 sections 生成 .docx(template: classic / single_column / two_column / minimal / technical)
+
+    R3-M.3: academic_layout 透传:用户通过 API 选了 academic_layout='detailed' 时,
+    临时覆盖 LAYOUT_CONFIG[template]['academic_layout'](不污染全局 schema)。
+    """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
     if target_role not in ROLE_CONFIG:
@@ -1026,7 +1032,10 @@ def render_docx(
 
     materials = load_materials()
     role_cfg = ROLE_CONFIG[target_role]
-    layout_cfg = LAYOUT_CONFIG[template]
+    # R3-M.3: 拷贝 LAYOUT_CONFIG[template] 避免污染全局;按需覆盖 academic_layout
+    layout_cfg = dict(LAYOUT_CONFIG[template])
+    if academic_layout is not None:
+        layout_cfg["academic_layout"] = academic_layout
 
     intention = next((s.content["intention"] for s in sections if s.type == "header"), role_cfg["intention"])
 
@@ -1053,6 +1062,7 @@ def preview_resume(
     template: str = "classic",
     *,
     jd_text: Optional[str] = None,
+    academic_layout: Optional[str] = None,
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1061,6 +1071,9 @@ def preview_resume(
     触发 project / highlight / skill group 按命中数重排;
     返回额外字段 jd_match_counts(每 project / skill group 的命中关键词数),
     仅在 jd_text 非空时存在(无 jd 时键也存在但值为 None,前端按 None 不显示角标)。
+
+    R3-M.3: academic_layout 透传 — 临时覆盖 LAYOUT_CONFIG['academic']['academic_layout'](仅 preview 时),
+    不影响实际 docx 渲染路径(那由 render_docx 消费)。
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
@@ -1073,6 +1086,7 @@ def preview_resume(
     out: dict = {
         "target_role": target_role,
         "template": template,
+        "academic_layout": academic_layout,  # R3-M.3 透传给前端(preview 阶段)
         "intention": next((s.content["intention"] for s in sections if s.type == "header"), ""),
         "sections": [asdict(s) for s in sections],
         "jd_match_counts": _build_jd_match_counts(sections, jd_context) if jd_context else None,
@@ -1088,17 +1102,23 @@ def generate_resume_docx(
     template: str = "classic",
     *,
     jd_text: Optional[str] = None,
+    academic_layout: Optional[str] = None,
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
 
     Round 3 I: jd_text 非空时透传到 build_sections,排序逻辑同上。
+    R3-M.3: academic_layout 透传到 render_docx,触发 academic 模板 detailed/compact 分支。
     """
     jd_context = _resolve_jd_context(jd_text)
     sections = build_sections(
         target_role, intention, custom_project_ids, jd_context=jd_context
     )
-    return render_docx(sections, target_role, output_dir, template=template)
+    return render_docx(
+        sections, target_role, output_dir,
+        template=template,
+        academic_layout=academic_layout,
+    )
 
 
 def _resolve_jd_context(jd_text: Optional[str]) -> Optional[dict]:

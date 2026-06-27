@@ -27,6 +27,16 @@ const selectedRole = ref<string>('tech_metric')
 const selectedTemplate = ref<string>('classic')
 const customIntention = ref<string>('')
 
+// R3-M.3: academic 模板二级选项(compact 紧凑版 / detailed 详细版)
+// 仅在 selectedTemplate === 'academic' 时透传给后端,其他模板忽略
+const academicLayout = ref<'compact' | 'detailed'>('compact')
+
+// R3-M.3: bilingual 模板 tooltip — 提示用户补双语字段可以解锁完整双语渲染
+const bilingualTooltip =
+  '如需完整双语 header / 教育 / 项目副标题,请在 materials.json 中补充 ' +
+  'basics.name_en / education.school_en / education.major_en / projects[].title_en 字段。' +
+  '字段缺失时自动降级为单语言。'
+
 // Round 2 #2: JD 解析 + 匹配度评分
 const jdText = ref<string>('')
 const jdLoading = ref(false)
@@ -84,11 +94,15 @@ async function onPreview() {
   loading.value = true
   try {
     const jdForBackend = jdAware.value ? jdText.value.trim() : null
+    // R3-M.3: 仅 academic 模板透传 academic_layout,其他模板传 null(后端忽略)
+    const layoutForBackend =
+      selectedTemplate.value === 'academic' ? academicLayout.value : null
     previewData.value = await resumeApi.preview(
       selectedRole.value,
       customIntention.value.trim() || undefined,
       selectedTemplate.value,
-      jdForBackend
+      jdForBackend,
+      layoutForBackend,
     )
     stage.value = 'preview'
     ElMessage.success('预览已生成,请 review 每个模块内容')
@@ -201,11 +215,15 @@ async function onConfirmDownload() {
   loading.value = true
   try {
     const jdForBackend = jdAware.value ? jdText.value.trim() : null
+    // R3-M.3: 仅 academic 模板透传 academic_layout
+    const layoutForBackend =
+      selectedTemplate.value === 'academic' ? academicLayout.value : null
     const blob = await resumeApi.generate(
       selectedRole.value,
       customIntention.value.trim() || undefined,
       selectedTemplate.value,
-      jdForBackend
+      jdForBackend,
+      layoutForBackend,
     )
     const roleName = currentRole.value?.name ?? '简历'
     const filename = `${summary.value?.name ?? '简历'}_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
@@ -327,7 +345,12 @@ function skillMatchCount(groupIndex: number): number {
                       :key="t.id"
                       :value="t.id"
                     >
-                      {{ t.name }}
+                      <!-- R3-M.3: bilingual 模板加 title tooltip,提示双语字段缺失会降级 -->
+                      <span
+                        v-if="t.id === 'bilingual'"
+                        :title="bilingualTooltip"
+                      >{{ t.name }}</span>
+                      <span v-else>{{ t.name }}</span>
                     </el-radio-button>
                   </el-radio-group>
                   <div class="hint" v-if="templates.length">
@@ -335,6 +358,24 @@ function skillMatchCount(groupIndex: number): number {
                       templates.find(t => t.id === selectedTemplate)?.description
                         ?? ''
                     }}
+                  </div>
+
+                  <!-- R3-M.3: academic 模板二级选项 — 紧凑 / 详细 -->
+                  <div
+                    v-if="selectedTemplate === 'academic'"
+                    class="academic-layout-sub"
+                    style="margin-top: 8px;"
+                  >
+                    <span style="margin-right: 8px; color: #606266; font-size: 13px;">学术模式:</span>
+                    <el-radio-group v-model="academicLayout" size="small">
+                      <el-radio-button value="compact">紧凑</el-radio-button>
+                      <el-radio-button value="detailed">详细</el-radio-button>
+                    </el-radio-group>
+                    <span style="margin-left: 8px; color: #909399; font-size: 12px;">
+                      {{ academicLayout === 'compact'
+                          ? '简化版:无项目名 / 无周期 / 无概述(履历表友好)'
+                          : '详细版:恢复项目名 + 周期 + 概述(适合 Research Statement)' }}
+                    </span>
                   </div>
                 </el-form-item>
 

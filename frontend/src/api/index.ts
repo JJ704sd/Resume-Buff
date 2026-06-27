@@ -38,6 +38,8 @@ export interface Section {
 export interface PreviewResponse {
   target_role: string
   template: string  // Round 3 J
+  // R3-M.3: academic 模板时透传 compact / detailed;其他模板 null
+  academic_layout: 'compact' | 'detailed' | null
   intention: string
   sections: Section[]
   // Round 3 I: 各 section / 各 project / 各 skill group 的 JD 命中关键词数
@@ -107,13 +109,36 @@ export const resumeApi = {
         '/resume/roles'
       )
       .then(r => r.data),
-  preview: (target_role: string, intention?: string, template?: string, jd_text?: string | null) =>
+  preview: (
+    target_role: string,
+    intention?: string,
+    template?: string,
+    jd_text?: string | null,
+    // R3-M.3: academic 模板 detailed/compact 切换;其他模板传 null/undefined
+    academic_layout?: 'compact' | 'detailed' | null,
+  ) =>
     api
-      .post<PreviewResponse>('/resume/preview', { target_role, intention, template, jd_text })
+      .post<PreviewResponse>('/resume/preview', {
+        target_role,
+        intention,
+        template,
+        jd_text,
+        academic_layout: academic_layout ?? null,
+      })
       .then(r => r.data),
-  generate: (target_role: string, intention?: string, template?: string, jd_text?: string | null) =>
+  generate: (
+    target_role: string,
+    intention?: string,
+    template?: string,
+    jd_text?: string | null,
+    academic_layout?: 'compact' | 'detailed' | null,
+  ) =>
     api
-      .post('/resume/generate', { target_role, intention, template, jd_text }, { responseType: 'blob' })
+      .post(
+        '/resume/generate',
+        { target_role, intention, template, jd_text, academic_layout: academic_layout ?? null },
+        { responseType: 'blob' },
+      )
       .then(r => r.data as Blob),
   // R3-G 新增: 解析外部简历 (.docx/.pdf/.txt)
   parseExternal: (file: File) => {

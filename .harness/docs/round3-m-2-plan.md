@@ -1,7 +1,8 @@
 # R3-M.2 — 8 套模板细节打磨 + 可读性优化(Plan)
 
-> 状态: 🚧 plan 阶段 (2026-06-27)
+> 状态: ✅ 完成 (2026-06-27) — 5 个 commit (`7541810` ~ `6390403`),213 passed,0 skipped
 > 上游: R3-M.1 MVP 已收尾(commit `b521092` + `e6eb820`,190 passed)
+> 落地: 5 个可读性参数 + academic 专属 renderer + 23 个新 pytest(原计划 30,合并 TestHierarchyInvariants 到 TestHeadingHierarchy,覆盖不变)
 > 拆分背景: R3-M "简历排版改进" 拆 3 个 round 推进,本轮 = 中期方向 1 + 3
 > 拆分原则:
 > - **方向 1**(模板视觉差异化):academic 加专属 renderer(简化 highlights + 教育背景前置)

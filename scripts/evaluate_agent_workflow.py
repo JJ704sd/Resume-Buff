@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -74,7 +75,7 @@ JD_V4 = REPO_ROOT / "AI岗位JD库_v4_intern.json"
 OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"
 
 # ---- 版本元信息 ----
-VERSION = "R5-A Phase 4 (Agent eval 报告, 2026-06-27)"
+VERSION = "R5-D Phase 4 (latency + fallback 聚合增强, 2026-06-28)"
 
 # ---- 四组开关组合 ----
 # (FC, AW, label)
@@ -475,6 +476,39 @@ def _summarize_rewrite_impact(before: list[str], after: list[str]) -> dict:
         "avg_len_before": round(avg_len_before, 1),
         "avg_len_after": round(avg_len_after, 1),
     }
+
+
+# ======================================================================
+# R5-D Phase 4: latency 百分位 (p95 / max) + fallback category 聚合
+# ======================================================================
+def _percentile(values: list[int], p: float) -> int:
+    """
+    R5-D Phase 4: 纯函数 — 计算列表的 p 百分位 (nearest-rank, 0-100)。
+
+    算法: nearest-rank (跟 numpy.percentile 的 default interpolation='linear' 不同,
+    nearest-rank 更简单且对 latency 这种离散整数稳定):
+      - idx = ceil(p / 100 * n) - 1  (1-indexed → 0-indexed)
+      - clamp 到 [0, n - 1] 防越界
+
+    边界:
+      - 空列表 → 0 (跟 latency=0 一致; 调用方可用 N=0 区分 "无样本" vs "零延迟")
+      - 单元素 → 返该元素 (任意 p 都返同一值, 符合最近秩语义)
+      - p=0 → 返 sorted_values[0] (最小值)
+      - p=100 → 返 sorted_values[-1] (最大值)
+      - 元素非 int → 强转 int 再排 (防御性)
+
+    纯函数 — 不读全局, 不写文件, 可被测试直接调。
+    """
+    if not values:
+        return 0
+    sorted_values = sorted(int(v) for v in values)
+    n = len(sorted_values)
+    idx = math.ceil(p / 100 * n) - 1
+    if idx < 0:
+        idx = 0
+    elif idx >= n:
+        idx = n - 1
+    return int(sorted_values[idx])
 
 
 # ======================================================================
@@ -911,7 +945,9 @@ def compute_metrics(all_rows: list[dict]) -> dict:
     计算 4 组 × N 样本的指标聚合:
       - schema_pass_rate (per combo)
       - fallback_rate (per combo)
-      - avg_latency_ms (per combo)
+      - avg_latency_ms (per combo) — R5-A Phase 4
+      - p95_latency_ms (per combo) — R5-D Phase 4 新增
+      - max_latency_ms (per combo) — R5-D Phase 4 新增
       - score_consistency (同 jd × 不同 combo → score 应一致)
       - recommendation_consistency (同上)
       - pii_safe_rate (per combo)
@@ -931,16 +967,29 @@ def compute_metrics(all_rows: list[dict]) -> dict:
         schema_pass_rate = sum(1 for r in rows if r["schema_pass"]) / n if n else 0.0
         fallback_rate = sum(1 for r in rows if r["fallback_used"]) / n if n else 0.0
         pii_safe_rate = sum(1 for r in rows if r["pii_safe"]) / n if n else 0.0
-        avg_latency = sum(r["latency_ms"] for r in rows) / n if n else 0.0
+        # R5-D Phase 4: latency 聚合 — avg / p95 / max 三件套
+        latency_values = [int(r["latency_ms"]) for r in rows]
+        avg_latency = sum(latency_values) / n if n else 0.0
+        p95_latency = _percentile(latency_values, 95)
+        max_latency = max(latency_values) if latency_values else 0
         # 工具调用统计(去重)
         tools_counter: Counter = Counter()
         for r in rows:
             for t in r["tools_used"]:
                 tools_counter[t] += 1
         # R5-C Phase 1: fallback_category 分布(spec §2.2)
+        # R5-D Phase 4: 标准化 — 用 5 个 fallback category 常量作 key, 缺的补 0,
+        # 跟全局 fallback_category_total 章节(6.1)口径完全一致
         fb_cat_counter: Counter = Counter()
         for r in rows:
             fb_cat_counter[r.get("fallback_category", "none")] += 1
+        fb_breakdown_full = {
+            cat: fb_cat_counter.get(cat, 0)
+            for cat in (
+                FALLBACK_NONE, FALLBACK_LLM_DISABLED, FALLBACK_TOOL_ERROR,
+                FALLBACK_SCHEMA_RETRY, FALLBACK_WORKFLOW_ABORT,
+            )
+        }
         # R5-D Phase 3: rewrite impact 聚合 — 按 row.rewrite_total 加权,
         # 避免空 total 行 (baseline combo 自身) 拉低指标
         total_changed = sum(int(r.get("rewrite_changed_count", 0)) for r in rows)
@@ -973,8 +1022,12 @@ def compute_metrics(all_rows: list[dict]) -> dict:
             "fallback_rate": round(fallback_rate, 3),
             "pii_safe_rate": round(pii_safe_rate, 3),
             "avg_latency_ms": round(avg_latency, 1),
+            # R5-D Phase 4: 新增 p95 / max latency, 跟 avg 一起组成 latency 三件套
+            "p95_latency_ms": p95_latency,
+            "max_latency_ms": max_latency,
             "tools_used_top": tools_counter.most_common(5),
-            "fallback_category_breakdown": dict(fb_cat_counter),
+            # R5-D Phase 4: 标准化 5 类 fallback category, 跟 6.1 章节一致
+            "fallback_category_breakdown": fb_breakdown_full,
             "any_error": any(r["error_type"] for r in rows),
             # R5-D Phase 3: rewrite impact 聚合
             "rewrite_summary": {
@@ -1011,9 +1064,18 @@ def compute_metrics(all_rows: list[dict]) -> dict:
     n_rec_consistent = sum(1 for s in rec_consistency if s["consistent"])
 
     # R5-C Phase 1: 全局 fallback_category 分布
+    # R5-D Phase 4: 标准化 — 跟 by_combo 口径一致, 用 5 个 fallback category 常量
+    # 作 key, 缺的补 0 (跟 6.1 章节、by_combo 各组完全对齐)
     global_fb_cat_counter: Counter = Counter()
     for r in all_rows:
         global_fb_cat_counter[r.get("fallback_category", "none")] += 1
+    fallback_category_total_full = {
+        cat: global_fb_cat_counter.get(cat, 0)
+        for cat in (
+            FALLBACK_NONE, FALLBACK_LLM_DISABLED, FALLBACK_TOOL_ERROR,
+            FALLBACK_SCHEMA_RETRY, FALLBACK_WORKFLOW_ABORT,
+        )
+    }
 
     return {
         "by_combo": combo_metrics,
@@ -1022,7 +1084,7 @@ def compute_metrics(all_rows: list[dict]) -> dict:
         "n_score_consistent": n_score_consistent,
         "n_rec_consistent": n_rec_consistent,
         "total_jds": len(by_jd),
-        "fallback_category_total": dict(global_fb_cat_counter),
+        "fallback_category_total": fallback_category_total_full,
     }
 
 
@@ -1086,20 +1148,32 @@ def write_report(
     lines.append("> 注: v4_strong 样本无 user 标定的 ground truth label, expected 仅作参考  \n\n")
 
     # ---- 二、四组开关对照总览表 ----
+    # R5-D Phase 4: latency 列展示三件套 (avg / p95 / max), 标准化 fallback_category
+    # 5 类展示 (none / llm_disabled / tool_error / schema_retry / workflow_abort),
+    # 跟下方 6.1 章节、by_combo 各组口径完全一致
     lines.append("## 二、四组开关对照总览\n\n")
-    lines.append("| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | pii_safe_rate | tools_used (top) | fallback_category |\n")
-    lines.append("|---|---|---|---|---|---|---|---|\n")
+    lines.append("| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | p95_latency_ms | max_latency_ms | pii_safe_rate | tools_used (top) | fallback_category |\n")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|\n")
     for combo, m in metrics["by_combo"].items():
         tools_str = ", ".join(f"{t}×{n}" for t, n in m["tools_used_top"][:3]) or "—"
-        # R5-C Phase 1: fallback_category 分布(top 3, 否则 '—')
+        # R5-D Phase 4: fallback_category 标准化 5 类展示, 计数为 0 的省略,
+        # 但 key 顺序固定 (none → llm_disabled → tool_error → schema_retry → workflow_abort)
         fb_breakdown = m.get("fallback_category_breakdown", {})
-        fb_str = ", ".join(f"{c}×{n}" for c, n in sorted(
-            fb_breakdown.items(), key=lambda kv: -kv[1]
-        )[:3]) or "—"
+        fb_str_parts = []
+        for cat in (
+            FALLBACK_NONE, FALLBACK_LLM_DISABLED, FALLBACK_TOOL_ERROR,
+            FALLBACK_SCHEMA_RETRY, FALLBACK_WORKFLOW_ABORT,
+        ):
+            n = fb_breakdown.get(cat, 0)
+            if n > 0:
+                fb_str_parts.append(f"{cat}×{n}")
+        fb_str = ", ".join(fb_str_parts) or "—"
         lines.append(
             f"| {combo} | {m['n']} | "
             f"{m['schema_pass_rate']:.1%} | {m['fallback_rate']:.1%} | "
-            f"{m['avg_latency_ms']:.0f} | {m['pii_safe_rate']:.1%} | "
+            f"{m['avg_latency_ms']:.0f} | "
+            f"{m.get('p95_latency_ms', 0)} | {m.get('max_latency_ms', 0)} | "
+            f"{m['pii_safe_rate']:.1%} | "
             f"{tools_str} | {fb_str} |\n"
         )
     lines.append("\n")
@@ -1205,6 +1279,23 @@ def write_report(
     ]:
         n = total_fb.get(cat, 0)
         lines.append(f"| `{cat}` | {n} |\n")
+    lines.append("\n")
+
+    # R5-D Phase 4: 每组 fallback_category 分布, 跟全局表 / 总览表口径一致
+    # (同一 5 类 schema), 让审计一眼对比每组 vs 全局
+    lines.append("**每组 fallback_category 分布** (跟总览表、by_combo 指标完全一致):\n\n")
+    lines.append("| 组合 | none | llm_disabled | tool_error | schema_retry | workflow_abort |\n")
+    lines.append("|---|---|---|---|---|---|\n")
+    for combo, m in metrics["by_combo"].items():
+        fb_bd = m.get("fallback_category_breakdown", {})
+        lines.append(
+            f"| {combo} | "
+            f"{fb_bd.get(FALLBACK_NONE, 0)} | "
+            f"{fb_bd.get(FALLBACK_LLM_DISABLED, 0)} | "
+            f"{fb_bd.get(FALLBACK_TOOL_ERROR, 0)} | "
+            f"{fb_bd.get(FALLBACK_SCHEMA_RETRY, 0)} | "
+            f"{fb_bd.get(FALLBACK_WORKFLOW_ABORT, 0)} |\n"
+        )
     lines.append("\n")
 
     # ---- 七、结论 ----

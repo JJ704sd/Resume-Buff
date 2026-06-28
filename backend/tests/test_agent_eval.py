@@ -1295,3 +1295,323 @@ class TestEvalReportDoesNotLeakBulletText:
         finally:
             if output.exists():
                 output.unlink()
+
+
+# =========================================================================
+# R5-D Phase 4: latency 百分位 (p95) + 每组 fallback_category 聚合
+# =========================================================================
+class TestPercentileEmptyReturnsZero:
+    """
+    R5-D Phase 4: _percentile 边界 — 空列表返 0 (跟 latency=0 一致;
+    调用方可用 N=0 区分 "无样本" vs "零延迟")。
+    """
+
+    def test_empty_list_returns_zero(self):
+        """空 list → 0 (p=95/50/0/100 都返 0)"""
+        assert eval_mod._percentile([], 95) == 0, (
+            f"空列表 p95 应返 0, 实际 {eval_mod._percentile([], 95)}"
+        )
+        assert eval_mod._percentile([], 50) == 0
+        assert eval_mod._percentile([], 0) == 0
+        assert eval_mod._percentile([], 100) == 0
+        # 返回值类型锁定
+        assert isinstance(eval_mod._percentile([], 95), int)
+
+
+class TestPercentileP95:
+    """
+    R5-D Phase 4: _percentile p95 计算正确性 (nearest-rank 算法)。
+
+    锁点:
+      - p=95, n=10 → idx=9, 取 sorted_values[9] (最大值附近)
+      - p=95, n=20 → idx=19, 取 sorted_values[19]
+      - p=95, n=100 → idx=95, 取 sorted_values[95]
+      - 单元素 → 返该元素
+      - p=0 → 最小值; p=100 → 最大值
+      - 未排序输入 → 内部排序后正确返回
+    """
+
+    def test_p95_n10_returns_near_max(self):
+        """p=95, n=10 → nearest-rank 公式 idx = ceil(9.5) - 1 = 9 → 最大值"""
+        values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+        result = eval_mod._percentile(values, 95)
+        assert result == 100, f"p95 (n=10) 应返 100, 实际 {result}"
+
+    def test_p95_n20_returns_19th_sorted(self):
+        """p=95, n=20 → idx = ceil(19) - 1 = 18 → sorted_values[18]"""
+        values = list(range(1, 21))  # 1..20
+        result = eval_mod._percentile(values, 95)
+        # sorted_values[18] = 19
+        assert result == 19, f"p95 (n=20) 应返 19, 实际 {result}"
+
+    def test_p95_handles_unsorted_input(self):
+        """未排序输入 → 内部 sort 后正确返回"""
+        values = [50, 10, 90, 30, 70, 20, 100, 40, 80, 60]
+        result = eval_mod._percentile(values, 95)
+        # sort 后 [10, 20, 30, 40, 50, 60, 70, 80, 90, 100], idx=9 → 100
+        assert result == 100, f"未排序输入 p95 应 sort 后取最大, 实际 {result}"
+
+    def test_p50_median(self):
+        """p=50, n=5 → idx = ceil(2.5) - 1 = 2 → sorted_values[2]"""
+        values = [10, 20, 30, 40, 50]
+        result = eval_mod._percentile(values, 50)
+        assert result == 30, f"p50 (n=5) 应返 30, 实际 {result}"
+
+    def test_p0_returns_min(self):
+        """p=0 → 最小值 (clamp idx=-1 到 0)"""
+        values = [50, 10, 30, 20, 40]
+        result = eval_mod._percentile(values, 0)
+        assert result == 10, f"p0 应返最小值 10, 实际 {result}"
+
+    def test_p100_returns_max(self):
+        """p=100 → 最大值"""
+        values = [50, 10, 30, 20, 40]
+        result = eval_mod._percentile(values, 100)
+        assert result == 50, f"p100 应返最大值 50, 实际 {result}"
+
+    def test_single_element_returns_that_element(self):
+        """单元素 → 任意 p 都返该元素 (nearest-rank 语义)"""
+        for p in (0, 50, 95, 100):
+            assert eval_mod._percentile([42], p) == 42, (
+                f"单元素 p={p} 应返 42, 实际 {eval_mod._percentile([42], p)}"
+            )
+
+
+class TestMetricsIncludeP95Latency:
+    """
+    R5-D Phase 4: compute_metrics 返回的 by_combo[*] 含 p95_latency_ms / max_latency_ms。
+    """
+
+    def test_metrics_by_combo_includes_p95_and_max_latency(self, monkeypatch, tmp_path):
+        """完整跑 main() 后, metrics.by_combo[*] 含 p95_latency_ms / max_latency_ms"""
+        # 跟现有 TestEvalCliOutput 系列一样的 monkeypatch 套路,
+        # 跑 main() 让 compute_metrics 真跑一遍拿到 metrics
+        # 然后用临时报告路径避免污染
+        from core.generator import preview_resume as _orig_preview  # noqa: F401
+        # 不需要 mock preview_resume — 默认行为即可, 4 组 × N 样本全跑
+        output = tmp_path / "metrics_p95.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        monkeypatch.setattr(eval_mod, "OUTPUT_REPORT", output)
+        monkeypatch.setattr(eval_mod, "is_llm_enabled", lambda: False)
+
+        try:
+            eval_mod.main(argv=["--mode", "offline"])
+            # 从 report 章节里直接验证 p95 / max 出现
+            # 但更稳的做法: 直接调 compute_metrics 验证 metrics 结构
+            # 重新跑一遍 — 拿 all_rows 然后 compute_metrics
+            # 这里简化: 复用主流程已生成的 metrics (但 main() 没暴露 metrics)
+            # 改成单独构造 rows 调 compute_metrics
+            all_rows = _build_min_rows_for_metrics()
+            metrics = eval_mod.compute_metrics(all_rows)
+            for combo, m in metrics["by_combo"].items():
+                assert "p95_latency_ms" in m, (
+                    f"by_combo[{combo!r}] 缺 'p95_latency_ms' 字段, "
+                    f"实际 keys: {list(m.keys())}"
+                )
+                assert "max_latency_ms" in m, (
+                    f"by_combo[{combo!r}] 缺 'max_latency_ms' 字段, "
+                    f"实际 keys: {list(m.keys())}"
+                )
+                # p95 / max 应该是 int, 且 >= 0
+                assert isinstance(m["p95_latency_ms"], int), (
+                    f"p95_latency_ms 应为 int, 实际 {type(m['p95_latency_ms'])}"
+                )
+                assert isinstance(m["max_latency_ms"], int), (
+                    f"max_latency_ms 应为 int, 实际 {type(m['max_latency_ms'])}"
+                )
+                assert m["p95_latency_ms"] >= 0
+                assert m["max_latency_ms"] >= 0
+                # max >= avg >= 0
+                assert m["max_latency_ms"] >= m["avg_latency_ms"]
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+    def test_metrics_p95_actual_value_correctness(self):
+        """直接调 compute_metrics, 验证 p95 数值正确性 (构造已知 latencies)"""
+        # 构造 10 条 row, latency = 100..1000 (步长 100)
+        # p95 (n=10, p=95) → idx = ceil(9.5) - 1 = 9 → 1000
+        # max = 1000
+        rows = []
+        for i, lat in enumerate([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]):
+            rows.append({
+                "jd_id": f"TEST_{i}",
+                "role_id": "algorithm",
+                "expected_label": "推荐投",
+                "expected_rec": "高",
+                "score": 85,
+                "recommendation": "高",
+                "schema_pass": True,
+                "fallback_used": False,
+                "fallback_category": "none",
+                "tools_used": [],
+                "request_id": None,
+                "request_id_short": None,
+                "latency_ms": lat,
+                "error_type": None,
+                "pii_safe": True,
+                "source": "jd_samples",
+                "combo": "test_combo",
+                "combo_fc": False,
+                "combo_aw": False,
+                "rewrite_changed_count": 0,
+                "rewrite_total": 0,
+                "rewrite_changed_rate": 0.0,
+                "avg_len_before": 0.0,
+                "avg_len_after": 0.0,
+            })
+        metrics = eval_mod.compute_metrics(rows)
+        m = metrics["by_combo"]["test_combo"]
+        assert m["p95_latency_ms"] == 1000, (
+            f"p95 (latencies 100..1000) 应为 1000, 实际 {m['p95_latency_ms']}"
+        )
+        assert m["max_latency_ms"] == 1000, (
+            f"max 应为 1000, 实际 {m['max_latency_ms']}"
+        )
+        assert m["avg_latency_ms"] == 550.0, (
+            f"avg 应为 550.0, 实际 {m['avg_latency_ms']}"
+        )
+
+
+class TestMetricsIncludeFallbackCategoryBreakdown:
+    """
+    R5-D Phase 4: compute_metrics 返回的 by_combo[*].fallback_category_breakdown
+    是标准化 5 类 schema (none / llm_disabled / tool_error / schema_retry / workflow_abort),
+    跟 6.1 章节、by_combo 各组口径完全一致。
+    """
+
+    def test_metrics_by_combo_fallback_breakdown_has_5_canonical_keys(self):
+        """by_combo[*].fallback_category_breakdown 必含 5 个标准 key"""
+        # 构造 1 行 row (类别: llm_disabled_fallback)
+        rows = [{
+            "jd_id": "TEST",
+            "role_id": "algorithm",
+            "expected_label": "推荐投",
+            "expected_rec": "高",
+            "score": 85,
+            "recommendation": "高",
+            "schema_pass": True,
+            "fallback_used": True,
+            "fallback_category": eval_mod.FALLBACK_LLM_DISABLED,
+            "tools_used": [],
+            "request_id": None,
+            "request_id_short": None,
+            "latency_ms": 100,
+            "error_type": None,
+            "pii_safe": True,
+            "source": "jd_samples",
+            "combo": "test_combo",
+            "combo_fc": True,
+            "combo_aw": False,
+            "rewrite_changed_count": 0,
+            "rewrite_total": 0,
+            "rewrite_changed_rate": 0.0,
+            "avg_len_before": 0.0,
+            "avg_len_after": 0.0,
+        }]
+        metrics = eval_mod.compute_metrics(rows)
+        fb = metrics["by_combo"]["test_combo"]["fallback_category_breakdown"]
+        # 5 个标准 key 必须存在
+        for cat in (
+            eval_mod.FALLBACK_NONE,
+            eval_mod.FALLBACK_LLM_DISABLED,
+            eval_mod.FALLBACK_TOOL_ERROR,
+            eval_mod.FALLBACK_SCHEMA_RETRY,
+            eval_mod.FALLBACK_WORKFLOW_ABORT,
+        ):
+            assert cat in fb, (
+                f"fallback_category_breakdown 缺标准 key {cat!r}, "
+                f"实际 keys: {list(fb.keys())}"
+            )
+        # llm_disabled 应为 1, 其余为 0
+        assert fb[eval_mod.FALLBACK_LLM_DISABLED] == 1
+        assert fb[eval_mod.FALLBACK_NONE] == 0
+        assert fb[eval_mod.FALLBACK_TOOL_ERROR] == 0
+        assert fb[eval_mod.FALLBACK_SCHEMA_RETRY] == 0
+        assert fb[eval_mod.FALLBACK_WORKFLOW_ABORT] == 0
+
+    def test_metrics_global_fallback_category_total_uses_canonical_keys(self):
+        """metrics.fallback_category_total (全局) 跟 by_combo 同 schema (5 标准 key)"""
+        rows = [
+            _make_min_row_with_fb_cat(eval_mod.FALLBACK_NONE, "c1"),
+            _make_min_row_with_fb_cat(eval_mod.FALLBACK_TOOL_ERROR, "c1"),
+        ]
+        metrics = eval_mod.compute_metrics(rows)
+        total = metrics["fallback_category_total"]
+        for cat in (
+            eval_mod.FALLBACK_NONE,
+            eval_mod.FALLBACK_LLM_DISABLED,
+            eval_mod.FALLBACK_TOOL_ERROR,
+            eval_mod.FALLBACK_SCHEMA_RETRY,
+            eval_mod.FALLBACK_WORKFLOW_ABORT,
+        ):
+            assert cat in total, (
+                f"全局 fallback_category_total 缺标准 key {cat!r}"
+            )
+        # 全局 none=1, tool_error=1
+        assert total[eval_mod.FALLBACK_NONE] == 1
+        assert total[eval_mod.FALLBACK_TOOL_ERROR] == 1
+
+
+def _build_min_rows_for_metrics():
+    """构造最小 all_rows 用于 compute_metrics 测试 (10 行)"""
+    rows = []
+    for i in range(10):
+        rows.append({
+            "jd_id": f"MIN_{i}",
+            "role_id": "algorithm",
+            "expected_label": "推荐投",
+            "expected_rec": "高",
+            "score": 85,
+            "recommendation": "高",
+            "schema_pass": True,
+            "fallback_used": False,
+            "fallback_category": "none",
+            "tools_used": [],
+            "request_id": None,
+            "request_id_short": None,
+            "latency_ms": 50 + i * 10,
+            "error_type": None,
+            "pii_safe": True,
+            "source": "jd_samples",
+            "combo": "test_combo",
+            "combo_fc": False,
+            "combo_aw": False,
+            "rewrite_changed_count": 0,
+            "rewrite_total": 0,
+            "rewrite_changed_rate": 0.0,
+            "avg_len_before": 0.0,
+            "avg_len_after": 0.0,
+        })
+    return rows
+
+
+def _make_min_row_with_fb_cat(category: str, combo: str) -> dict:
+    """构造单 row, 指定 fallback_category 和 combo, 用于 metrics 单元测试"""
+    return {
+        "jd_id": f"FB_{category}",
+        "role_id": "algorithm",
+        "expected_label": "推荐投",
+        "expected_rec": "高",
+        "score": 85,
+        "recommendation": "高",
+        "schema_pass": True,
+        "fallback_used": (category != eval_mod.FALLBACK_NONE),
+        "fallback_category": category,
+        "tools_used": [],
+        "request_id": None,
+        "request_id_short": None,
+        "latency_ms": 100,
+        "error_type": None,
+        "pii_safe": True,
+        "source": "jd_samples",
+        "combo": combo,
+        "combo_fc": True,
+        "combo_aw": True,
+        "rewrite_changed_count": 0,
+        "rewrite_total": 0,
+        "rewrite_changed_rate": 0.0,
+        "avg_len_before": 0.0,
+        "avg_len_after": 0.0,
+    }

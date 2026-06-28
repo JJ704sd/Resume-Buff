@@ -23,6 +23,18 @@ R5-A Phase 3 新增:
   - 输出 evidence_snippet dict 列表(只含 source_type/source_id/text/matched_keywords/confidence)
   - pii_risk="medium" (evidence 含真实素材片段, 跟 match_score 同级)
 
+R5-B Phase 2A 新增 (round5-b-agent-capability-spec.md §3.1-3.3):
+  - 完整轻量 schema validator: type / required / properties / items / minimum / maximum
+    (见 core.tool_schema.validate_schema)
+  - context 权限边界:
+      * allow_jd_text         (默认 True)
+      * allow_materials       (默认 True)
+      * allow_external_resume (默认 False)
+      * max_pii_risk          (默认 "medium")
+  - 权限不匹配返回 PRIVACY_VIOLATION, 错误描述只含字段名, 不含 args 原文
+  - ToolSpec.metadata 字段(向后兼容 default={})— 标 affects_preview=True 时
+    agent_summary.tools_used 才列该工具(spec §3.3 有效语义)
+
 注意:
   - 本模块不引入任何 LLM 调用,纯工具注册 / 调用包装
   - 导入 jd_parser / llm_rewriter / evidence 是稳定的下游,无循环依赖风险
@@ -44,6 +56,7 @@ from core.evidence import (
     retrieve_evidence,
     evidence_to_dict_list,
 )
+from core.tool_schema import validate_schema
 
 
 # ----------------------------------------------------------------------
@@ -73,7 +86,18 @@ class ToolSpec:
       permission   - 权限标签(read_jd_text / read_jd_and_materials / ...)
       pii_risk     - PII 风险等级(low / medium / high)— 给日志审计用
       timeout_ms   - 单次调用允许最大耗时(毫秒)— MVP 只记录,不强杀
-      input_schema - 输入 schema 描述(dict,Phase 1 不强校验)
+      input_schema - 输入 schema 描述(dict,Phase 2A 已升级为可校验子集)
+      metadata     - 扩展元数据 dict(R5-B Phase 2A 新增)
+                     - affects_preview: bool — True 时 agent_summary.tools_used 才列该工具
+                     - 其他 P2 字段按需扩展
+
+    影响 preview 的工具(R5-B Phase 2A):
+      - retrieve_evidence: 输出 evidence 真正注入 build_sections → rewrite_highlights
+                            → 影响 highlights 内容(affects_preview=True)
+      - 其他工具(parse_jd / match_score / evaluate_bullet_jd_match / rewrite_highlights)
+        在当前 workflow 里是"展示型"调用(output 未被 build_sections 实际消费)
+        → affects_preview=False
+        → Phase 3 升级后再重新评估
     """
     name: str
     callable: Callable[..., Any]
@@ -81,6 +105,7 @@ class ToolSpec:
     pii_risk: str
     timeout_ms: int
     input_schema: Optional[dict] = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -186,6 +211,9 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
             },
             "required": ["jd_keywords", "role", "materials"],
         },
+        # R5-B Phase 2A: 标记 retrieve_evidence 的 output 真正影响 preview
+        # (evidence 注入 build_sections → rewrite_highlights → 影响 highlights)
+        metadata={"affects_preview": True},
     ),
     "rewrite_highlights": ToolSpec(
         name="rewrite_highlights",
@@ -211,28 +239,96 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
 
 
 # ----------------------------------------------------------------------
+# R5-B Phase 2A: Context 权限校验
+# ----------------------------------------------------------------------
+# Context 协议 (round5-b-agent-capability-spec.md §3.2):
+#   {
+#     "allow_jd_text":         bool (default True),
+#     "allow_materials":       bool (default True),
+#     "allow_external_resume": bool (default False),
+#     "max_pii_risk":          "low" | "medium" | "high" (default "medium"),
+#   }
+#
+# 规则:
+#   - tool.permission 与 context 不匹配 -> PRIVACY_VIOLATION
+#     * read_jd_text 需 allow_jd_text=True
+#     * read_jd_and_materials 需 allow_jd_text=True AND allow_materials=True
+#     * read_materials_and_jd_keywords 需 allow_materials=True AND allow_jd_text=True
+#     * read_bullet_and_jd_focus 需 allow_jd_text=True (单 bullet 通常来自 jd_focus 上下文)
+#     * external_resume 需 allow_external_resume=True
+#   - tool.pii_risk > context.max_pii_risk -> PRIVACY_VIOLATION
+#     * 风险等级排序: low < medium < high
+#   - 错误描述只含权限 / 风险级别, 不含 args 原文
+
+_PII_RISK_LEVEL = {"low": 0, "medium": 1, "high": 2}
+
+
+def _check_permission_context(spec: ToolSpec, context: dict) -> Optional[str]:
+    """
+    R5-B Phase 2A: 校验 spec.permission 与 context 是否匹配.
+    失败返回 str 错误描述(不含 args 原文);成功返回 None.
+
+    注意:
+      - 权限校验在 schema 校验后、callable 调用前
+      - 即使校验失败, 也只返回错误描述(不含 context 原文 — 防 PII)
+      - 缺省 context 字段时按默认值(True/True/False/medium)处理
+    """
+    permission = spec.permission
+    max_pii = context.get("max_pii_risk", "medium")
+    # 防御性: max_pii 必须是已知等级
+    if max_pii not in _PII_RISK_LEVEL:
+        max_pii = "medium"
+
+    # 1) pii_risk 等级上限
+    spec_pii_level = _PII_RISK_LEVEL.get(spec.pii_risk, _PII_RISK_LEVEL["medium"])
+    ctx_pii_level = _PII_RISK_LEVEL[max_pii]
+    if spec_pii_level > ctx_pii_level:
+        return f"pii_risk={spec.pii_risk} exceeds context max_pii_risk={max_pii}"
+
+    # 2) 权限匹配
+    if permission == "read_jd_text":
+        if not context.get("allow_jd_text", True):
+            return "permission read_jd_text denied by context"
+    elif permission == "read_jd_and_materials":
+        if not context.get("allow_jd_text", True):
+            return "permission read_jd_and_materials requires allow_jd_text"
+        if not context.get("allow_materials", True):
+            return "permission read_jd_and_materials requires allow_materials"
+    elif permission == "read_materials_and_jd_keywords":
+        if not context.get("allow_materials", True):
+            return "permission read_materials_and_jd_keywords requires allow_materials"
+        if not context.get("allow_jd_text", True):
+            return "permission read_materials_and_jd_keywords requires allow_jd_text"
+    elif permission == "read_bullet_and_jd_focus":
+        if not context.get("allow_jd_text", True):
+            return "permission read_bullet_and_jd_focus requires allow_jd_text"
+    elif permission == "read_external_resume":
+        if not context.get("allow_external_resume", False):
+            return "permission read_external_resume requires allow_external_resume"
+    # unknown permission -> 不阻断 (宽容)
+
+    return None
+
+
+# ----------------------------------------------------------------------
 # 统一执行入口
 # ----------------------------------------------------------------------
 def _validate_required_args(spec: ToolSpec, args: dict) -> Optional[str]:
     """
-    R5-A closeout: 基于 spec.input_schema.required 字段做轻量 JSON schema 校验,
-    在调用 callable 前先检查 args 是否齐全。只校验 required 字段存在性,
-    不强校验 type / properties(避免破坏既有调用)。
+    R5-A closeout: 基于 spec.input_schema 做轻量 JSON schema 校验.
+
+    R5-B Phase 2A 升级:
+      - 委托给 core.tool_schema.validate_schema
+      - 覆盖 type / required / properties / items / minimum / maximum 子集
+      - 失败时只含字段名 + 类型名, 不含 args 原文 (隐私边界)
 
     Returns:
-        None 如果 args 满足 required 字段
-        str 错误描述(不包含 args 原文,只列缺失字段名),如果不满足
+        None 如果 args 满足 schema
+        str 错误描述(只列字段名 + 类型摘要),如果不满足
     """
-    schema = spec.input_schema
-    if not schema or not isinstance(schema, dict):
-        return None
-    required = schema.get("required") or []
-    if not required:
-        return None
-    missing = [k for k in required if k not in args]
-    if missing:
-        return f"missing required args: {missing}"
-    return None
+    if not spec.input_schema:
+        return None  # 无 schema = 不校验 (向后兼容)
+    return validate_schema(spec.input_schema, args)
 
 
 def execute_agent_tool(
@@ -243,19 +339,22 @@ def execute_agent_tool(
     """
     工具执行统一入口(对齐 spec §5.1)
 
-    流程:
+    流程 (R5-B Phase 2A 升级):
       1. allowlist 校验: tool_name 不在 AGENT_TOOLS → TOOL_NOT_ALLOWED
-      2. R5-A closeout: 校验 args 必填字段(input_schema.required)
-         → TOOL_ARGS_INVALID(早于 callable 调用,给出明确字段名)
-      3. 计时
-      4. 调 spec.callable(**args) — 失败也返 ToolResult,绝不抛
-      5. TypeError  → TOOL_ARGS_INVALID(args 类型 / 名字错)
-      6. 其他异常   → TOOL_RUNTIME_ERROR
+      2. R5-B Phase 2A: 校验 context 权限边界
+         (allow_jd_text / allow_materials / allow_external_resume / max_pii_risk)
+         → PRIVACY_VIOLATION(早于 schema 校验, 防止敏感数据进入校验日志)
+      3. R5-B Phase 2A: 完整 schema 校验 (type / required / properties / items / minimum / maximum)
+         → TOOL_ARGS_INVALID(早于 callable 调用, 给出明确字段名 + 类型摘要)
+      4. 计时
+      5. 调 spec.callable(**args) — 失败也返 ToolResult, 绝不抛
+      6. TypeError  → TOOL_ARGS_INVALID(args 类型 / 名字错)
+      7. 其他异常   → TOOL_RUNTIME_ERROR
 
     Args:
         tool_name:  工具名(必须在 AGENT_TOOLS)
         args:       工具调用参数 dict(传 None 等价于 {})
-        context:    调用上下文(暂未使用,预留—Phase 2 可能用于 trace 注入)
+        context:    调用上下文(对齐 spec §3.2, 缺省值见 _check_permission_context)
 
     Returns:
         ToolResult(status="success"|"error", output / error_type / latency_ms / ...)
@@ -263,7 +362,7 @@ def execute_agent_tool(
 
     隐私(对齐 spec §6.4):
       - ToolResult 不存 args 原文(本模块不缓存)
-      - error_msg 仅含异常类型名 / 缺失字段名,不含 args 内容
+      - error_msg 仅含异常类型名 / 缺失字段名 / 类型摘要, 不含 args 内容
     """
     args = args or {}
     context = context or {}
@@ -281,7 +380,19 @@ def execute_agent_tool(
 
     spec = AGENT_TOOLS[tool_name]
 
-    # 2) R5-A closeout: args 必填字段校验(早于 callable 调用)
+    # 2) R5-B Phase 2A: context 权限校验 (早于 schema 校验)
+    permission_err = _check_permission_context(spec, context)
+    if permission_err:
+        return ToolResult(
+            tool=tool_name,
+            status="error",
+            output=None,
+            error_type=ToolErrorType.PRIVACY_VIOLATION,
+            latency_ms=0,
+            error_msg=permission_err,  # 只含权限名 + 风险级别, 不含 args
+        )
+
+    # 3) R5-B Phase 2A: schema 校验 (type / required / properties / items / min/max)
     validation_err = _validate_required_args(spec, args)
     if validation_err:
         return ToolResult(
@@ -290,10 +401,10 @@ def execute_agent_tool(
             output=None,
             error_type=ToolErrorType.TOOL_ARGS_INVALID,
             latency_ms=0,
-            error_msg=validation_err,  # 只含缺失字段名,不含 args 原文
+            error_msg=validation_err,  # 只含字段名 + 类型摘要, 不含 args 原文
         )
 
-    # 3) 计时 + 执行
+    # 4) 计时 + 执行
     t0 = time.time()
     try:
         output = spec.callable(**args)
@@ -338,3 +449,21 @@ def list_tools() -> list[str]:
 def get_tool_spec(tool_name: str) -> Optional[ToolSpec]:
     """拿工具元数据(供测试 / 调试)— 不存在返 None"""
     return AGENT_TOOLS.get(tool_name)
+
+
+def affects_preview(tool_name: str) -> bool:
+    """
+    R5-B Phase 2A: 判断工具是否"实际影响 preview 输出" (round5-b-agent-capability-spec.md §3.3).
+
+    规则:
+      - 取 ToolSpec.metadata["affects_preview"]
+      - 默认 False(展示型工具调用, output 未被 build_sections 实际消费)
+      - True 例: retrieve_evidence (output 注入 build_sections → rewrite_highlights)
+
+    用法 (在 core.agent_workflow):
+      tools_used = [t for t in executed_tools if affects_preview(t)]
+    """
+    spec = AGENT_TOOLS.get(tool_name)
+    if spec is None:
+        return False
+    return bool(spec.metadata.get("affects_preview", False))

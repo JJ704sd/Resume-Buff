@@ -907,7 +907,16 @@ class TestAgentSummaryField:
         assert isinstance(n, int) and n > 0, f"steps_executed 应 > 0, 实际: {n}"
 
     def test_agent_summary_tools_used_has_workflow_tools(self):
-        """agent_summary.tools_used 包含 workflow 跑过的工具"""
+        """R5-B Phase 2A: agent_summary.tools_used 只列 affects_preview=True 的工具
+        (round5-b-agent-capability-spec.md §3.3 有效语义)
+
+        当前实现:
+          - retrieve_evidence: output 注入 build_sections → rewrite_highlights → 影响 preview
+            → affects_preview=True → 列 tools_used
+          - match_score: 当前是"展示型"调用(output 未被 build_sections 实际消费)
+            → affects_preview=False → 不列 tools_used
+          - 其他工具(parse_jd / evaluate_bullet_jd_match / rewrite_highlights): 同上,展示型
+        """
         from core.agent_workflow import run_agent_workflow
         result = run_agent_workflow(
             target_role="tech_metric",
@@ -915,10 +924,12 @@ class TestAgentSummaryField:
             jd_text="熟悉大模型评测",
         )
         tools = result["agent_summary"]["tools_used"]
-        # JD 路径下 workflow 至少应跑过 match_score + retrieve_evidence
         assert isinstance(tools, list)
-        assert "match_score" in tools
+        # retrieve_evidence 是当前唯一真正影响 preview 的工具
         assert "retrieve_evidence" in tools
+        # match_score / parse_jd 是"展示型", 不列
+        assert "match_score" not in tools
+        assert "parse_jd" not in tools
 
     def test_agent_summary_latency_ms_non_negative(self):
         """agent_summary.latency_ms 是非负整数"""
@@ -997,3 +1008,216 @@ class TestAgentToolArgsValidation:
         # 没 key 校验时直接走 callable(走 TypeError 路径)
         # 关键是验证字段校验逻辑存在, 不保证特定工具行为
         assert result.status in ("error", "success")  # 不抛
+
+
+# =========================================================================
+# R5-B Phase 2A: workflow tools_used 有效语义
+# =========================================================================
+class TestWorkflowEffectiveTools:
+    """R5-B Phase 2A: workflow tools_used 只列 affects_preview=True 的工具
+    (round5-b-agent-capability-spec.md §3.3)
+
+    锁点:
+      - 跑过的工具里只有 affects_preview=True 且 status=success 才列 tools_used
+      - "展示型"工具(parse_jd / match_score / evaluate_bullet_jd_match /
+        rewrite_highlights)即使跑过, 也不列
+      - 老路径 enable_agent_workflow=False 不含 agent_summary (字节级一致)
+    """
+
+    def test_tools_used_only_lists_effective_tools(self):
+        """JD 路径 tools_used 只列 retrieve_evidence"""
+        from core.agent_workflow import run_agent_workflow
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text="熟悉大模型评测",
+        )
+        tools = result["agent_summary"]["tools_used"]
+        assert isinstance(tools, list)
+        # retrieve_evidence 是当前唯一 affects_preview=True 的工具
+        assert tools == ["retrieve_evidence"], (
+            f"tools_used 应只列 retrieve_evidence, 实际: {tools}"
+        )
+
+    def test_tools_used_no_jd_path_empty(self):
+        """无 JD 时任务图不含 retrieve_evidence → tools_used 为空 list"""
+        from core.agent_workflow import run_agent_workflow
+        result = run_agent_workflow(
+            target_role="tech_metric",
+            template="classic",
+            jd_text=None,
+        )
+        tools = result["agent_summary"]["tools_used"]
+        assert tools == [], (
+            f"无 JD 路径 tools_used 应为空, 实际: {tools}"
+        )
+
+    def test_tools_used_excludes_failed_effective_tools(self):
+        """失败的 effective 工具不进 tools_used (失败即无效)"""
+        from core.agent_workflow import run_agent_workflow
+        from core import agent_tools as agent_tools_mod
+        from core.agent_tools import ToolSpec
+
+        # mock retrieve_evidence 让它返回 error
+        original_spec = agent_tools_mod.AGENT_TOOLS["retrieve_evidence"]
+
+        def broken_evidence(**kwargs):
+            raise RuntimeError("simulated evidence failure")
+
+        broken_spec = ToolSpec(
+            name="retrieve_evidence",
+            callable=broken_evidence,
+            permission=original_spec.permission,
+            pii_risk=original_spec.pii_risk,
+            timeout_ms=original_spec.timeout_ms,
+            input_schema=original_spec.input_schema,
+            metadata=original_spec.metadata,  # affects_preview=True 保留
+        )
+        agent_tools_mod.AGENT_TOOLS["retrieve_evidence"] = broken_spec
+        try:
+            result = run_agent_workflow(
+                target_role="tech_metric",
+                template="classic",
+                jd_text="熟悉大模型评测",
+            )
+            tools = result["agent_summary"]["tools_used"]
+            assert "retrieve_evidence" not in tools, (
+                f"失败的 effective 工具不应进 tools_used, 实际: {tools}"
+            )
+        finally:
+            # 恢复
+            agent_tools_mod.AGENT_TOOLS["retrieve_evidence"] = original_spec
+
+    def test_old_path_no_agent_summary_byte_level(self):
+        """老路径 preview_resume(enable_agent_workflow=False) 不含 agent_summary
+        — 字节级一致 baseline (R5-A closeout 已锁, R5-B Phase 2A 重申)"""
+        from core.generator import preview_resume
+        result = preview_resume(target_role="tech_metric", template="classic")
+        assert "agent_summary" not in result, (
+            "老路径不应含 agent_summary(否则破坏字节级一致)"
+        )
+
+    def test_workflow_uses_new_schema_validator(self):
+        """workflow 调工具时走新 schema validator (类型错不调 callable)"""
+        from core.agent_workflow import run_agent_workflow
+        from core import agent_tools as agent_tools_mod
+        from core.agent_tools import ToolSpec, ToolErrorType
+
+        # mock retrieve_evidence 让它记录是否被调
+        original_spec = agent_tools_mod.AGENT_TOOLS["retrieve_evidence"]
+        called = {"count": 0}
+
+        def counting_evidence(**kwargs):
+            called["count"] += 1
+            return []
+
+        counting_spec = ToolSpec(
+            name="retrieve_evidence",
+            callable=counting_evidence,
+            permission=original_spec.permission,
+            pii_risk=original_spec.pii_risk,
+            timeout_ms=original_spec.timeout_ms,
+            input_schema={
+                "type": "object",
+                "required": ["jd_keywords"],  # 故意只 required 一个, 让 workflow 实际能调
+                "properties": {
+                    "jd_keywords": {"type": "array", "items": {"type": "string"}},
+                    "role": {"type": "string"},
+                    "materials": {"type": "object"},
+                },
+            },
+            metadata=original_spec.metadata,
+        )
+        agent_tools_mod.AGENT_TOOLS["retrieve_evidence"] = counting_spec
+        try:
+            run_agent_workflow(
+                target_role="tech_metric",
+                template="classic",
+                jd_text="熟悉大模型评测",
+            )
+            # workflow 内部 _build_tool_args 传正确 schema, callable 应被调
+            assert called["count"] == 1, (
+                f"workflow 调一次 retrieve_evidence, 实际: {called['count']}"
+            )
+        finally:
+            agent_tools_mod.AGENT_TOOLS["retrieve_evidence"] = original_spec
+
+
+# =========================================================================
+# R5-B Phase 2A: workflow context 派发
+# =========================================================================
+class TestWorkflowContextDispatch:
+    """R5-B Phase 2A: workflow 调工具时正确派发 context"""
+
+    def test_jd_path_passes_allow_jd_text_true(self):
+        """JD 路径下 workflow 构造的 context 应 allow_jd_text=True"""
+        from core.agent_workflow import _build_step_context
+
+        ctx = _build_step_context(
+            tool_name="parse_jd",
+            has_jd=True,
+            has_external_resume=False,
+        )
+        assert ctx["allow_jd_text"] is True
+        assert ctx["allow_materials"] is True
+        assert ctx["allow_external_resume"] is False
+        assert ctx["max_pii_risk"] == "medium"
+
+    def test_no_jd_path_blocks_allow_jd_text(self):
+        """无 JD 路径下 context 应 allow_jd_text=False (防止误传)"""
+        from core.agent_workflow import _build_step_context
+
+        ctx = _build_step_context(
+            tool_name="retrieve_materials",
+            has_jd=False,
+            has_external_resume=False,
+        )
+        assert ctx["allow_jd_text"] is False
+        assert ctx["allow_materials"] is True  # materials 总是 True
+
+    def test_external_resume_path_passes_allow_flag(self):
+        """外部简历路径下 context 应 allow_external_resume=True"""
+        from core.agent_workflow import _build_step_context
+
+        ctx = _build_step_context(
+            tool_name="parse_external_resume",
+            has_jd=False,
+            has_external_resume=True,
+        )
+        assert ctx["allow_external_resume"] is True
+
+    def test_workflow_passes_context_to_execute(self):
+        """workflow 调 execute_agent_tool 时传 context 参数"""
+        from core.agent_workflow import run_agent_workflow
+        from core import agent_tools as agent_tools_mod
+
+        captured = {"contexts": []}
+
+        real_execute = agent_tools_mod.execute_agent_tool
+
+        def capturing_execute(tool_name, args=None, context=None):
+            captured["contexts"].append(context)
+            return real_execute(tool_name, args=args, context=context)
+
+        agent_tools_mod.execute_agent_tool = capturing_execute
+        # 同时替换 workflow 已经 import 的版本
+        from core import agent_workflow as aw_mod
+        aw_mod.execute_agent_tool = capturing_execute
+        try:
+            run_agent_workflow(
+                target_role="tech_metric",
+                template="classic",
+                jd_text="熟悉大模型评测",
+            )
+            # 至少应有一个 context 被传(workflow 跑过工具步骤)
+            assert captured["contexts"], "workflow 没调任何工具 (contexts 为空)"
+            for ctx in captured["contexts"]:
+                # 每个 context 都应符合协议
+                assert isinstance(ctx, dict)
+                assert "allow_jd_text" in ctx
+                assert "allow_materials" in ctx
+                assert "allow_external_resume" in ctx
+                assert "max_pii_risk" in ctx
+        finally:
+            agent_tools_mod.execute_agent_tool = real_execute
+            aw_mod.execute_agent_tool = real_execute

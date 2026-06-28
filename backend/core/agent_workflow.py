@@ -39,6 +39,18 @@ R5-A Phase 3 增量(对齐 spec §5.3 RAG 增强):
   - trace evidence step: input_size = jd_keywords 总字符, output_size = evidence 总字符,
     不存 evidence text / jd_text 原文
 
+R5-B Phase 2A 增量(round5-b-agent-capability-spec.md §3.1-3.3):
+  - execute_agent_tool 调用时构造 context(dict):
+      * allow_jd_text / allow_materials / allow_external_resume / max_pii_risk
+  - 任务图每个工具步骤的 context 由 _build_step_context 派生:
+      * JD 路径: allow_jd_text=True, allow_materials=True
+      * 外部简历步骤: allow_external_resume=True
+  - agent_summary.tools_used 只列 affects_preview=True 的工具
+    (语义升级:从"跑过的工具"升级为"实际影响 preview 的工具")
+  - 老工具(parse_jd / match_score / evaluate_bullet_jd_match / rewrite_highlights)
+    当前是"展示型"调用(output 未被 build_sections 实际消费)→ 不列 tools_used
+  - retrieve_evidence 是当前唯一真正影响 preview 的工具 → 列 tools_used
+
 公开 API:
   - build_task_graph(...)           — 纯函数,根据请求字段返回 step 列表
   - run_agent_workflow(...)         — 执行任务图,失败 fallback 到旧路径
@@ -65,6 +77,7 @@ from typing import Any, Optional
 
 from core.agent_tools import (
     ToolResult,
+    affects_preview,
     execute_agent_tool,
 )
 from core.logger import log_agent_trace_jsonl
@@ -434,6 +447,17 @@ def run_agent_workflow(
             materials=materials,
         )
 
+        # R5-B Phase 2A: 构造 step context (对齐 spec §3.2)
+        # 派生规则:
+        #   - JD 路径工具: allow_jd_text=True, allow_materials=True
+        #   - 外部简历工具: allow_external_resume=True
+        #   - 默认 max_pii_risk="medium" — 与既有 match_score / retrieve_evidence 一致
+        step_context = _build_step_context(
+            tool_name=step.tool,
+            has_jd=has_jd,
+            has_external_resume=has_external_resume,
+        )
+
         # R5-A Phase 2: 计算入参长度(只算 bytes,不存原文)— input_size 用于 trace
         try:
             input_size = _estimate_input_size(step.tool, tool_args)
@@ -444,7 +468,7 @@ def run_agent_workflow(
         import time as _t
         t0 = _t.time()
         try:
-            tr = execute_agent_tool(step.tool, tool_args)
+            tr = execute_agent_tool(step.tool, tool_args, context=step_context)
         except Exception as e:
             # execute_agent_tool 自身设计为不抛,但保险起见再包一层
             latency_ms = int((_t.time() - t0) * 1000)
@@ -502,13 +526,22 @@ def run_agent_workflow(
     if output_dir is None:
         # preview 路径
         from core.generator import ROLE_CONFIG
-        # R5-A closeout: 收集 tools_used (从 tool_results 拿 tool 名, 去重保序)
+        # R5-B Phase 2A: 收集 tools_used 只列 affects_preview=True 的工具(spec §3.3 有效语义)
+        # 影响 preview 的工具: output 被 build_sections → rewrite_highlights 实际消费 → 改 preview
+        # 当前只有 retrieve_evidence 满足;其他工具(parse_jd / match_score /
+        # evaluate_bullet_jd_match / rewrite_highlights)是"展示型", output 未被 build_sections 消费
         tools_used: list[str] = []
         seen_tools: set[str] = set()
         for _tr in tool_results.values():
-            if _tr.tool and _tr.tool not in seen_tools:
-                tools_used.append(_tr.tool)
-                seen_tools.add(_tr.tool)
+            if not _tr.tool or _tr.tool in seen_tools:
+                continue
+            if not affects_preview(_tr.tool):
+                continue
+            # 只列 status=success 的(失败的算无效, 即便工具声称会影响 preview)
+            if _tr.status != "success":
+                continue
+            tools_used.append(_tr.tool)
+            seen_tools.add(_tr.tool)
         # R5-A closeout: 计算 workflow 总耗时
         total_latency_ms = int((_time.time() - _t_start) * 1000)
 
@@ -597,6 +630,38 @@ def _build_tool_args(
             "session_id": None,
         }
     return {}
+
+
+def _build_step_context(
+    *,
+    tool_name: str,
+    has_jd: bool,
+    has_external_resume: bool,
+) -> dict:
+    """
+    R5-B Phase 2A: 为每个工具步骤构造 context(对齐 spec §3.2).
+
+    派生规则:
+      - allow_jd_text         = has_jd (JD 路径才允许 JD 文本访问)
+      - allow_materials       = True     (build_sections 默认需要 materials)
+      - allow_external_resume = has_external_resume (外部简历步骤才开)
+      - max_pii_risk          = "medium" (与现有 match_score / retrieve_evidence 一致)
+
+    Args:
+        tool_name:           工具名
+        has_jd:              workflow 是否有 JD 输入
+        has_external_resume: workflow 是否启用外部简历
+
+    Returns:
+        dict — context dict 传给 execute_agent_tool
+        外部简历相关工具不存在时, 默认 allow_external_resume=False 走自然拒绝
+    """
+    return {
+        "allow_jd_text": has_jd,
+        "allow_materials": True,
+        "allow_external_resume": has_external_resume,
+        "max_pii_risk": "medium",
+    }
 
 
 def _pick_representative_bullet(materials: dict, target_role: str) -> str:

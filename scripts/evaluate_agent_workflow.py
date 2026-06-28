@@ -204,6 +204,116 @@ def _extract_tools_used_from_jsonl(jsonl_path: Path, request_id_prefix: str) -> 
     return tools
 
 
+# ======================================================================
+# R5-C Phase 1: agent_summary 优先提取 + fallback taxonomy
+# ======================================================================
+# fallback_category 分类常量(spec §2.2 Phase 1 表格)
+FALLBACK_NONE = "none"
+FALLBACK_LLM_DISABLED = "llm_disabled_fallback"
+FALLBACK_TOOL_ERROR = "tool_error_fallback"
+FALLBACK_SCHEMA_RETRY = "schema_retry_fallback"
+FALLBACK_WORKFLOW_ABORT = "workflow_abort_fallback"
+
+
+def _extract_request_id_from_preview(preview: dict) -> Optional[str]:
+    """
+    R5-C Phase 1: 从 preview dict 提取 agent_summary.request_id(spec §2.1)。
+
+    优先来源: preview["agent_summary"]["request_id"]
+    老路径 preview 不含 agent_summary 时返 None — 调用方可走 JSONL 反查 fallback。
+
+    隐私: 仅读取并返回短串,不写回任何位置;对 malformed 输入静默返 None 不抛。
+    """
+    if not isinstance(preview, dict):
+        return None
+    summary = preview.get("agent_summary")
+    if not isinstance(summary, dict):
+        return None
+    rid = summary.get("request_id")
+    return rid if isinstance(rid, str) else None
+
+
+def _extract_tools_used_from_preview(preview: dict) -> Optional[list[str]]:
+    """
+    R5-C Phase 1: 从 preview dict 提取 agent_summary.tools_used(spec §2.1)。
+
+    返回:
+      - list[str] 当 agent_summary.tools_used 存在(可能是空 list)
+      - None     当不含 agent_summary(老路径)
+    """
+    if not isinstance(preview, dict):
+        return None
+    summary = preview.get("agent_summary")
+    if not isinstance(summary, dict):
+        return None
+    tools = summary.get("tools_used")
+    if not isinstance(tools, list):
+        return None
+    return [t for t in tools if isinstance(t, str)]
+
+
+def _short_request_id(rid: Optional[str]) -> Optional[str]:
+    """
+    R5-C Phase 1: 报告里只展示 request_id 短串(前 4 字符)— 完整 uuid 不入报告
+    (spec §2.4 验收第 3 条;AGENTS.md 隐私边界)。
+    短于 4 字符时原样保留(None / "" → None)。
+    """
+    if not rid or not isinstance(rid, str):
+        return None
+    return rid[:4] if len(rid) >= 4 else rid
+
+
+def _classify_fallback_category(
+    *,
+    preview: dict,
+    llm_enabled: bool,
+    enable_function_calling: bool,
+    enable_agent_workflow: bool,
+    error_type: Optional[str],
+) -> str:
+    """
+    R5-C Phase 1: 分类 fallback 类别(spec §2.2 表格)。
+
+    优先级:
+      1. evaluate_one 抛 exception (error_type 非 None)
+         → workflow_abort_fallback(spec 全失败)
+      2. agent_summary.fallback_used=True
+         → 看 fallback_reason 分类:
+           - 含 'schema' (case-insensitive) → schema_retry_fallback
+           - reason 含 'tool_error' 或以 'tool:' 开头 → tool_error_fallback
+           - reason 含 'required' 或 'abort' → workflow_abort_fallback
+           - 默认 → tool_error_fallback (Phase 1 兜底)
+      3. fallback_used=False 且无 error
+         - LLM 关闭 且 (FC=T 或 AW=T) → llm_disabled_fallback
+         - 否则 → none
+    """
+    summary = preview.get("agent_summary", {}) if isinstance(preview, dict) else {}
+    fallback_used = bool(summary.get("fallback_used", False))
+    fallback_reason = summary.get("fallback_reason") or ""
+    reason_lower = str(fallback_reason).lower()
+
+    # 1) evaluate_one 抛异常 — workflow 全失败
+    if error_type is not None:
+        return FALLBACK_WORKFLOW_ABORT
+
+    # 2) agent_summary 标记 fallback_used
+    if fallback_used:
+        if "schema" in reason_lower:
+            return FALLBACK_SCHEMA_RETRY
+        if "tool_error" in reason_lower or reason_lower.startswith("tool:"):
+            return FALLBACK_TOOL_ERROR
+        if "required" in reason_lower or "abort" in reason_lower:
+            return FALLBACK_WORKFLOW_ABORT
+        # 默认归到 tool_error(因为 phase 1 没有更细分类来源)
+        return FALLBACK_TOOL_ERROR
+
+    # 3) LLM 关闭但 FC/AW 路径需要 LLM — 走原文 fallback
+    if not llm_enabled and (enable_function_calling or enable_agent_workflow):
+        return FALLBACK_LLM_DISABLED
+
+    return FALLBACK_NONE
+
+
 def _detect_schema_pass(preview: dict) -> bool:
     """
     schema pass: preview 返回值结构符合既有 preview schema
@@ -229,6 +339,11 @@ def evaluate_one(
 ) -> dict:
     """
     跑单样本 × 单组合,返回一行指标 dict。
+
+    R5-C Phase 1 (spec §2.1):
+      - request_id / tools_used 优先从 preview['agent_summary'] 提取
+      - JSONL 仅作为老路径 (enable_agent_workflow=False 时) 的交叉验证兜底
+      - 不再依赖"最后一条 step=0 trace 反推主 request"
     """
     t0 = time.time()
     error_type: Optional[str] = None
@@ -255,43 +370,49 @@ def evaluate_one(
 
     schema_pass = _detect_schema_pass(preview)
 
-    # fallback_used: preview_resume 在 workflow 路径失败时 fallback → 老路径
-    # 当前实现下, workflow 失败时返回 preview dict(来自 fallback)而非抛
-    # 通过 enable_agent_workflow=True + 跑通 = 没 fallback(没捕获 exception)
-    # 简化: 本评测不引入 mock 失败,所有路径理论上 fallback_used=False
-    # 但如果 error_type 非 None, 记 True
-    fallback_used = error_type is not None
+    # R5-C Phase 1: 优先从 preview["agent_summary"] 提取 request_id / tools_used
+    request_id = _extract_request_id_from_preview(preview)
+    request_id_short = _short_request_id(request_id)
+    tools_from_summary = _extract_tools_used_from_preview(preview)
+    summary_fallback_used = bool(
+        preview.get("agent_summary", {}).get("fallback_used", False)
+    ) if isinstance(preview, dict) else False
 
-    # tools_used: 走 AW 路径时从 JSONL trace 抽; 走老路径时根据 FC 标志推算
-    tools_used: list[str] = []
-    if enable_agent_workflow and jsonl_path and jsonl_path.exists():
-        # 找出最近一条 preview_resume 调用产生的 request_id
-        # 简单策略: 拿 trace 文件最后一行带 step=0 的事件 request_id 前 4 字符
-        try:
-            last_event = None
-            for line in jsonl_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                # workflow 会写 retrieve_materials 等本地 step, step=0 的就是 parse_user_intent
-                if ev.get("step") == 0 and ev.get("tool") is None:
-                    last_event = ev
-            if last_event:
-                rid = str(last_event.get("request_id", ""))
-                rid_prefix = rid[:4]
-                tools_used = _extract_tools_used_from_jsonl(jsonl_path, rid_prefix)
-        except Exception:
-            tools_used = []
+    # fallback_used 主信号:
+    #   - 有 agent_summary → 用 summary.fallback_used(避免 JSONL 反推)
+    #   - 老路径 (无 agent_summary) → 用 error_type(原先语义)
+    if tools_from_summary is not None:
+        fallback_used = summary_fallback_used or error_type is not None
+    else:
+        fallback_used = error_type is not None
+
+    # tools_used 来源优先级:
+    #   1. preview.agent_summary.tools_used (Phase 1 主数据源)
+    #   2. JSONL trace cross-check (老路径兜底, 走 enable_agent_workflow=True 但 summary 缺失时)
+    #   3. 老路径 + FC=T: 标 "n/a (FC enabled, old path)"
+    #   4. baseline (FC=F, AW=F): 空 list
+    if tools_from_summary is not None:
+        tools_used: list[str] = list(tools_from_summary)
+    elif enable_agent_workflow and jsonl_path and jsonl_path.exists() and request_id:
+        # JSONL cross-check: 用 agent_summary 的 request_id 精确反查
+        # 这是 fallback, 仅当 summary 缺失时使用
+        rid_prefix = request_id[:4]
+        tools_used = _extract_tools_used_from_jsonl(jsonl_path, rid_prefix)
     elif enable_function_calling:
         # 走老路径 + FC=T: rewrite_highlights 挂 tools,但不走 workflow 路径,
         # 无 JSONL trace → 标 "n/a (old path, no trace)"
         tools_used = ["n/a (FC enabled, old path)"]
     else:
         tools_used = []
+
+    # R5-C Phase 1: fallback_category 分类(spec §2.2)
+    fallback_category = _classify_fallback_category(
+        preview=preview,
+        llm_enabled=is_llm_enabled(),
+        enable_function_calling=enable_function_calling,
+        enable_agent_workflow=enable_agent_workflow,
+        error_type=error_type,
+    )
 
     # pii_safe: 预览 dict 里不应含任何真实 PII
     # 简化判断: 不含 11 位数字串(手机号) + 不含 email 模式 + 不含完整学校名(脱敏后也不该出现)
@@ -308,12 +429,15 @@ def evaluate_one(
         "recommendation": recommendation,
         "schema_pass": schema_pass,
         "fallback_used": fallback_used,
+        "fallback_category": fallback_category,
         "tools_used": tools_used,
-"latency_ms": latency_ms,
-            "error_type": error_type,
-            "pii_safe": pii_safe,
-            "source": sample["source"],
-        }
+        "request_id": request_id,
+        "request_id_short": request_id_short,
+        "latency_ms": latency_ms,
+        "error_type": error_type,
+        "pii_safe": pii_safe,
+        "source": sample["source"],
+    }
 
 
 # ======================================================================
@@ -476,6 +600,7 @@ def compute_metrics(all_rows: list[dict]) -> dict:
       - recommendation_consistency (同上)
       - pii_safe_rate (per combo)
       - tools_used (per combo)
+      - fallback_category_breakdown (per combo) — R5-C Phase 1 新增
     """
     by_combo: dict[str, list[dict]] = {}
     for r in all_rows:
@@ -493,6 +618,10 @@ def compute_metrics(all_rows: list[dict]) -> dict:
         for r in rows:
             for t in r["tools_used"]:
                 tools_counter[t] += 1
+        # R5-C Phase 1: fallback_category 分布(spec §2.2)
+        fb_cat_counter: Counter = Counter()
+        for r in rows:
+            fb_cat_counter[r.get("fallback_category", "none")] += 1
         combo_metrics[combo] = {
             "n": n,
             "schema_pass_rate": round(schema_pass_rate, 3),
@@ -500,6 +629,7 @@ def compute_metrics(all_rows: list[dict]) -> dict:
             "pii_safe_rate": round(pii_safe_rate, 3),
             "avg_latency_ms": round(avg_latency, 1),
             "tools_used_top": tools_counter.most_common(5),
+            "fallback_category_breakdown": dict(fb_cat_counter),
             "any_error": any(r["error_type"] for r in rows),
         }
 
@@ -527,6 +657,11 @@ def compute_metrics(all_rows: list[dict]) -> dict:
     n_score_consistent = sum(1 for s in score_consistency if s["consistent"])
     n_rec_consistent = sum(1 for s in rec_consistency if s["consistent"])
 
+    # R5-C Phase 1: 全局 fallback_category 分布
+    global_fb_cat_counter: Counter = Counter()
+    for r in all_rows:
+        global_fb_cat_counter[r.get("fallback_category", "none")] += 1
+
     return {
         "by_combo": combo_metrics,
         "score_consistency": score_consistency,
@@ -534,6 +669,7 @@ def compute_metrics(all_rows: list[dict]) -> dict:
         "n_score_consistent": n_score_consistent,
         "n_rec_consistent": n_rec_consistent,
         "total_jds": len(by_jd),
+        "fallback_category_total": dict(global_fb_cat_counter),
     }
 
 
@@ -571,17 +707,22 @@ def write_report(
     lines.append("\n")
     lines.append("> 注: v4_strong 样本无 user 标定的 ground truth label, expected 仅作参考  \n\n")
 
-    # ---- 二、四组对照总览表 ----
+    # ---- 二、四组开关对照总览表 ----
     lines.append("## 二、四组开关对照总览\n\n")
-    lines.append("| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | pii_safe_rate | tools_used (top) |\n")
-    lines.append("|---|---|---|---|---|---|---|\n")
+    lines.append("| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | pii_safe_rate | tools_used (top) | fallback_category |\n")
+    lines.append("|---|---|---|---|---|---|---|---|\n")
     for combo, m in metrics["by_combo"].items():
         tools_str = ", ".join(f"{t}×{n}" for t, n in m["tools_used_top"][:3]) or "—"
+        # R5-C Phase 1: fallback_category 分布(top 3, 否则 '—')
+        fb_breakdown = m.get("fallback_category_breakdown", {})
+        fb_str = ", ".join(f"{c}×{n}" for c, n in sorted(
+            fb_breakdown.items(), key=lambda kv: -kv[1]
+        )[:3]) or "—"
         lines.append(
             f"| {combo} | {m['n']} | "
             f"{m['schema_pass_rate']:.1%} | {m['fallback_rate']:.1%} | "
             f"{m['avg_latency_ms']:.0f} | {m['pii_safe_rate']:.1%} | "
-            f"{tools_str} |\n"
+            f"{tools_str} | {fb_str} |\n"
         )
     lines.append("\n")
 
@@ -612,14 +753,17 @@ def write_report(
     for jd_id, rows in by_jd.items():
         first = rows[0]
         lines.append(f"### `{jd_id}` — role=`{first['role_id']}`, expected={first['expected_label']}, source={first['source']}\n\n")
-        lines.append("| 组合 | score | recommendation | schema_pass | fallback | latency_ms | tools_used |\n")
-        lines.append("|---|---|---|---|---|---|---|\n")
+        # R5-C Phase 1: 新增 request_id 短串列 + fallback_category 列
+        lines.append("| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |\n")
+        lines.append("|---|---|---|---|---|---|---|---|\n")
         for r in rows:
             tools = ", ".join(r["tools_used"]) if r["tools_used"] else "—"
+            rid_short = r.get("request_id_short") or "—"
+            fb_cat = r.get("fallback_category", "none")
             lines.append(
-                f"| {r['combo']} | {r['score']} | {r['recommendation']} | "
+                f"| {r['combo']} | `{rid_short}` | {r['score']} | {r['recommendation']} | "
                 f"{'✅' if r['schema_pass'] else '❌'} | "
-                f"{'是' if r['fallback_used'] else '否'} | {r['latency_ms']} | {tools} |\n"
+                f"`{fb_cat}` | {r['latency_ms']} | {tools} |\n"
             )
         lines.append("\n")
 
@@ -645,13 +789,38 @@ def write_report(
     lines.append("## 六、隐私检查摘要\n\n")
     lines.append("- **数据源**: 仅读 `backend/data/materials.json`(公开脱敏版),不读任何 private 备份\n")
     lines.append("- **报告输出字段**: jd_id / role_id / company / title / score / recommendation / "
-                 "schema_pass / fallback_used / tools_used / latency_ms / pii_safe\n")
-    lines.append("- **不含**: 真实姓名 / 手机号 / 邮箱 / 完整学校名 / 完整 JD 全文 / 完整 bullet / request_id 全文\n")
+                 "schema_pass / fallback_used / fallback_category / tools_used / latency_ms / pii_safe / "
+                 "request_id 短串 (前 4 字符)\n")
+    lines.append("- **不含**: 真实姓名 / 手机号 / 邮箱 / 完整学校名 / 完整 JD 全文 / 完整 bullet / "
+                 "**完整 request_id (r + 8 hex)**\n")
     lines.append("- **PII 模式扫描**: 11 位手机号 / email 模式 / 国内常见学校关键词, "
                  "全报告递归扫描结果见下方\n")
     # 实际跑一遍扫描, 写明结果(避免把 pattern 字符串当字面写进报告触发误报)
     pii_pass = _check_pii_safe({"report": "".join(lines)})
     lines.append(f"  - 报告主体自检: {'✅ pass' if pii_pass else '❌ FAIL'}\n\n")
+
+    # ---- 六(补充)、fallback taxonomy 摘要 (R5-C Phase 1) ----
+    lines.append("### 6.1 fallback taxonomy 摘要 (R5-C Phase 1)\n\n")
+    lines.append("按 spec §2.2, fallback 类别:\n\n")
+    lines.append("| 类别 | 含义 | 来源 |\n")
+    lines.append("|---|---|---|\n")
+    lines.append("| `none` | 无 fallback | `agent_summary.fallback_used=False` 且无 error |\n")
+    lines.append("| `llm_disabled_fallback` | 无 LLM key, FC/AW 改写走原文 | `is_llm_enabled()==False` 且 FC=T 或 AW=T |\n")
+    lines.append("| `tool_error_fallback` | 工具失败, workflow 降级 | `agent_summary.fallback_used=True` + reason 含 `tool_error` |\n")
+    lines.append("| `schema_retry_fallback` | LLM schema retry 后仍失败 | `fallback_reason` 含 `schema` |\n")
+    lines.append("| `workflow_abort_fallback` | required step 失败 / evaluate_one 抛异常 | `fallback_reason` 含 `required` 或 `evaluate_one.error_type` 非 None |\n\n")
+    # 全局 fallback_category 分布
+    lines.append("**全局 fallback_category 分布**:\n\n")
+    lines.append("| 类别 | 计数 |\n")
+    lines.append("|---|---|\n")
+    total_fb = metrics.get("fallback_category_total", {})
+    for cat in [
+        FALLBACK_NONE, FALLBACK_LLM_DISABLED, FALLBACK_TOOL_ERROR,
+        FALLBACK_SCHEMA_RETRY, FALLBACK_WORKFLOW_ABORT,
+    ]:
+        n = total_fb.get(cat, 0)
+        lines.append(f"| `{cat}` | {n} |\n")
+    lines.append("\n")
 
     # ---- 七、结论 ----
     lines.append("## 七、结论\n\n")
@@ -685,6 +854,23 @@ def write_report(
     if not llm_enabled:
         lines.append("  - 真实 LLM 场景下 FC+AW 的 latency 会显著高于 fallback (HTTP RTT 决定), "
                      "当前评测反映的是离线 fallback 路径的真实表现\n")
+
+    # R5-C Phase 1: fallback_category 摘要(spec §2.4 验收第 2 条)
+    n_llm_disabled = total_fb.get(FALLBACK_LLM_DISABLED, 0)
+    n_tool_error = total_fb.get(FALLBACK_TOOL_ERROR, 0)
+    n_schema_retry = total_fb.get(FALLBACK_SCHEMA_RETRY, 0)
+    n_workflow_abort = total_fb.get(FALLBACK_WORKFLOW_ABORT, 0)
+    n_none = total_fb.get(FALLBACK_NONE, 0)
+    total = sum(total_fb.values())
+    if n_none == total and total > 0:
+        lines.append(f"- **fallback taxonomy 摘要**: 全部 {total} 次均为 `{FALLBACK_NONE}` "
+                     f"(无 LLM key + 老路径主导, 符合预期)\n")
+    else:
+        lines.append(f"- **fallback taxonomy 摘要**: none × {n_none} / "
+                     f"llm_disabled × {n_llm_disabled} / "
+                     f"tool_error × {n_tool_error} / "
+                     f"schema_retry × {n_schema_retry} / "
+                     f"workflow_abort × {n_workflow_abort}\n")
 
     lines.append("\n---\n\n")
     lines.append("## 八、与既有脚本的关系\n\n")

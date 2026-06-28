@@ -8,8 +8,9 @@
 
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
-- 当前功能基线:R5-C Phase 5,已合并 PR #7 (`codex/r5c-agent-closeout`)
-- 后端测试基线:547 passed + 0 skipped
+- 当前功能基线:R5-D 6 phase 全部完成(`scripts/evaluate_agent_workflow.py --mode {offline,live,auto}` + LLM 元信息 + rewrite impact + latency/fallback 聚合;**手动脚本,默认仍 offline**)
+- 后端测试基线:596 passed + 0 skipped
+- 真实 LLM eval (`scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程
 - 详细开发锁点:见 [AGENTS.md](AGENTS.md)
 - 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
 

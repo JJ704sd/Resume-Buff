@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-28 R5-C Phase 5 文档与回放闭环 收尾)
+## 0. 当前项目快照(2026-06-28 R5-D 真实 LLM eval 闭环 + 文档收尾 全部完成)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -34,17 +34,18 @@
   - **R5-C Phase 3** — per-bullet 真实评估数据流(`_evaluate_top_bullets(materials, target_role, jd_focus, jd_context, *, top_projects=3, bullets_per_project=3)` helper + workflow 主循环 evaluate step 走批量而非单条 representative + workflow preview 返回 `bullet_evaluations` 字段不含 bullet 原文)
   - **R5-C Phase 4** — 前端高级 Agent 面板契约(`AgentSummary` / `EvidenceSummary` / `ExternalResumePerspective` / `BulletEvaluation` 类型 + `preview/generate` 透传 enable_agent_workflow / session_id / external_resume_text);前端 App.vue 默认收起诊断面板
   - **R5-C Phase 5** — 文档与回放闭环(`scripts/replay_agent_trace.py` 加 `## Fallback Summary` 段 + `--tools-used` 参数触发 `## Tools Cross-Validation (R5-C Phase 5)` 段 + 5 个常量分类 `none` / `tool_error_fallback` / `unknown`;ROADMAP / README / AGENTS 三方同步 baseline 530→544 测试数)
+  - **R5-D Phase 0-5 真实 LLM eval 闭环**(`scripts/evaluate_agent_workflow.py` 加 `--mode` {offline, live, auto} 默认 offline + `--output` 自定义报告路径;`_get_llm_eval_config()` helper 抽 LLM 元信息,只输出 host 不含 path/query/secret;`_extract_project_highlights` + `_summarize_rewrite_impact` 5 数字字段不含 bullet 原文;`_percentile` 纯函数 + `p95/max latency` + 5 类 fallback_category_breakdown;live 模式只做手动验收不进 pre-push);ROADMAP / README / AGENTS 三方同步 baseline 547→596 测试数;6 个 commit 顺序落地:`8a4a799` spec / `522d911` baseline / `89717a9` mode / `1fef8dc` llm metadata / `8838e7a` rewrite impact / `2052b1f` latency & fallback;Phase 5 文档收尾落在 `docs(round5-d): document live eval workflow`,spec 状态从"📝 待实施 spec"改为"✅ 完成"
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **547 个 pytest 全绿 + 0 skipped**(2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544,R5-D Phase 0 把活跃文档基线从 544 修正为 547);计算口径:R5-B Phase 2A baseline 497 + **17 R5-C Phase 1** in test_agent_eval.py: 3 TestEvalUsesAgentSummaryRequestId + 5 TestEvalToolsUsedPrefersAgentSummary + 3 TestEvalFallbackCategoryNone + 4 TestEvalFallbackCategoryLlmDisabled + 2 TestEvalReportNoRawRequestIdLeak + **16 R5-C Phase 2** NEW FILE `test_r5c_phase2_external_resume.py`: 2 TestExternalResumeApiField + 3 TestExternalResumeWorkflowUsesText + 2 TestParseExternalResumeTool + 2 TestCompareResumeJdTool + 1 TestExternalResumePermission + 3 TestExternalResumePrivacy + 1 TestExternalResumePreviewOutput + 2 TestExternalResumeOldPathUnchanged + **10 R5-C Phase 3** NEW FILE `test_r5c_phase3_bullet_evaluation.py`: 1 TestBulletEvaluationSelectsTopProjects + 2 TestBulletEvaluationOutputSchema + 1 TestBulletEvaluationNoRawBulletInTrace + 1 TestBulletEvaluationSkippedWithoutJd + 2 TestBulletEvaluationNoBulletsNotError + 1 TestAffectsPreviewStillFalseUntilConsumed + 2 TestBulletEvaluationOldPathUnchanged + **14 R5-C Phase 5** in test_agent_trace_replay.py: 3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C)
+- **596 个 pytest 全绿 + 0 skipped**(2026-06-28 `D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测;R5-D Phase 5 文档收尾时点;R5-C 收尾时为 544,R5-D Phase 0 把活跃文档基线从 544 修正为 547,R5-D Phase 4 commit `2052b1f` 落地后再修正为 596);计算口径:R5-B Phase 2A baseline 497 + **17 R5-C Phase 1** in test_agent_eval.py: 3 TestEvalUsesAgentSummaryRequestId + 5 TestEvalToolsUsedPrefersAgentSummary + 3 TestEvalFallbackCategoryNone + 4 TestEvalFallbackCategoryLlmDisabled + 2 TestEvalReportNoRawRequestIdLeak + **16 R5-C Phase 2** NEW FILE `test_r5c_phase2_external_resume.py`: 2 TestExternalResumeApiField + 3 TestExternalResumeWorkflowUsesText + 2 TestParseExternalResumeTool + 2 TestCompareResumeJdTool + 1 TestExternalResumePermission + 3 TestExternalResumePrivacy + 1 TestExternalResumePreviewOutput + 2 TestExternalResumeOldPathUnchanged + **10 R5-C Phase 3** NEW FILE `test_r5c_phase3_bullet_evaluation.py`: 1 TestBulletEvaluationSelectsTopProjects + 2 TestBulletEvaluationOutputSchema + 1 TestBulletEvaluationNoRawBulletInTrace + 1 TestBulletEvaluationSkippedWithoutJd + 2 TestBulletEvaluationNoBulletsNotError + 1 TestAffectsPreviewStillFalseUntilConsumed + 2 TestBulletEvaluationOldPathUnchanged + **14 R5-C Phase 5** in test_agent_trace_replay.py: 3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C + **49 R5-D Phase 1-4** in test_agent_eval.py: 10 R5-D Phase 1(`TestEvalModeResolve` 5 + `TestEvalModeNoKeyLeak` 2 + `TestEvalCliOutput` 3) + 11 R5-D Phase 2(`TestEvalLlmMetadataHelper` 8 + `TestEvalReportIncludesLlmMetadata` 1 + `TestEvalReportDoesNotIncludeApiKey` 1 + `TestEvalReportBaseUrlHostHidesPathAndQuery` 1) + 16 R5-D Phase 3(`TestRewriteImpactCountsChangedBulletsWithoutStoringText` 5 + `TestExtractProjectHighlightsHandlesMissingProjects` 5 + `TestEvalReportContainsRewriteImpactSummary` 2 + `TestEvalReportDoesNotLeakBulletText` 4) + 12 R5-D Phase 4(`TestPercentileEdgeCases` 4 + `TestMetricsLatencyPercentile` 3 + `TestMetricsFallbackBreakdown` 3 + `TestByComboAndGlobalCategoryConsistency` 2,清理 1 冗余 `test_empty_list_distinguishable_via_n_zero` 跟 `test_empty_list_returns_zero` 重叠))
 
 **最近 7 个 commit** (`main` / `origin/main` 当前基线):
-- `c6ead64` feat(round5-c#phase2): 外部简历文本进入 Agent workflow
-- `09a2704` Merge pull request #6 from JJ704sd/feat/round5-b-phase2a-tool-contract
-- `593169e` docs(round5-b#2a): 当前能力表 + AGENTS 锁点同步
-- `232ea30` feat(round5-b#2a): 工具契约 / 权限 / 真实数据流
-- `488e43e` Merge pull request #5 from JJ704sd/codex/r5b-doc-baseline
-- `c7e99aa` docs(round5-b): 校准 Agent 文档基线
-- `12dfcf1` Merge pull request #4 from JJ704sd/feat/round5-a-agent-phase1
+- `2052b1f` feat(round5-d): add eval latency and fallback metrics
+- `8838e7a` feat(round5-d): add rewrite impact metrics
+- `1fef8dc` feat(round5-d): add llm eval metadata
+- `89717a9` feat(round5-d): add eval run modes
+- `522d911` docs(round5-d): sync active test baseline to 547
+- `8a4a799` docs(round5-d): add llm eval spec
+- `414a7cd` docs: update README test baseline
 
 ---
 
@@ -143,6 +144,41 @@
 - **效果**:**547 passed + 0 skipped**(R5-D Phase 0 起活跃基线,2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544);计算口径沿用 R5-C:R5-B Phase 2A baseline 497 + 17 Phase 1 + 16 Phase 2 + 10 Phase 3 + 14 Phase 5;五阶段均零 P0/P1 安全阻塞; `enable_agent_workflow=False` 老路径字节级稳定; eval 报告可被 Phase 1 fallback taxonomy 解释; 外部简历能进入 Agent workflow 诊断(原文不泄漏); per-bullet 评估可解释但不污染改写
 - **spec 文档**: `.harness/docs/round5-c-agent-capability-spec.md`(5 phase 全部 ✅)
 - **下一步**:等用户明确启动下一轮(如真实 LLM key 接入、GUI 面板实际打开、vector DB RAG 升级等)
+
+### R5-D — 真实 LLM eval 闭环 + 文档收尾 6 phase 全部落地 ✅ 完成 (2026-06-28, commits `8a4a799` + `522d911` + `89717a9` + `1fef8dc` + `8838e7a` + `2052b1f` + Phase 5 文档收尾)
+- **背景**:R5-C 完成"可评测 + 可解释"能力,但 eval 脚本默认永远走 offline fallback,无法量化"有真实 LLM key 时 Agent workflow 到底带来多少收益";R5-D 在不泄漏个人数据、不破坏默认离线路径的前提下,让 `scripts/evaluate_agent_workflow.py` 能区分并评估"无 key fallback"和"真实 LLM 调用"两种模式
+- **设计**: `.harness/docs/round5-d-llm-eval-spec.md` 6 phase(Phase 0-5)
+- **实施路径**(7 个 commit 顺序落地):
+  1. `8a4a799` Phase 0 (文档) — `.harness/docs/round5-d-llm-eval-spec.md` 475 行 spec(spec §3-§12 含 5 phase 实施范围 + 测试策略 + 隐私边界 + 验收清单 + 推荐提交拆分)
+  2. `522d911` Phase 0 (基线修正) — AGENTS.md + ROADMAP.md 活跃基线 544 → 547,显式标注 pre-push hook 来源 + R5-D Phase 0 起点;历史 round 描述里的 544 保留为 R5-C 收尾快照
+  3. `89717a9` Phase 1 — `scripts/evaluate_agent_workflow.py` 加 `_resolve_eval_mode(mode, llm_enabled)` 纯函数 + 3 类 mode 常量(`MODE_OFFLINE`/`MODE_LIVE`/`MODE_AUTO`,默认 offline) + argparse `--mode` / `--output` CLI 参数;**live mode + llm_enabled=False → RuntimeError,错误信息**绝不**包含 key 值或 env var 名(spec §3.4 + R5-D §6.4 隐私边界;`TestEvalModeNoKeyLeak` 2 case 锁);`write_report` 加 requested_mode / resolved_mode 标注;547 → 557 +10 pytest
+  4. `1fef8dc` Phase 2 — `_get_llm_eval_config(llm_enabled, resolved_mode) -> dict` 纯函数 helper,返回 4 字段 `llm_mode` / `llm_enabled` / `llm_model` / `llm_base_url_host`(用 `urllib.parse.urlparse(...).hostname` 抽 host 部分只输出 host,不含 scheme/path/query/fragment;`base_url_host` 空时写 `"unknown"`);**隐私边界** — helper **绝不**读 / 写 / 打印 `LLM_API_KEY`,`base_url_host` 只展示 host 部分防止 endpoint 路径泄露;`write_report` 加 `llm_eval_config` 入参,报告头部新增 `## 0、LLM 元信息 (R5-D Phase 2)` 章节 + 隐私边界注释;557 → 568 +11 pytest(`TestEvalLlmMetadataHelper` 8 + `TestEvalReportIncludesLlmMetadata` 1 + `TestEvalReportDoesNotIncludeApiKey` 1 + `TestEvalReportBaseUrlHostHidesPathAndQuery` 1)
+  5. `8838e7a` Phase 3 — `_extract_project_highlights(preview)` 防御性处理 missing projects / no project_group / malformed preview / 非 str 元素 + `_summarize_rewrite_impact(before, after)` 纯函数返回 5 数字字段 `rewrite_changed_count` / `rewrite_total` / `rewrite_changed_rate` / `avg_len_before` / `avg_len_after`,**返回 dict 绝不存任何 bullet 原文**;`evaluate_one` 加 `baseline_highlights` kwarg(同 jd baseline combo 的 highlights 作 before,内部用 after 作 before 兜底),返回 row 新增 5 spec 字段 + 内部 `_after_highlights` 缓存字段(stripped before reaching report);`main()` 缓存 baseline combo highlights 给后续 3 combo 复用;`write_report` 新增 `### 7.1 rewrite impact 摘要 (R5-D Phase 3)` 章节 + per-JD 工具表新增 `rewrite_rate` 列;**隐私边界** — `ToolResult` / `agent_summary` / `JSONL trace` / `agent_eval report` 四层链路**绝不**存 / 写 / 展示 bullet 原文;568 → 584 +16 pytest
+  6. `2052b1f` Phase 4 — `_percentile(values, p)` 纯函数(nearest-rank 0-100 百分位,空列表返 0,单元素返该元素,p=0/100 边界 clamp);`compute_metrics` 加 `p95_latency_ms` / `max_latency_ms` 跟 avg 组成 latency 三件套;`fallback_category_breakdown` 标准化 5 类(none / llm_disabled / tool_error / schema_retry / workflow_abort)缺的补 0 跟 6.1 章节一致;`write_report` 总览表加 p95 / max latency 列,6.1 章节新增每组 fallback_category 分布表;584 → 596 +12 pytest(清理 1 冗余 `test_empty_list_distinguishable_via_n_zero` 跟 `test_empty_list_returns_zero` 重叠)
+  7. Phase 5 收尾(本 round `docs(round5-d): document live eval workflow`)— spec 状态行 📝 → ✅ + `round5-d-llm-eval-spec.md` §12 新增 6 子段(前置条件 + PowerShell 跑法 + 安全提示 + 验收清单 + 不实施 GUI 面板说明 + 跟既有脚本关系);ROADMAP 顶部快照段加 R5-D 6 phase 落地描述 + 活跃基线更新为 596 + 最近 7 commit 同步到 R5-D 系列;README 加一句"真实 LLM eval 是手动脚本,不进默认启动流程"
+- **手动 live eval 安全跑法(PowerShell)**:(完整步骤见 spec §12)
+
+  ```powershell
+  $env:LLM_ENABLED="true"
+  $env:LLM_API_KEY="..."
+  $env:LLM_MODEL="gpt-4o-mini"
+  D:\python3.11\python.exe scripts/evaluate_agent_workflow.py --mode live --output AI岗位JD库_agent_eval报告_live.md
+  ```
+
+- **安全提示**(用户必须遵守,spec §12.3):
+  1. **不提交 `.env`**:`backend/.env` / 仓库根 `.env` / 任何含 `LLM_API_KEY` 的文件都已在 `.gitignore` 拒绝,提交前 `git status` 必须干净
+  2. **不提交含真实敏感信息的 live 报告**:报告路径如果可能含 API key / 真实 JD 原文 / 真实 bullet 原文 / 真实手机号邮箱,**绝对不入库**;入库安全 iff 4 条全部满足 — 用公开脱敏 `materials.json` / 用公开 `AI岗位JD库_v4_intern.json` / eval set 来自内置 12 JD 不混入真实投递 JD / `LLM_BASE_URL` 不含内部路径或敏感 query
+  3. **live 模式不进 pre-push**:`scripts/verify.ps1` / pre-push hook 永远不会自动触发 live,只跑默认 offline 路径
+- **实施坑**(已写进 spec §12 / MEMORY.md):
+  1. `_percentile` nearest-rank 用 `int(round((n-1) * p))` 防 p=0/100 边界越界,空列表 / 单元素单独 clamp
+  2. `_extract_project_highlights` 防御性处理:missing projects / no project_group / malformed preview / 非 str 元素 统一返 `[]`,不抛
+  3. `_summarize_rewrite_impact` baseline combo 自身 total = 0 时 changed_rate 必须 0,不能让空 total / len=0 触发除零
+  4. `main()` 4 combo 循环里 baseline combo (combo_idx=0) 缓存 `_after_highlights` 给后续 3 combo 复用,缓存完即 strip 不入 row / report
+  5. `_get_llm_eval_config` env var 优先级:`LLM_MODEL` / `LLM_BASE_URL` env → helper 内置 `_DEFAULT_BASE_URL_EVAL` / `_DEFAULT_MODEL_EVAL`;空字符串回落 default
+  6. `write_report` 章节顺序:`## 0、LLM 元信息` 必须在 `## 一、Eval set 概览` 之前让审计一眼看到 LLM 配置(spec §4 R5-D Phase 2)
+- **效果**:**596 passed + 0 skipped**(2026-06-28 `D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测;R5-C 收尾时为 544,R5-D Phase 0 把活跃文档基线从 544 修正为 547,R5-D Phase 4 commit `2052b1f` 落地后再修正为 596);计算口径沿用 R5-D Phase 4 commit `2052b1f`:R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5 + 10 R5-D Phase 1 + 11 R5-D Phase 2 + 16 R5-D Phase 3 + 12 R5-D Phase 4;**49 个 R5-D Phase 1-4 新 pytest**(`TestEvalModeResolve` 5 + `TestEvalModeNoKeyLeak` 2 + `TestEvalCliOutput` 3 + `TestEvalLlmMetadataHelper` 8 + `TestEvalReportIncludesLlmMetadata` 1 + `TestEvalReportDoesNotIncludeApiKey` 1 + `TestEvalReportBaseUrlHostHidesPathAndQuery` 1 + `TestRewriteImpactCountsChangedBulletsWithoutStoringText` 5 + `TestExtractProjectHighlightsHandlesMissingProjects` 5 + `TestEvalReportContainsRewriteImpactSummary` 2 + `TestEvalReportDoesNotLeakBulletText` 4 + `TestPercentileEdgeCases` 4 + `TestMetricsLatencyPercentile` 3 + `TestMetricsFallbackBreakdown` 3 + `TestByComboAndGlobalCategoryConsistency` 2);六阶段均零 P0/P1 安全阻塞; `enable_agent_workflow=False` 老路径字节级稳定 + 老路径不含 mode 元信息以外的额外字段; `enable_function_calling=False` 路径完全不走 loop; `live` 错误信息不含 key 值 / env var 名; `base_url_host` 只展示 host 部分; 四层链路(ToolResult / agent_summary / JSONL trace / agent_eval report)绝不存 / 写 / 展示 bullet 原文
+- **spec 文档**: `.harness/docs/round5-d-llm-eval-spec.md`(6 phase 全部 ✅;§12 手动 live eval 安全跑法段含 6 子段)
+- **下一步**:等用户明确启动下一轮(如 R5-E embedding RAG 升级 / R5-F 真实 LLM 跑通后考虑默认开启 Agent workflow 面板 / R5-G 前端 dashboard)
 
 ---
 
@@ -324,14 +360,14 @@
 | 后端入口 | `backend/main.py` |
 | 核心域 | `backend/core/generator.py` + `backend/core/jd_parser.py` + `backend/core/llm_rewriter.py` + `backend/core/jd_ranker.py` + **R4 session** `backend/core/session.py` + **R5-A** `backend/core/agent_tools.py` + `backend/core/agent_workflow.py` + **`backend/core/evidence.py`** |
 | API | `backend/api/resume.py` + `backend/api/jd.py` |
-| 测试 | `backend/tests/` **547 pytest** (R5-D Phase 0 起活跃基线,2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544;计算口径沿用:R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5) |
+| 测试 | `backend/tests/` **596 pytest** (R5-D Phase 4 commit `2052b1f` 起活跃基线,2026-06-28 `D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测;R5-D Phase 0 时为 547;R5-C 收尾时为 544;计算口径沿用 R5-D Phase 4 commit `2052b1f`:R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5 + 10 R5-D Phase 1 + 11 R5-D Phase 2 + 16 R5-D Phase 3 + 12 R5-D Phase 4) |
 | 前端入口 | `frontend/src/App.vue` |
-| 设计文档 | `.harness/docs/` (含 `round5-c-agent-capability-spec.md` 5 phase 已 ✅) |
+| 设计文档 | `.harness/docs/` (含 `round5-c-agent-capability-spec.md` 5 phase 已 ✅ + **`round5-d-llm-eval-spec.md`** 6 phase 已 ✅ + §12 手动 live eval 安全跑法) |
 | 项目记忆 | `.harness/memory/MEMORY.md` |
 | 本地隐私数据 | `简历帮知识库/` (`.gitignore`,不进库) |
 | JD 库 | `AI岗位JD库_v4_intern.json` + 4 份报告 md |
-| 扩库 / 打标 / 阈值脚本 | `scripts/build_v4.py` + `scripts/score_intern_match.py` + `scripts/label_samples.py` + `scripts/score_thresholds.py` + `scripts/match_golden_targets.py` + **`scripts/replay_agent_trace.py`** (R5-A Phase 2 + R5-C Phase 5: Fallback Summary 段 + --tools-used 交叉验证) + **`scripts/evaluate_agent_workflow.py`** (R5-A Phase 4 + R5-C Phase 1: fallback taxonomy 5 类) |
+| 扩库 / 打标 / 阈值脚本 | `scripts/build_v4.py` + `scripts/score_intern_match.py` + `scripts/label_samples.py` + `scripts/score_thresholds.py` + `scripts/match_golden_targets.py` + **`scripts/replay_agent_trace.py`** (R5-A Phase 2 + R5-C Phase 5: Fallback Summary 段 + --tools-used 交叉验证) + **`scripts/evaluate_agent_workflow.py`** (R5-A Phase 4 + R5-C Phase 1: fallback taxonomy 5 类 + **R5-D Phase 1-4**: `--mode` {offline/live/auto} + `--output` 自定义报告路径 + `_get_llm_eval_config` 4 字段 LLM 元信息 + `_extract_project_highlights` + `_summarize_rewrite_impact` 5 字段不含 bullet 原文 + `_percentile` 纯函数 + `p95/max_latency_ms` + 5 类 fallback_category_breakdown;**live 模式只做手动验收不进 pre-push**) |
 
 ---
 
-_最后更新:2026-06-28 R5-C Phase 5 文档与回放闭环 收尾;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`);R5-B Phase 2A 已通过 PR #6 合并到 main(merge `09a2704`);R5-C Phase 1-5 全部落地 baseline 530→544 pytest 全绿(R5-C 收尾时快照,R5-D Phase 0 起活跃基线修正为 547 — 2026-06-28 push `414a7cd` 时 pre-push hook 实测);由 orchestrator 维护;下一轮候选待用户明确启动_
+_最后更新:2026-06-28 R5-D 真实 LLM eval 闭环 + 文档收尾 全部完成(6 phase 全部落地);R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`);R5-B Phase 2A 已通过 PR #6 合并到 main(merge `09a2704`);R5-C Phase 1-5 全部落地 baseline 530→544 pytest 全绿(R5-C 收尾时快照,R5-D Phase 0 起活跃基线修正为 547 — 2026-06-28 push `414a7cd` 时 pre-push hook 实测,R5-D Phase 4 commit `2052b1f` 落地后再修正为 596 — 2026-06-28 `D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测);R5-D 6 phase 顺序 commit `8a4a799` / `522d911` / `89717a9` / `1fef8dc` / `8838e7a` / `2052b1f` + Phase 5 文档收尾 `docs(round5-d): document live eval workflow`;由 orchestrator 维护;下一轮候选待用户明确启动(R5-E embedding RAG 升级 / R5-F 默认开启 Agent workflow 面板 / R5-G 前端 dashboard 任选)_

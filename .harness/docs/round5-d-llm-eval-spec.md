@@ -2,11 +2,12 @@
 
 > 适用项目: 简历帮
 > 日期: 2026-06-28
-> 状态: 📝 **待实施 spec**
-> 当前仓库基线: GitHub `main` = `414a7cd docs: update README test baseline`
-> 当前能力基线: R5-C Phase 5 已完成;README 已精简;后端 pre-push 实测 **547 passed + 0 skipped**;前端 `vue-tsc` / `npm run build` 通过
+> 状态: ✅ **完成**(5 phase 全部落地)
+> 当前仓库基线: GitHub `main` = `2052b1f feat(round5-d): add eval latency and fallback metrics`
+> 当前能力基线: R5-D Phase 0-4 全部 commit 落地;活跃文档基线 **596 passed + 0 skipped**(`D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测,2026-06-28);前端 `vue-tsc` / `npm run build` 通过
 > 前置能力: R5-A Agent workflow + R5-B 工具契约/权限 + R5-C eval/request_id/replay/前端诊断面板已就位
 > 目标: 在不泄漏个人数据、不破坏默认离线路径的前提下,让 `scripts/evaluate_agent_workflow.py` 能区分并评估“无 key fallback”和“真实 LLM 调用”两种模式,产出可复现的 schema pass / fallback / latency / rewrite impact 指标。
+> 收尾文档(本 phase 5): 见文末 **§12. 手动 live eval 安全跑法** 段。
 
 ---
 
@@ -191,7 +192,7 @@ def get_llm_eval_config() -> dict:
 
 ## 5. 实施范围
 
-### Phase 0 — 文档基线修正
+### Phase 0 — 文档基线修正 ✅ 已落地(commit `522d911`)
 
 修改:
 
@@ -215,7 +216,7 @@ Select-String -LiteralPath AGENTS.md,.harness/docs/ROADMAP.md -Pattern "544|547"
 - 当前活跃文档不再把最新基线写成 544。
 - 历史报告仍保留原样。
 
-### Phase 1 — eval 模式参数
+### Phase 1 — eval 模式参数 ✅ 已落地(commit `89717a9`,547 → 557)
 
 修改:
 
@@ -240,7 +241,7 @@ Select-String -LiteralPath AGENTS.md,.harness/docs/ROADMAP.md -Pattern "544|547"
 - 无 key 环境下默认命令仍成功。
 - 无 key 环境下 `--mode live` 返回非 0,错误信息不含 key。
 
-### Phase 2 — live/offline 报告元信息
+### Phase 2 — live/offline 报告元信息 ✅ 已落地(commit `1fef8dc`,557 → 568)
 
 修改:
 
@@ -265,7 +266,7 @@ Select-String -LiteralPath AGENTS.md,.harness/docs/ROADMAP.md -Pattern "544|547"
 - 报告顶部能一眼看出本次是 offline 还是 live。
 - 报告不包含 `LLM_API_KEY` 值。
 
-### Phase 3 — rewrite impact 指标
+### Phase 3 — rewrite impact 指标 ✅ 已落地(commit `8838e7a`,568 → 584)
 
 修改:
 
@@ -297,7 +298,7 @@ Select-String -LiteralPath AGENTS.md,.harness/docs/ROADMAP.md -Pattern "544|547"
 - 报告只出现计数和比例,不出现 bullet 原文。
 - offline 路径仍可运行并产生 0 或稳定的 changed 指标。
 
-### Phase 4 — latency 与 fallback 聚合增强
+### Phase 4 — latency 与 fallback 聚合增强 ✅ 已落地(commit `2052b1f`,584 → 596)
 
 修改:
 
@@ -323,7 +324,7 @@ Select-String -LiteralPath AGENTS.md,.harness/docs/ROADMAP.md -Pattern "544|547"
 - markdown 总览表含 p95 latency。
 - fallback taxonomy 摘要与每组聚合一致。
 
-### Phase 5 — 手动 live eval 安全跑法
+### Phase 5 — 手动 live eval 安全跑法 ⏳ 进行中(本 round commit `docs(round5-d): document live eval workflow`)
 
 修改:
 
@@ -445,26 +446,29 @@ D:\python3.11\python.exe scripts/evaluate_agent_workflow.py --mode live --output
 
 ## 9. 验收清单
 
-- [ ] `scripts/evaluate_agent_workflow.py --mode offline` 无 key 可运行。
-- [ ] `scripts/evaluate_agent_workflow.py --mode live` 无 key 失败且错误信息安全。
-- [ ] `--output` 可写到指定 markdown。
-- [ ] 报告顶部包含 llm mode/model/base_url_host,不含 key。
-- [ ] 报告包含 schema pass rate、fallback rate、fallback category breakdown、avg/p95/max latency。
-- [ ] 报告包含 rewrite impact 计数,不含 bullet 原文。
-- [ ] `backend/tests/test_agent_eval.py` 覆盖新增逻辑。
-- [ ] 后端全量 pytest 通过。
-- [ ] 如改 README/前端类型,前端 `vue-tsc` 和 `npm run build` 通过。
-- [ ] AGENTS / ROADMAP 最新活跃基线更新为 547。
+- [x] `scripts/evaluate_agent_workflow.py --mode offline` 无 key 可运行。
+- [x] `scripts/evaluate_agent_workflow.py --mode live` 无 key 失败且错误信息安全。
+- [x] `--output` 可写到指定 markdown。
+- [x] 报告顶部包含 llm mode/model/base_url_host,不含 key。
+- [x] 报告包含 schema pass rate、fallback rate、fallback category breakdown、avg/p95/max latency。
+- [x] 报告包含 rewrite impact 计数,不含 bullet 原文。
+- [x] `backend/tests/test_agent_eval.py` 覆盖新增逻辑(Phase 1+2+3+4 共 +49 case)。
+- [x] 后端全量 pytest 通过(活跃基线 **596 passed + 0 skipped**)。
+- [x] 如改 README/前端类型,前端 `vue-tsc` 和 `npm run build` 通过。
+- [x] AGENTS / ROADMAP 最新活跃基线更新为 547(R5-D Phase 0 已落地);Phase 5 文档收尾阶段活跃基线已为 596。
+- [x] live 模式不进 pre-push;Phase 5 文档明文记录 PowerShell 安全跑法。
 
 ---
 
-## 10. 推荐提交拆分
+## 10. 推荐提交拆分(实际落 commit)
 
-1. `docs(round5-d): spec true llm eval loop`
-2. `docs(round5-d): sync active test baseline to 547`
-3. `feat(round5-d): add eval run modes and llm metadata`
-4. `feat(round5-d): add rewrite impact and latency metrics`
-5. `docs(round5-d): report live eval usage and closeout`
+1. `8a4a799 docs(round5-d): add llm eval spec`
+2. `522d911 docs(round5-d): sync active test baseline to 547`
+3. `89717a9 feat(round5-d): add eval run modes`
+4. `1fef8dc feat(round5-d): add llm eval metadata`
+5. `8838e7a feat(round5-d): add rewrite impact metrics`
+6. `2052b1f feat(round5-d): add eval latency and fallback metrics`
+7. `docs(round5-d): document live eval workflow` ← 本 phase(Phase 5 收尾)
 
 ---
 
@@ -473,3 +477,67 @@ D:\python3.11\python.exe scripts/evaluate_agent_workflow.py --mode live --output
 - R5-E:把 `core/evidence.py` lexical retrieval 升级为 embedding 检索。
 - R5-F:当 live eval 证明 Agent workflow 有收益后,再考虑默认推荐打开 Agent workflow 面板。
 - R5-G:把 eval report 转成前端可读 dashboard,但仍默认本地单用户。
+
+---
+
+## 12. 手动 live eval 安全跑法(Phase 5 收尾,2026-06-28)
+
+R5-D 的真实 LLM 评测**只做手动跑**,**不进入默认启动流程**。下面这套命令专门给需要量化"有 key 时 Agent workflow 到底带来多少收益"的用户使用。
+
+### 12.1 前置条件
+
+- 本地已有真实 LLM API key(`LLM_API_KEY`,可走 OpenAI / 兼容端点 / 本地 ollama 等)
+- 本地 `materials.json` 可用(脱敏版或 `_private_backup.json` 拷贝版均可)
+- 不需要任何额外依赖,纯 stdlib 调用
+
+### 12.2 PowerShell 跑法
+
+```powershell
+$env:LLM_ENABLED="true"
+$env:LLM_API_KEY="..."
+$env:LLM_MODEL="gpt-4o-mini"
+D:\python3.11\python.exe scripts/evaluate_agent_workflow.py --mode live --output AI岗位JD库_agent_eval报告_live.md
+```
+
+要点:
+
+- `--mode live` 强制要求 `is_llm_enabled()` 为 True;否则脚本立即返回非 0,错误信息**绝不**包含 key 值或 env var 名(R5-D Phase 1 `TestEvalModeNoKeyLeak` 锁死)
+- `--output` 写到独立文件,避免覆盖 `AI岗位JD库_agent_eval报告.md`(offline 默认报告)
+- 不传 `--mode` 时默认 `--mode offline`,保持默认启动流程字节级一致
+- 不传 `--output` 时走默认路径
+
+可选 `--mode auto`:有 key 时 live,无 key 时 offline。**只供手动探索,不进任何 CI**。
+
+### 12.3 安全提示(必须遵守)
+
+- **不提交 `.env`**:`backend/.env` / 仓库根 `.env` / 任何含 `LLM_API_KEY` 的文件都已在 `.gitignore` 拒绝,提交前 `git status` 必须干净
+- **不提交含真实敏感信息的 live 报告**:报告路径如果可能含 API key / 真实 JD 原文 / 真实 bullet 原文 / 真实手机号邮箱,**绝对不入库**
+- **live 报告判定标准**(入库安全 iff 全部满足):
+  1. 环境只用公开脱敏 `backend/data/materials.json`(未替换为 `_private_backup.json`)
+  2. JD 库只用 `AI岗位JD库_v4_intern.json`(公开脱敏版)
+  3. eval set 来自 `scripts/evaluate_agent_workflow.py` 内置 12 JD,**不混入**真实投递过的 JD 原文
+  4. `LLM_BASE_URL` 不含内部路径或敏感 query
+- **live 模式不进 pre-push**:`scripts/verify.ps1` / pre-push hook 永远不会自动触发 live,只跑默认 offline 路径
+- **报告里出现的字段固定**:`llm_mode` / `llm_enabled` / `llm_model` / `llm_base_url_host` / `schema_pass_rate` / `fallback_rate` / `fallback_category_breakdown` / `avg/p95/max_latency_ms` / `rewrite_changed_rate`;**绝不出现** `LLM_API_KEY` / `Authorization` / 完整 prompt / 完整 response / 完整 JD / 完整 bullet / 真实手机号邮箱
+
+### 12.4 验收清单(用户手动核对)
+
+跑完 live eval 后,手动确认:
+
+- [ ] 报告顶部 `llm_mode=live_llm`(`resolved_mode: live`,`requested_mode: live`)
+- [ ] `llm_model` 跟环境变量 `LLM_MODEL` 一致
+- [ ] `llm_base_url_host` 是 host 部分,不含 path / query / secret
+- [ ] `grep -i "LLM_API_KEY\|Authorization\|sk-" AI岗位JD库_agent_eval报告_live.md` 无任何匹配
+- [ ] `fallback_rate` 比 offline 低(LLM 真在线时显著低;offline 必为 1.0 因为 LLM 永远 disable)
+- [ ] `rewrite_changed_rate` 在 AW=True 的 combo 中 > 0(LLM 真做了改写)
+- [ ] `avg/p95/max_latency_ms` 量级合理(网络往返正常应该在 1-30s 之间)
+
+### 12.5 不实施 GUI 面板(用户偏好)
+
+按 2026-06-23 用户偏好,GUI 实施任务默认暂停。live 报告 = markdown 文件,前端不动。如果后续要做 dashboard / 可视化面板,挂 `R5-G` P2 候补,等用户明确启动再开。
+
+### 12.6 跟既有脚本关系
+
+- `match_score` / `score_thresholds.py` / `match_golden_targets.py` / `replay_agent_trace.py`:R5-D 全程**零修改**(spec §6.3 / R5-D §8 隐私边界)
+- `evaluate_agent_workflow.py`:R5-D Phase 1+2+3+4 修改的唯一定脚本;`enable_agent_workflow=False` 老路径字节级一致(584 老测试零回退 + 12 新增 = 596)
+- `core/llm_rewriter.py` / `core/agent_workflow.py`:R5-D 零修改,沿用 R5-A Phase 3 evidence + R5-C Phase 2 external_resume + R5-C Phase 3 bullet_evaluation 既有路径

@@ -64,6 +64,12 @@ class PreviewRequest(BaseModel):
     enable_agent_workflow: bool = False
     # R5-A closeout: 可选外部简历诊断(默认 False = P2 占位未消费,字节级一致)
     enable_external_resume: bool = False
+    # R5-C Phase 2: 外部简历文本(默认 None)
+    #   - 老路径(enable_agent_workflow=False)忽略此字段, 字节级一致
+    #   - workflow 路径: 非空时任务图加 parse_external_resume + compare_resume_jd
+    #     返 external_resume_perspective 字段
+    #   - 隐私: API 不落盘 external resume 文本
+    external_resume_text: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -82,6 +88,10 @@ class GenerateRequest(BaseModel):
     enable_agent_workflow: bool = False
     # R5-A closeout: 可选外部简历诊断(默认 False = P2 占位未消费,字节级一致)
     enable_external_resume: bool = False
+    # R5-C Phase 2: 外部简历文本(默认 None)
+    #   - 不强制消费(generate 链路主要走 render_docx, 外部简历仅作诊断)
+    #   - 字段保留为了前端统一传参, 老路径完全忽略
+    external_resume_text: str | None = None
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -157,6 +167,7 @@ def preview(req: PreviewRequest):
             session_id=req.session_id,  # R4-M
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
             enable_external_resume=req.enable_external_resume,  # R5-A closeout
+            external_resume_text=req.external_resume_text,  # R5-C Phase 2
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -183,6 +194,7 @@ def generate(req: GenerateRequest):
             session_id=req.session_id,  # R4-M
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
             enable_external_resume=req.enable_external_resume,  # R5-A closeout
+            external_resume_text=req.external_resume_text,  # R5-C Phase 2
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

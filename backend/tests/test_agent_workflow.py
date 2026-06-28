@@ -91,8 +91,12 @@ class TestBuildTaskGraph:
         assert names.index("match_score") < names.index("retrieve_evidence")
         assert names.index("retrieve_evidence") < names.index("retrieve_materials")
 
-    def test_with_function_calling_adds_evaluate_bullet(self):
-        """FC=True + has_jd → +1 步 evaluate_bullet_jd_match"""
+    def test_with_function_calling_and_jd_adds_evaluate_bullet(self):
+        """FC=True + has_jd=True → +1 步 evaluate_bullet_jd_match (R5-C Phase 3 仍兼容旧路径)
+
+        R5-C Phase 3: 触发条件已改为 has_jd (不再依赖 FC, spec §4.2)。
+        此测试保留以锁住"FC=True 路径仍工作"的兼容性,实际触发由 has_jd 决定。
+        """
         steps = build_task_graph(
             has_jd=True,
             enable_function_calling=True,
@@ -103,8 +107,27 @@ class TestBuildTaskGraph:
         # evaluate 必须在 rewrite 之前
         assert names.index("evaluate_bullet_jd_match") < names.index("rewrite_highlights")
 
+    def test_with_jd_no_fc_still_adds_evaluate_bullet(self):
+        """R5-C Phase 3 新语义: has_jd=True + FC=False 仍应含 evaluate_bullet_jd_match
+
+        Phase 3 把触发条件从 (FC=True AND has_jd) 改为 (has_jd only)。
+        此测试锁住新逻辑 — 即使不开 Function Calling,只要有 JD 就进 evaluate step。
+        """
+        steps = build_task_graph(
+            has_jd=True,
+            enable_function_calling=False,  # 关键: FC 关闭
+            has_external_resume=False,
+        )
+        names = [s.name for s in steps]
+        assert "evaluate_bullet_jd_match" in names, (
+            "R5-C Phase 3: has_jd=True 即应触发 evaluate step (不再依赖 FC)"
+        )
+        assert names.index("evaluate_bullet_jd_match") < names.index("rewrite_highlights")
+
     def test_with_external_resume_adds_parse_step(self):
-        """has_external_resume=True → +1 步(本轮 tool=None 占位)"""
+        """has_external_resume=True → +1 步 (R5-C Phase 2: tool=parse_external_resume)
+        注: 无 JD 时 compare_resume_jd 不加入(只 parse_external_resume)
+        """
         steps = build_task_graph(
             has_jd=False,
             enable_function_calling=False,
@@ -112,9 +135,11 @@ class TestBuildTaskGraph:
         )
         names = [s.name for s in steps]
         assert "parse_external_resume" in names
-        # 本轮 tool=None(P2 接入 core.resume_parser)
+        # R5-C Phase 2: parse_external_resume 已是真工具(不再是 P2 占位)
         ext_step = next(s for s in steps if s.name == "parse_external_resume")
-        assert ext_step.tool is None
+        assert ext_step.tool == "parse_external_resume"
+        assert ext_step.required is False
+        assert ext_step.fallback == "skip"
 
     def test_task_graph_is_deterministic(self):
         """同样输入跑两次 → 字节级一致 step list"""
@@ -838,7 +863,8 @@ class TestEnableExternalResumePassthrough:
         assert "parse_external_resume" not in names
 
     def test_true_adds_external_resume_step(self):
-        """enable_external_resume=True → 任务图含 parse_external_resume step"""
+        """enable_external_resume=True → 任务图含 parse_external_resume step
+        (R5-C Phase 2: tool=parse_external_resume, 不仅是 P2 占位)"""
         from core.agent_workflow import build_task_graph
         steps = build_task_graph(
             has_jd=False,
@@ -847,9 +873,9 @@ class TestEnableExternalResumePassthrough:
         )
         names = [s.name for s in steps]
         assert "parse_external_resume" in names
-        # 该 step 是 P2 占位(tool=None, required=False, fallback="skip")
+        # R5-C Phase 2: parse_external_resume 是真工具
         ext_step = next(s for s in steps if s.name == "parse_external_resume")
-        assert ext_step.tool is None
+        assert ext_step.tool == "parse_external_resume"
         assert ext_step.required is False
         assert ext_step.fallback == "skip"
 

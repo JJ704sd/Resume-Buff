@@ -44,12 +44,44 @@ R5-B Phase 2A 增量(round5-b-agent-capability-spec.md §3.1-3.3):
       * allow_jd_text / allow_materials / allow_external_resume / max_pii_risk
   - 任务图每个工具步骤的 context 由 _build_step_context 派生:
       * JD 路径: allow_jd_text=True, allow_materials=True
-      * 外部简历步骤: allow_external_resume=True
+      * 外部简历步骤: allow_external_resume=True, max_pii_risk="high"
   - agent_summary.tools_used 只列 affects_preview=True 的工具
     (语义升级:从"跑过的工具"升级为"实际影响 preview 的工具")
   - 老工具(parse_jd / match_score / evaluate_bullet_jd_match / rewrite_highlights)
     当前是"展示型"调用(output 未被 build_sections 实际消费)→ 不列 tools_used
   - retrieve_evidence 是当前唯一真正影响 preview 的工具 → 列 tools_used
+
+R5-C Phase 2 增量(round5-c-agent-capability-spec.md §3):
+  - external_resume_text 进入 Agent workflow:
+      * has_external_resume 由 external_resume_text 非空判定(而非仅看 enable_external_resume bool)
+      * 任务图 has_external_resume=True 时插入 2 步:
+          parse_external_resume → compare_resume_jd (都在 retrieve_materials 之后,
+          rewrite_highlights 之前;P2 不影响 preview)
+      * 注册两个工具(parse_external_resume / compare_resume_jd):
+          - pii_risk="high", permission="read_external_resume" /
+            "read_jd_and_external_resume", affects_preview=False (仅诊断)
+          - 输出严格不含原文(parse_external_resume 只返 profile 统计 + 命中关键词;
+            compare_resume_jd 只返 have/need/materials_can_cover/resume_only + counts + suggestions)
+      * workflow preview 返回 external_resume_perspective 字段 (与 compare_resume_jd 输出对齐)
+      * JSONL trace 只写 input_size/output_size, 不写原文
+      * agent_summary 不含原文 (跟既有隐私一致)
+
+R5-C Phase 3 增量(round5-c-agent-capability-spec.md §4):
+  - per-bullet 真实评估数据流: 从 representative 单条升级为确定性批量
+      * top projects 默认 3 个: 来自 ROLE_CONFIG["preferred_project_ids"],
+        有 jd_context 时用 rank_projects 按命中数重排(spec §4.2)
+      * each top bullets 默认 3 条: 来自 _pick_highlights(proj, target_role) 前 3 条
+      * 输出 bullet_evaluations 摘要(spec §4.3):
+        project_id / bullet_index / matched_keywords / missing_keywords /
+        matched_count / missing_count / suggestion
+        — 不含 bullet 原文
+      * 任务图 evaluate_bullet_jd_match step 触发条件: has_jd (无 JD 时跳过;不再依赖 FC)
+      * 工作流 evaluate step 走批量 helper _evaluate_top_bullets,不走单 representative
+      * workflow preview 返回 bullet_evaluations 字段(老路径不含,字节级一致)
+      * evaluate_bullet_jd_match 仍保持 affects_preview=False (spec §4.4):
+        bullet_evaluations 先作为诊断输出,不注入 build_sections → rewrite_highlights
+        — 后续明确用于排序 / 改写时再升 affects_preview=True
+      * 隐私边界: 工具 trace input_size/output_size 只算字节数,不存 bullet / JD 原文
 
 公开 API:
   - build_task_graph(...)           — 纯函数,根据请求字段返回 step 列表
@@ -231,28 +263,46 @@ def build_task_graph(
     ))
     step_idx += 1
 
-    # 6) external resume (P2 占位)
+    # 6) external resume (R5-C Phase 2: 接入 parse_external_resume + compare_resume_jd)
+    #    顺序: parse_external_resume → compare_resume_jd
+    #    都在 retrieve_materials 之后, rewrite_highlights 之前 (spec §3.3)
     if has_external_resume:
         steps.append(AgentStep(
             step=step_idx,
             name="parse_external_resume",
-            tool=None,  # P2: 接入 core.resume_parser
-            input_ref="external_resume_bytes",
-            output_ref="external_resume_text",
+            tool="parse_external_resume",
+            input_ref="external_resume_text",
+            output_ref="external_resume_profile",
             required=False,
-            fallback="skip",
+            fallback="skip",  # 外部简历解析失败 → 跳过, 不阻断主流程
         ))
         step_idx += 1
 
-    # 7) evaluate_bullet_jd_match (FC 开启 + 有 JD)
-    #    MVP: 单步 representative(完整 per-bullet 留 P2)
-    if enable_function_calling and has_jd:
+        # compare_resume_jd 需要 JD (compare 必然涉及 JD)
+        # 无 JD 时跳过 compare 步骤, 单独跑 parse_external_resume 仍 OK
+        if has_jd:
+            steps.append(AgentStep(
+                step=step_idx,
+                name="compare_resume_jd",
+                tool="compare_resume_jd",
+                input_ref="external_resume_text+jd",
+                output_ref="external_resume_perspective",
+                required=False,
+                fallback="skip",  # compare 失败 → 跳过, 不阻断主流程
+            ))
+            step_idx += 1
+
+    # 7) evaluate_bullet_jd_match (R5-C Phase 3: 仅 has_jd 触发, 不再依赖 FC)
+    #    Phase 1 MVP 简化为 representative;Phase 3 升级为批量 top bullets 评估
+    #    (走 _evaluate_top_bullets helper, 默认 3 projects × 3 bullets = 最多 9 条)
+    #    无 JD → 不进任务图 (spec §4.2)
+    if has_jd:
         steps.append(AgentStep(
             step=step_idx,
             name="evaluate_bullet_jd_match",
             tool="evaluate_bullet_jd_match",
-            input_ref="bullet_0",
-            output_ref="match_report",
+            input_ref="top_bullets",  # R5-C Phase 3: 改为批量 bullets
+            output_ref="bullet_evaluations",  # R5-C Phase 3: 改 output_ref 名
             required=False,
             fallback="use_default",
         ))
@@ -319,10 +369,11 @@ def run_agent_workflow(
     output_dir: Optional[Path] = None,
     evidence: Optional[list] = None,  # R5-A Phase 3: 显式传入 evidence 时跳过 retrieve_evidence 工具
     enable_external_resume: bool = False,  # R5-A closeout: 外部简历透传,默认 False 字节级一致
+    external_resume_text: Optional[str] = None,  # R5-C Phase 2: 外部简历文本
 ) -> Any:
     """
-    R5-A Phase 1 + Phase 2 + Phase 3: 执行 Agent workflow,失败 fallback 到旧路径,每个 step
-    写一条结构化 JSONL trace 到 backend/logs/agent_trace.jsonl。
+    R5-A Phase 1 + Phase 2 + Phase 3 + R5-C Phase 2: 执行 Agent workflow,
+    失败 fallback 到旧路径, 每个 step 写一条结构化 JSONL trace 到 backend/logs/agent_trace.jsonl。
 
     Returns:
         - output_dir is None: dict(preview, 跟 generator.preview_resume() 字节级一致)
@@ -344,14 +395,32 @@ def run_agent_workflow(
       - trace evidence step: input_size = jd_keywords 总字符, output_size = evidence 总字符
       - trace 不存 evidence text / jd_text 原文(只存长度)
 
+    R5-C Phase 2 增量(spec §3):
+      - external_resume_text 非空 → 任务图加 2 步:
+          parse_external_resume → compare_resume_jd (有 JD 时)
+      - has_external_resume 真实判定: external_resume_text 非空 (而非仅 enable_external_resume bool)
+      - enable_external_resume 仅保留向后兼容 (老 bool 入口)
+      - compare_resume_jd 输出收集到 external_resume_perspective 字段,
+        preview 路径返该字段;generate 路径不返 (跟老路径字节级一致)
+      - parse_external_resume 输出不入 preview (只给 compare_resume_jd 喂数据用,
+        但本轮 compare 不依赖 parse_external_resume 输出, 直接传 external_resume_text)
+      - 隐私: trace 不写 external resume 原文;ToolResult 不存原文;
+        external_resume_perspective schema 是压缩 4 维摘要 + counts + suggestions
+
     关键约束:
       - 失败时返 generator 旧 API 的输出(走 build_sections + render_docx)
       - 永抛异常(spec §6.3)— 任何 tool 错误都吞掉走 fallback
       - AgentStep / ToolResult 不存 args / input 原文
     """
     has_jd = bool(jd_text and jd_text.strip())
-    # R5-A closeout: enable_external_resume 透传到任务图(默认 False → 字节级一致,P2 占位未消费)
-    has_external_resume = bool(enable_external_resume)
+    # R5-C Phase 2: has_external_resume 以 external_resume_text 非空为真实依据
+    # enable_external_resume bool 保留向后兼容(老 API),但本轮新逻辑以文本为准
+    has_external_resume_text = bool(
+        external_resume_text and external_resume_text.strip()
+    )
+    # 兼容 enable_external_resume=True 但 external_resume_text=None 的旧用法:
+    # 仍走外部简历路径(task_graph 加 step), 但工具调用会因空文本走 _empty_compare_schema
+    has_external_resume = has_external_resume_text or bool(enable_external_resume)
 
     # R5-A Phase 2: 每次 workflow 生成唯一 request_id(spec §7.1 JSONL schema)
     request_id = generate_request_id()
@@ -423,6 +492,17 @@ def run_agent_workflow(
     # R5-A Phase 3: evidence list 收集(供 build_sections → rewrite_highlights 注入 prompt)
     evidence_collected: Optional[list] = evidence  # 默认 caller 传入,否则下面 retrieve_evidence 填
 
+    # R5-C Phase 2: external_resume_perspective 收集 (compare_resume_jd 输出)
+    # compare_resume_jd 输出 schema: {have_keywords, need_keywords, materials_can_cover,
+    #   resume_only_keywords, suggestions, counts}
+    external_resume_perspective: Optional[dict] = None
+
+    # R5-C Phase 3: bullet_evaluations 收集 (per-bullet 真实评估数据流, spec §4)
+    # schema: list[dict] 每条含 project_id / bullet_index / matched_keywords /
+    #   missing_keywords / matched_count / missing_count / suggestion
+    # 无 JD / 无 bullets / 批量失败 → 保持 [] (老路径不含此字段,字节级一致)
+    bullet_evaluations: list[dict] = []
+
     # Phase 1: 简化执行 — 工具步骤只记录结果,不实际改变 build_sections 输入
     # (避免改写 283 老测试字节级 hash baseline)
     # P2/R5-B 可考虑把 jd_focus / score_report 注入 build_sections
@@ -438,6 +518,78 @@ def run_agent_workflow(
                         input_size=0, output_size=0)
             continue
 
+        # R5-C Phase 3: evaluate_bullet_jd_match 走批量 helper
+        # spec §4: top 3 projects × top 3 bullets, 产出 bullet_evaluations 摘要
+        # 不走单 representative bullet (Phase 1 MVP 行为已弃用)
+        # 不调 execute_agent_tool (批量内部纯函数聚合, 单 step 1 条 trace)
+        # 工具 callable 仍保留供 FC 路径 LLM 主动调用
+        if step.tool == "evaluate_bullet_jd_match":
+            import time as _t_eval
+            _t_eval_start = _t_eval.time()
+            try:
+                # jd_focus 由 jd_context 构造;无 jd_context 走空 schema (批量应已因 has_jd=True 跳过)
+                jd_focus = _make_jd_focus(jd_context)
+                bullet_evaluations = _evaluate_top_bullets(
+                    materials=materials,
+                    target_role=target_role,
+                    jd_focus=jd_focus,
+                    jd_context=jd_context,
+                    top_projects=3,
+                    bullets_per_project=3,
+                )
+                _eval_latency = int((_t_eval.time() - _t_eval_start) * 1000)
+                # 写 1 条 trace: status=success, input_size/output_size 反映批量总和
+                _input_size = _estimate_input_size(
+                    step.tool,
+                    {
+                        "jd_focus": jd_focus,
+                        "jd_context_keywords": (jd_context or {}).get("raw_keywords") or [],
+                        "top_projects": 3,
+                        "bullets_per_project": 3,
+                    },
+                )
+                _output_size = _estimate_output_size(
+                    {"bullet_evaluations": bullet_evaluations}
+                )
+                _emit_trace(
+                    step,
+                    status="success",
+                    error_type=None,
+                    latency_ms=_eval_latency,
+                    input_size=_input_size,
+                    output_size=_output_size,
+                )
+                # 占位 ToolResult (供 audit,不进 output schema)
+                tool_results[step.name] = ToolResult(
+                    tool=step.tool,
+                    status="success",
+                    output={"evaluations": bullet_evaluations},
+                    error_type=None,
+                    latency_ms=_eval_latency,
+                )
+            except Exception as e:
+                # 批量失败 — 非关键 step,不阻断主流程
+                _eval_latency = int((_t_eval.time() - _t_eval_start) * 1000)
+                _emit_trace(
+                    step,
+                    status="error",
+                    error_type=type(e).__name__,
+                    latency_ms=_eval_latency,
+                    input_size=0,
+                    output_size=0,
+                    # error_msg 不含 args 原文(隐私边界 spec §6.4)
+                )
+                tool_results[step.name] = ToolResult(
+                    tool=step.tool,
+                    status="error",
+                    output=None,
+                    error_type=type(e).__name__,
+                    latency_ms=_eval_latency,
+                    error_msg=type(e).__name__,  # 不含 bullet / jd_focus 原文
+                )
+            # 跳过 execute_agent_tool 调用,继续下一个 step
+            continue
+
         # 准备 args — 根据工具名(只传必要字段,Phase 1 简化)
         tool_args = _build_tool_args(
             tool_name=step.tool,
@@ -445,6 +597,7 @@ def run_agent_workflow(
             jd_text=jd_text,
             jd_context=jd_context,
             materials=materials,
+            external_resume_text=external_resume_text,  # R5-C Phase 2
         )
 
         # R5-B Phase 2A: 构造 step context (对齐 spec §3.2)
@@ -495,6 +648,12 @@ def run_agent_workflow(
         if step.tool == "retrieve_evidence" and tr.status == "success" and not evidence_explicit:
             # output 是 dict list(由 evidence_to_dict_list wrapper 序列化)
             evidence_collected = tr.output  # list[dict] — 透传给 build_sections
+
+        # R5-C Phase 2: 收集 compare_resume_jd 输出到 external_resume_perspective
+        # 仅当工具 success 时收集 (失败保持 None, 跟隐私边界一致)
+        if step.tool == "compare_resume_jd" and tr.status == "success":
+            # output 是 dict (compare_resume_jd 直接返 dict, 无 wrapper)
+            external_resume_perspective = tr.output
 
         if tr.status == "error":
             # 工具失败 — 关键步骤失败 → 降级;非关键 → 记录后继续
@@ -568,6 +727,19 @@ def run_agent_workflow(
                 "fallback_reason": fallback_reason,
                 "latency_ms": total_latency_ms,
             },
+            # R5-C Phase 2: external_resume_perspective (spec §3.2 / §3.4 隐私边界)
+            # 仅 workflow preview 路径有;老路径 (enable_agent_workflow=False) 不含此字段 (字节级一致)
+            # compare_resume_jd 未跑 / 失败时为 None (前端按 None 不渲染)
+            # schema 与 compare_resume_jd 工具输出对齐 (have/need/materials_can_cover/resume_only + counts + suggestions)
+            "external_resume_perspective": external_resume_perspective,
+            # R5-C Phase 3: bullet_evaluations (spec §4.3)
+            # per-bullet 真实评估摘要, 字段:
+            #   project_id / bullet_index / matched_keywords / missing_keywords /
+            #   matched_count / missing_count / suggestion
+            # 不含 bullet 原文 (spec §4.3 隐私边界)
+            # 无 JD / 批量失败 / 项目无 bullets → [] (前端按 [] 不渲染)
+            # 仅 workflow preview 路径有;老路径 (enable_agent_workflow=False) 不含此字段 (字节级一致)
+            "bullet_evaluations": bullet_evaluations,
         }
         return preview
     else:
@@ -588,11 +760,13 @@ def _build_tool_args(
     jd_text: Optional[str],
     jd_context: Optional[dict],
     materials: dict,
+    external_resume_text: Optional[str] = None,  # R5-C Phase 2
 ) -> dict:
     """
-    R5-A Phase 1 + Phase 3: 为每个工具构造最小可用 args
+    R5-A Phase 1 + Phase 3 + R5-C Phase 2: 为每个工具构造最小可用 args
     (Phase 1 简化:工具主要用来"展示 workflow 路径",而非改变主流程)
     Phase 3: retrieve_evidence 加进分支, 用 jd_context["raw_keywords"] 当 jd_keywords 输入
+    Phase 2: parse_external_resume / compare_resume_jd 加进分支, 直接传 external_resume_text
     """
     if tool_name == "parse_jd":
         return {"text": jd_text or ""}
@@ -629,6 +803,16 @@ def _build_tool_args(
             "enable_function_calling": False,  # tool 内部不再开 FC,避免嵌套 loop
             "session_id": None,
         }
+    # R5-C Phase 2: 外部简历工具 args
+    if tool_name == "parse_external_resume":
+        return {"external_resume_text": external_resume_text or ""}
+    if tool_name == "compare_resume_jd":
+        return {
+            "external_resume_text": external_resume_text or "",
+            "jd_text": jd_text or "",
+            "target_role": target_role,
+            "materials": materials,
+        }
     return {}
 
 
@@ -645,7 +829,9 @@ def _build_step_context(
       - allow_jd_text         = has_jd (JD 路径才允许 JD 文本访问)
       - allow_materials       = True     (build_sections 默认需要 materials)
       - allow_external_resume = has_external_resume (外部简历步骤才开)
-      - max_pii_risk          = "medium" (与现有 match_score / retrieve_evidence 一致)
+      - max_pii_risk          = "medium" (默认);
+                                  has_external_resume=True 时升 "high"
+                                  让 pii_risk=high 的外部简历工具可执行
 
     Args:
         tool_name:           工具名
@@ -660,7 +846,9 @@ def _build_step_context(
         "allow_jd_text": has_jd,
         "allow_materials": True,
         "allow_external_resume": has_external_resume,
-        "max_pii_risk": "medium",
+        # R5-C Phase 2: 外部简历工具 pii_risk=high, 当 has_external_resume=True
+        # 时 workflow 整体升 max_pii_risk=high, 避免外部简历工具被 pii_risk 检查拒
+        "max_pii_risk": "high" if has_external_resume else "medium",
     }
 
 
@@ -681,6 +869,123 @@ def _pick_representative_bullet(materials: dict, target_role: str) -> str:
         if bullets:
             return bullets[0]
     return ""
+
+
+def _evaluate_top_bullets(
+    materials: dict,
+    target_role: str,
+    jd_focus: Optional[dict],
+    jd_context: Optional[dict] = None,
+    *,
+    top_projects: int = 3,
+    bullets_per_project: int = 3,
+) -> list[dict]:
+    """
+    R5-C Phase 3: per-bullet 真实评估数据流 (round5-c-agent-capability-spec.md §4).
+
+    从 build_sections 的候选项目中选 top projects × top bullets,
+    逐条跑 evaluate_bullet_jd_match, 聚合返回压缩摘要 list[dict].
+
+    Args:
+        materials:           素材库 dict (load_materials() 输出)
+        target_role:         岗位 id (用于 _pick_highlights 选 highlights[target_role])
+        jd_focus:            evaluate_bullet_jd_match 的 jd_focus dict
+                             (match_score / generator._build_jd_focus 输出格式)
+        jd_context:          parse_jd 输出 (供 rank_projects 按命中数重排,
+                             None / 空时保持 preferred_project_ids 原顺序)
+        top_projects:        候选项目上限 (spec §4.2 默认 3)
+        bullets_per_project: 每项目候选 bullet 上限 (spec §4.2 默认 3)
+
+    Returns:
+        list[dict] 每条 dict 含 7 字段 (spec §4.3):
+            - project_id       (str)   项目 id
+            - bullet_index     (int)   该项目 highlights 列表内索引 (0..N-1)
+            - matched_keywords (list[str])
+            - missing_keywords (list[str])
+            - matched_count    (int)   == len(matched_keywords)
+            - missing_count    (int)   == len(missing_keywords)
+            - suggestion       (str)   1 句人话指引 (来自 evaluate_bullet_jd_match)
+
+        不含 bullet 原文 (spec §4.3 隐私边界).
+        无 JD / 无 bullets / helper 失败 → 返 [].
+
+    设计边界 (对齐 spec §4.4):
+      - bullet_evaluations 先作为诊断输出, 不注入 build_sections → rewrite_highlights
+      - evaluate_bullet_jd_match 仍保持 affects_preview=False
+      - 后续明确用于排序 / 改写时, 单独升 affects_preview=True + 补 baseline 测试
+
+    候选选择策略 (与 build_sections 对齐):
+      1. 候选项目: ROLE_CONFIG[target_role].preferred_project_ids ∩ materials.projects
+      2. 有 jd_context 时用 rank_projects 按命中数倒序重排 (跟 build_sections 同源)
+      3. 取前 top_projects 个
+      4. 每个项目用 _pick_highlights(proj, target_role) 拿 highlights list (target_role
+         优先, 然后 fallback_chain, 然后 "general" 兜底)
+      5. 取前 bullets_per_project 条, 每条跑 evaluate_bullet_jd_match
+
+    Raises:
+        不抛 — evaluate_bullet_jd_match 失败时该条 bullet 的 evaluation 字段用空 list
+             (空 matched/missing/suggestion=""), 不阻断其他 bullet 评估
+    """
+    # 防御性 imports (放函数内避免循环)
+    from core.generator import ROLE_CONFIG, _pick_highlights, rank_projects
+    from core.jd_parser import evaluate_bullet_jd_match as _eval_bullet
+
+    # 1) 选 top projects
+    role_cfg = ROLE_CONFIG.get(target_role, {}) or {}
+    preferred = role_cfg.get("preferred_project_ids", []) or []
+    projects = materials.get("projects", []) or []
+    proj_map: dict[str, dict] = {}
+    for p in projects:
+        if isinstance(p, dict) and p.get("id"):
+            proj_map[p["id"]] = p
+
+    # 候选: 按 preferred 顺序取 proj_map 中实际存在的项目
+    candidates = [proj_map[pid] for pid in preferred if pid in proj_map]
+
+    # 有 jd_context 时按命中数倒序重排 (跟 build_sections 同源)
+    if jd_context:
+        candidates = rank_projects(candidates, jd_context, preferred_order=preferred)
+
+    top_projs = candidates[: max(0, top_projects)]
+
+    if not top_projs:
+        return []
+
+    # 2) 每项目取 top bullets, 跑 evaluate_bullet_jd_match
+    fallback_chain = role_cfg.get("highlights_fallback")
+    evaluations: list[dict] = []
+    for proj in top_projs:
+        try:
+            bullets = _pick_highlights(proj, target_role, fallback_chain) or []
+        except Exception:
+            # _pick_highlights 失败 → 该项目跳过, 不阻断其他项目
+            continue
+        # 截取前 bullets_per_project 条
+        sliced = bullets[: max(0, bullets_per_project)]
+        for idx, bullet in enumerate(sliced):
+            if not isinstance(bullet, str) or not bullet.strip():
+                # 跳过空 bullet (不报错)
+                continue
+            try:
+                ev = _eval_bullet(bullet, jd_focus or {})
+            except Exception:
+                # 单条评估失败 → 用空 schema 占位 (spec §6.3 不阻断)
+                ev = {
+                    "matched_keywords": [],
+                    "missing_keywords": [],
+                    "suggestion": "",
+                }
+            evaluations.append({
+                "project_id": proj.get("id", ""),
+                "bullet_index": idx,
+                "matched_keywords": list(ev.get("matched_keywords") or []),
+                "missing_keywords": list(ev.get("missing_keywords") or []),
+                "matched_count": len(ev.get("matched_keywords") or []),
+                "missing_count": len(ev.get("missing_keywords") or []),
+                "suggestion": ev.get("suggestion", "") or "",
+            })
+
+    return evaluations
 
 
 # ----------------------------------------------------------------------

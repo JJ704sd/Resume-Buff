@@ -229,3 +229,245 @@ class TestPrivacyGuarantee:
             if tmp_report.exists():
                 tmp_report.unlink()
             eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"
+
+
+# =========================================================================
+# R5-C Phase 1: eval request_id 精确关联 + fallback taxonomy
+# =========================================================================
+class TestEvalUsesAgentSummaryRequestId:
+    """R5-C Phase 1: eval 优先使用 preview['agent_summary']['request_id'],
+    不再通过 JSONL 最后一条 trace 反推主 request"""
+
+    def test_extract_request_id_from_preview_returns_summary_value(self):
+        """preview 含 agent_summary.request_id 时, 直接返回它"""
+        preview = {
+            "target_role": "algorithm",
+            "sections": [{"type": "header", "title": "header", "content": {}}],
+            "agent_summary": {
+                "request_id": "rabcdef12",
+                "tools_used": ["retrieve_evidence"],
+                "fallback_used": False,
+            },
+        }
+        rid = eval_mod._extract_request_id_from_preview(preview)
+        assert rid == "rabcdef12", (
+            f"应直接从 agent_summary 提取 request_id, 实际 {rid}"
+        )
+
+    def test_extract_request_id_returns_none_for_old_path(self):
+        """老路径 preview 不含 agent_summary → 返 None (调用方应转用 JSONL 反查)"""
+        preview = {
+            "target_role": "algorithm",
+            "sections": [{"type": "header", "title": "header", "content": {}}],
+            # 无 agent_summary (enable_agent_workflow=False 路径)
+        }
+        rid = eval_mod._extract_request_id_from_preview(preview)
+        assert rid is None, (
+            f"老路径无 agent_summary 应返 None, 实际 {rid}"
+        )
+
+    def test_extract_request_id_returns_none_for_malformed_preview(self):
+        """malformed preview (非 dict 或 summary 非 dict) → 返 None 不抛"""
+        assert eval_mod._extract_request_id_from_preview(None) is None
+        assert eval_mod._extract_request_id_from_preview("not a dict") is None
+        assert eval_mod._extract_request_id_from_preview([]) is None
+        # agent_summary 不是 dict
+        assert eval_mod._extract_request_id_from_preview(
+            {"agent_summary": "broken"}
+        ) is None
+        # request_id 不是 str
+        assert eval_mod._extract_request_id_from_preview(
+            {"agent_summary": {"request_id": 12345}}
+        ) is None
+
+
+class TestEvalToolsUsedPrefersAgentSummary:
+    """R5-C Phase 1: tools_used 优先来自 preview['agent_summary']['tools_used'],
+    而不是从 JSONL trace 反查"""
+
+    def test_extract_tools_used_returns_summary_value(self):
+        preview = {
+            "agent_summary": {
+                "tools_used": ["retrieve_evidence", "parse_jd"],
+            },
+        }
+        tools = eval_mod._extract_tools_used_from_preview(preview)
+        assert tools == ["retrieve_evidence", "parse_jd"], (
+            f"应直接从 agent_summary 提取 tools_used, 实际 {tools}"
+        )
+
+    def test_extract_tools_used_returns_none_for_old_path(self):
+        preview = {"target_role": "algorithm"}  # 无 agent_summary
+        assert eval_mod._extract_tools_used_from_preview(preview) is None
+
+    def test_extract_tools_used_filters_non_strings(self):
+        """tools_used list 里非 str 元素应被过滤(防御性)"""
+        preview = {"agent_summary": {"tools_used": ["a", 1, None, "b", ""]}}
+        tools = eval_mod._extract_tools_used_from_preview(preview)
+        # 空字符串也保留 — 跟原始 list 顺序一致; 仅过滤非 str
+        assert tools == ["a", "b", ""]
+
+    def test_extract_tools_used_handles_empty_list(self):
+        """空 list 也算有效(无工具) — 跟 None 区分"""
+        preview = {"agent_summary": {"tools_used": []}}
+        tools = eval_mod._extract_tools_used_from_preview(preview)
+        assert tools == []
+
+    def test_short_request_id_truncates_to_4_chars(self):
+        """request_id 应截短到 4 字符用于报告(完整 9 字符不入报告)"""
+        assert eval_mod._short_request_id("rabcdef12") == "rabc"
+        assert eval_mod._short_request_id("ra") == "ra"  # 短于 4 字符原样保留
+        assert eval_mod._short_request_id(None) is None
+        assert eval_mod._short_request_id("") is None
+
+
+class TestEvalFallbackCategoryNone:
+    """R5-C Phase 1: fallback_category='none'"""
+
+    def test_fallback_category_none_when_no_fallback_and_llm_enabled(self):
+        """workflow 跑通 + LLM 启用 + 无 fallback → 'none'"""
+        preview = {
+            "agent_summary": {
+                "request_id": "rxxx",
+                "fallback_used": False,
+                "fallback_reason": None,
+                "tools_used": ["retrieve_evidence"],
+            },
+        }
+        cat = eval_mod._classify_fallback_category(
+            preview=preview,
+            llm_enabled=True,
+            enable_function_calling=True,
+            enable_agent_workflow=True,
+            error_type=None,
+        )
+        assert cat == "none", f"无 fallback 应返 'none', 实际 {cat!r}"
+
+    def test_fallback_category_none_baseline_path(self):
+        """baseline 老路径 (AW=F, FC=F, LLM off 但 AW=F 不需要 LLM) → 'none'"""
+        preview = {"target_role": "algorithm"}  # 老路径, 无 agent_summary
+        cat = eval_mod._classify_fallback_category(
+            preview=preview,
+            llm_enabled=False,
+            enable_function_calling=False,
+            enable_agent_workflow=False,
+            error_type=None,
+        )
+        assert cat == "none"
+
+    def test_fallback_category_llm_off_baseline(self):
+        """baseline (AW=F, FC=F) + LLM off → 'none' (baseline 不需要 LLM)"""
+        cat = eval_mod._classify_fallback_category(
+            preview={"target_role": "algorithm"},
+            llm_enabled=False,
+            enable_function_calling=False,
+            enable_agent_workflow=False,
+            error_type=None,
+        )
+        assert cat == "none"
+
+
+class TestEvalFallbackCategoryLlmDisabled:
+    """R5-C Phase 1: fallback_category='llm_disabled_fallback'"""
+
+    def test_fallback_category_llm_disabled_when_aw_needs_llm(self):
+        """LLM 关闭 + AW=T (workflow 路径需要 LLM 改写) → 'llm_disabled_fallback'"""
+        preview = {
+            "agent_summary": {
+                "request_id": "rxxx",
+                "fallback_used": False,  # workflow 走原文 fallback 但 agent_summary 没标 fallback_used=True
+                "tools_used": ["retrieve_evidence"],
+            },
+        }
+        cat = eval_mod._classify_fallback_category(
+            preview=preview,
+            llm_enabled=False,
+            enable_function_calling=False,
+            enable_agent_workflow=True,
+            error_type=None,
+        )
+        assert cat == "llm_disabled_fallback"
+
+    def test_fallback_category_llm_disabled_when_fc_needs_llm(self):
+        """LLM 关闭 + FC=T (FC 路径需要 LLM tools) → 'llm_disabled_fallback'"""
+        preview = {"agent_summary": {"fallback_used": False, "tools_used": []}}
+        cat = eval_mod._classify_fallback_category(
+            preview=preview,
+            llm_enabled=False,
+            enable_function_calling=True,
+            enable_agent_workflow=False,
+            error_type=None,
+        )
+        assert cat == "llm_disabled_fallback"
+
+    def test_fallback_category_tool_error_when_summary_marks_fallback(self):
+        """fallback_used=True + fallback_reason 含 'tool_error' → 'tool_error_fallback'"""
+        preview = {
+            "agent_summary": {
+                "fallback_used": True,
+                "fallback_reason": "match_score:TOOL_ARGS_INVALID",
+                "tools_used": [],
+            },
+        }
+        cat = eval_mod._classify_fallback_category(
+            preview=preview,
+            llm_enabled=True,
+            enable_function_calling=True,
+            enable_agent_workflow=True,
+            error_type=None,
+        )
+        assert cat == "tool_error_fallback"
+
+    def test_fallback_category_workflow_abort_when_exception(self):
+        """evaluate_one 抛 exception → 'workflow_abort_fallback'"""
+        cat = eval_mod._classify_fallback_category(
+            preview={"target_role": "algorithm"},
+            llm_enabled=True,
+            enable_function_calling=False,
+            enable_agent_workflow=False,
+            error_type="ValueError",  # preview_resume 抛
+        )
+        assert cat == "workflow_abort_fallback"
+
+
+class TestEvalReportNoRawRequestIdLeak:
+    """R5-C Phase 1: 报告不含完整 request_id 全文(只短串)"""
+
+    def test_report_no_raw_request_id_leak(self):
+        """完整跑 main() 后, 报告不含完整 request_id (r + 8 hex)"""
+        eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_test_no_raw_rid.md"
+        try:
+            eval_mod.main()
+            content = (REPO_ROOT / "AI岗位JD库_test_no_raw_rid.md").read_text(
+                encoding="utf-8"
+            )
+            # R5-A closeout 约定的 request_id 格式: r + 8 位 hex (9 字符)
+            rid_full_re = re.compile(r"\br[0-9a-f]{8}\b")
+            hits = rid_full_re.findall(content)
+            assert not hits, (
+                f"报告含完整 request_id 全文 (r + 8 hex): {hits}; "
+                f"应只用前 4 字符"
+            )
+        finally:
+            tmp_report = REPO_ROOT / "AI岗位JD库_test_no_raw_rid.md"
+            if tmp_report.exists():
+                tmp_report.unlink()
+            eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"
+
+    def test_report_includes_fallback_category_field(self):
+        """报告里 row 列表应新增 'fallback_category' 列"""
+        eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_test_fb_category.md"
+        try:
+            eval_mod.main()
+            content = (REPO_ROOT / "AI岗位JD库_test_fb_category.md").read_text(
+                encoding="utf-8"
+            )
+            # 报告应展示 fallback_category 列名 + 至少一个分类值
+            assert "fallback_category" in content, (
+                "报告应含 'fallback_category' 字段(列名或章节)"
+            )
+        finally:
+            tmp_report = REPO_ROOT / "AI岗位JD库_test_fb_category.md"
+            if tmp_report.exists():
+                tmp_report.unlink()
+            eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"

@@ -417,6 +417,16 @@ class TestAffectsPreview:
         from core.agent_tools import affects_preview
         assert affects_preview("evaluate_bullet_jd_match") is False
 
+    def test_parse_external_resume_affects_preview_false(self):
+        """R5-C Phase 2: parse_external_resume 仅诊断, 不影响 preview (spec §3.3)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("parse_external_resume") is False
+
+    def test_compare_resume_jd_affects_preview_false(self):
+        """R5-C Phase 2: compare_resume_jd 仅诊断, 不影响 preview (spec §3.3)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("compare_resume_jd") is False
+
     def test_unknown_tool_returns_false(self):
         """未注册工具 → affects_preview 返 False (不抛)"""
         from core.agent_tools import affects_preview

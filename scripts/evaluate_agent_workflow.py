@@ -372,6 +372,112 @@ def _resolve_eval_mode(mode: str, llm_enabled: bool) -> str:
 
 
 # ======================================================================
+# R5-D Phase 3: rewrite impact 指标
+# ======================================================================
+def _extract_project_highlights(preview: dict) -> list[str]:
+    """
+    R5-D Phase 3: 从 preview dict 抽取 project_group section 的所有 highlight 文本。
+
+    用途: 作为 rewrite_impact 计算的"after"侧输入 — 跟 baseline combo (FC=F, AW=F)
+    的同 jd preview 对比, 看 LLM/FC/AW 路径对 highlights 的改写程度。
+
+    嵌套结构 (preview["sections"][i]):
+      - sections[i].type == "project_group"
+      - sections[i].content.projects[j] 是 "project" Section (asdict 后是 dict)
+      - sections[i].content.projects[j].content.highlights → list[str]
+
+    防御性:
+      - preview 非 dict / 无 sections → 返 []
+      - sections 不是 list → 返 []
+      - 没 project_group section → 返 []
+      - project_group.content 没 projects / projects 不是 list → 返 []
+      - 单个 project.content 不是 dict / .highlights 不是 list → 跳过该 project
+      - highlights 元素非 str → 仅收集 str
+
+    隐私: 返回的 list 仅在 process 内存里存在, **不入报告**, 只在
+    _summarize_rewrite_impact 里被聚合为 changed_count / changed_rate / avg_len,
+    不存原文。
+    """
+    if not isinstance(preview, dict):
+        return []
+    sections = preview.get("sections")
+    if not isinstance(sections, list):
+        return []
+    out: list[str] = []
+    for s in sections:
+        if not isinstance(s, dict):
+            continue
+        if s.get("type") != "project_group":
+            continue
+        content = s.get("content")
+        if not isinstance(content, dict):
+            continue
+        projects = content.get("projects")
+        if not isinstance(projects, list):
+            continue
+        for proj in projects:
+            if not isinstance(proj, dict):
+                continue
+            # project 是 Section asdict 后是 dict, 真正的 highlights 在 proj.content.highlights
+            proj_content = proj.get("content")
+            if not isinstance(proj_content, dict):
+                continue
+            highlights = proj_content.get("highlights")
+            if not isinstance(highlights, list):
+                continue
+            for h in highlights:
+                if isinstance(h, str):
+                    out.append(h)
+    return out
+
+
+def _summarize_rewrite_impact(before: list[str], after: list[str]) -> dict:
+    """
+    R5-D Phase 3: 比较 before / after highlight 列表, 产 5 字段 impact dict。
+
+    5 字段(固定顺序):
+      - rewrite_changed_count  int    — 位置 i 上 before[i] != after[i] 的总数 (zip min len)
+      - rewrite_total          int    — len(before) (作分母, "原始 bullet 数")
+      - rewrite_changed_rate   float  — changed_count / total, 0.0 当 total=0
+      - avg_len_before         float  — mean(len(b) for b in before), 0.0 当 before 为空
+      - avg_len_after          float  — mean(len(a) for a in after), 0.0 当 after 为空
+
+    边界:
+      - before 为空 → 全 0 (无 bullet 可比较)
+      - after 为空 / 比 before 短 → zip 截断, 不比较 extra positions
+      - after 比 before 长 → 多余的 after 不计入 changed (无 before 对应)
+      - 元素非 str → 防御性跳过 (但 _extract_project_highlights 已过滤)
+
+    隐私: 输入 before/after 原文**绝不**写入返回 dict; 返回 dict 只含数字。
+    """
+    total = len(before)
+    if total == 0:
+        return {
+            "rewrite_changed_count": 0,
+            "rewrite_total": 0,
+            "rewrite_changed_rate": 0.0,
+            "avg_len_before": 0.0,
+            "avg_len_after": 0.0,
+        }
+    changed_count = 0
+    for b, a in zip(before, after):
+        if b != a:
+            changed_count += 1
+    avg_len_before = sum(len(b) for b in before) / total
+    avg_len_after = (
+        sum(len(a) for a in after) / len(after)
+        if after else 0.0
+    )
+    return {
+        "rewrite_changed_count": changed_count,
+        "rewrite_total": total,
+        "rewrite_changed_rate": round(changed_count / total, 3),
+        "avg_len_before": round(avg_len_before, 1),
+        "avg_len_after": round(avg_len_after, 1),
+    }
+
+
+# ======================================================================
 # R5-D Phase 2: 报告元信息 — llm_mode / llm_enabled / llm_model / llm_base_url_host
 # ======================================================================
 
@@ -444,6 +550,7 @@ def evaluate_one(
     enable_function_calling: bool,
     enable_agent_workflow: bool,
     jsonl_path: Optional[Path] = None,
+    baseline_highlights: Optional[list[str]] = None,
 ) -> dict:
     """
     跑单样本 × 单组合,返回一行指标 dict。
@@ -452,6 +559,16 @@ def evaluate_one(
       - request_id / tools_used 优先从 preview['agent_summary'] 提取
       - JSONL 仅作为老路径 (enable_agent_workflow=False 时) 的交叉验证兜底
       - 不再依赖"最后一条 step=0 trace 反推主 request"
+
+    R5-D Phase 3 (spec §3):
+      - 新增 baseline_highlights kwarg — 同 jd 在 baseline combo (FC=F, AW=F) 下
+        的 highlight 列表, 用于 compute rewrite_impact (before vs after)
+      - None 时 (即 baseline combo): before=after → changed=0, 但 total/avg 反映
+        当前 highlights 数, 仍产非零 total/avg_len_after
+      - 返回 dict 新增 5 字段: rewrite_changed_count / rewrite_total /
+        rewrite_changed_rate / avg_len_before / avg_len_after
+      - 内部 _after_highlights (前缀 `_`) 字段供 main() 缓存 baseline 用,
+        main() 在收集 row 后 strip 掉再加入 all_rows
     """
     t0 = time.time()
     error_type: Optional[str] = None
@@ -528,6 +645,12 @@ def evaluate_one(
     # 是有意保留作 demo, 不算 PII — 白名单跳过
     pii_safe = _check_pii_safe(preview)
 
+    # R5-D Phase 3: rewrite impact (spec §3) — 比较 baseline_highlights (before)
+    # vs 当前 preview 抽出的 highlights (after), 产 5 字段 impact 统计
+    after_highlights = _extract_project_highlights(preview)
+    before_for_impact = baseline_highlights if baseline_highlights is not None else after_highlights
+    impact = _summarize_rewrite_impact(before_for_impact, after_highlights)
+
     return {
         "jd_id": sample["jd_id"],
         "role_id": sample["role_id"],
@@ -545,6 +668,14 @@ def evaluate_one(
         "error_type": error_type,
         "pii_safe": pii_safe,
         "source": sample["source"],
+        # R5-D Phase 3: rewrite impact 5 字段
+        "rewrite_changed_count": impact["rewrite_changed_count"],
+        "rewrite_total": impact["rewrite_total"],
+        "rewrite_changed_rate": impact["rewrite_changed_rate"],
+        "avg_len_before": impact["avg_len_before"],
+        "avg_len_after": impact["avg_len_after"],
+        # R5-D Phase 3: 内部字段, main() 缓存 baseline 用; 入 all_rows 前 strip
+        "_after_highlights": after_highlights,
     }
 
 
@@ -693,19 +824,40 @@ def main(argv=None):
     try:
         # ---- 跑 4 组 × N 样本 ----
         all_rows: list[dict] = []  # 每行 = (sample × combo)
+        # R5-D Phase 3: baseline combo (combo_idx=0) 的 highlights 缓存 — 供后续
+        # 3 组用作 rewrite impact 的 "before"。同一 jd_id 缓存一次, 跨 3 个非 baseline
+        # combo 复用 (避免每次重跑 baseline preview_resume, 离线 12 samples × 3 combos
+        # = 36 次预览调用可省 → 改 12 次 baseline + 36 次 cache lookup)
+        baseline_highlights_by_jd: dict[str, list[str]] = {}
+
         for combo_idx, (fc, aw, combo_label) in enumerate(SWITCH_COMBOS):
             print(f"--- [{combo_idx + 1}/4] {combo_label} ---")
             # 每组开始前清空 trace(避免上一组污染)
             eval_jsonl_path.write_text("", encoding="utf-8")
 
             combo_rows: list[dict] = []
+            is_baseline_combo = (fc is False and aw is False)
             for sample in eval_set:
+                # R5-D Phase 3: 非 baseline combo 传缓存的 baseline highlights
+                # 作 rewrite impact 的 before; baseline combo 自身传 None
+                # (内部用 after 作 before → changed=0, total=N 反映 baseline 实际)
+                cached_baseline = (
+                    baseline_highlights_by_jd.get(sample["jd_id"])
+                    if not is_baseline_combo else None
+                )
                 row = evaluate_one(
                     sample,
                     enable_function_calling=fc,
                     enable_agent_workflow=aw,
                     jsonl_path=eval_jsonl_path if aw else None,
+                    baseline_highlights=cached_baseline,
                 )
+                # R5-D Phase 3: baseline combo 完成后, 把 after_highlights 缓存
+                # 给后续 combo 作 before; 缓存完 strip 内部字段 (不入 row / report)
+                if is_baseline_combo:
+                    baseline_highlights_by_jd[sample["jd_id"]] = row.get("_after_highlights", [])
+                row.pop("_after_highlights", None)
+
                 row["combo"] = combo_label
                 row["combo_fc"] = fc
                 row["combo_aw"] = aw
@@ -714,6 +866,7 @@ def main(argv=None):
                 print(
                     f"  · {row['jd_id']:<28} score={row['score']:3d} rec={row['recommendation']:2s}"
                     f" schema_pass={row['schema_pass']} fallback={row['fallback_used']}"
+                    f" rewrite_rate={row['rewrite_changed_rate']:.0%}"
                     f" latency={row['latency_ms']:4d}ms"
                 )
             print()
@@ -764,6 +917,9 @@ def compute_metrics(all_rows: list[dict]) -> dict:
       - pii_safe_rate (per combo)
       - tools_used (per combo)
       - fallback_category_breakdown (per combo) — R5-C Phase 1 新增
+      - rewrite_summary (per combo) — R5-D Phase 3 新增
+        含 avg_rewrite_changed_rate / avg_len_before / avg_len_after /
+        total_changed / total_counted (按 row.rewrite_total 加权聚合)
     """
     by_combo: dict[str, list[dict]] = {}
     for r in all_rows:
@@ -785,6 +941,32 @@ def compute_metrics(all_rows: list[dict]) -> dict:
         fb_cat_counter: Counter = Counter()
         for r in rows:
             fb_cat_counter[r.get("fallback_category", "none")] += 1
+        # R5-D Phase 3: rewrite impact 聚合 — 按 row.rewrite_total 加权,
+        # 避免空 total 行 (baseline combo 自身) 拉低指标
+        total_changed = sum(int(r.get("rewrite_changed_count", 0)) for r in rows)
+        total_counted = sum(int(r.get("rewrite_total", 0)) for r in rows)
+        avg_rewrite_changed_rate = (
+            round(total_changed / total_counted, 3) if total_counted > 0 else 0.0
+        )
+        # avg_len 用 total_counted 加权 (空 total 行贡献 0)
+        avg_len_before_agg = (
+            round(
+                sum(
+                    float(r.get("avg_len_before", 0.0)) * int(r.get("rewrite_total", 0))
+                    for r in rows
+                ) / total_counted,
+                1,
+            ) if total_counted > 0 else 0.0
+        )
+        avg_len_after_agg = (
+            round(
+                sum(
+                    float(r.get("avg_len_after", 0.0)) * int(r.get("rewrite_total", 0))
+                    for r in rows
+                ) / total_counted,
+                1,
+            ) if total_counted > 0 else 0.0
+        )
         combo_metrics[combo] = {
             "n": n,
             "schema_pass_rate": round(schema_pass_rate, 3),
@@ -794,6 +976,14 @@ def compute_metrics(all_rows: list[dict]) -> dict:
             "tools_used_top": tools_counter.most_common(5),
             "fallback_category_breakdown": dict(fb_cat_counter),
             "any_error": any(r["error_type"] for r in rows),
+            # R5-D Phase 3: rewrite impact 聚合
+            "rewrite_summary": {
+                "avg_rewrite_changed_rate": avg_rewrite_changed_rate,
+                "avg_len_before": avg_len_before_agg,
+                "avg_len_after": avg_len_after_agg,
+                "total_changed": total_changed,
+                "total_counted": total_counted,
+            },
         }
 
     # Score / recommendation 一致性: 同 jd × 4 组应该一致(因为 match_score 不受开关影响)
@@ -942,16 +1132,23 @@ def write_report(
         first = rows[0]
         lines.append(f"### `{jd_id}` — role=`{first['role_id']}`, expected={first['expected_label']}, source={first['source']}\n\n")
         # R5-C Phase 1: 新增 request_id 短串列 + fallback_category 列
-        lines.append("| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |\n")
-        lines.append("|---|---|---|---|---|---|---|---|\n")
+        # R5-D Phase 3: 新增 rewrite_rate 列 (changed/total), 不展示 bullet 原文
+        lines.append("| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |\n")
+        lines.append("|---|---|---|---|---|---|---|---|---|\n")
         for r in rows:
             tools = ", ".join(r["tools_used"]) if r["tools_used"] else "—"
             rid_short = r.get("request_id_short") or "—"
             fb_cat = r.get("fallback_category", "none")
+            rw_total = int(r.get("rewrite_total", 0))
+            rw_changed = int(r.get("rewrite_changed_count", 0))
+            rw_rate_str = (
+                f"{rw_changed}/{rw_total} ({float(r.get('rewrite_changed_rate', 0)):.0%})"
+                if rw_total > 0 else "—"
+            )
             lines.append(
                 f"| {r['combo']} | `{rid_short}` | {r['score']} | {r['recommendation']} | "
                 f"{'✅' if r['schema_pass'] else '❌'} | "
-                f"`{fb_cat}` | {r['latency_ms']} | {tools} |\n"
+                f"`{fb_cat}` | {r['latency_ms']} | {tools} | {rw_rate_str} |\n"
             )
         lines.append("\n")
 
@@ -1061,6 +1258,27 @@ def write_report(
                      f"workflow_abort × {n_workflow_abort}\n")
 
     lines.append("\n---\n\n")
+    # ---- 七(补充)、rewrite impact 摘要 (R5-D Phase 3) ----
+    lines.append("### 7.1 rewrite impact 摘要 (R5-D Phase 3)\n\n")
+    lines.append("按 FC × AW 组合聚合: 总 changed bullet 数 / 总 bullet 数 → rewrite_changed_rate。\n")
+    lines.append('baseline (FC=F, AW=F) 作 "before"; 后续 3 组作 "after" 做对比; offline (LLM 关闭) 时各组应均接近 0%, live 时 AW 路径应有显著改动率。\n\n')
+    lines.append("| 组合 | changed / total | rewrite_changed_rate | avg_len_before | avg_len_after |\n")
+    lines.append("|---|---|---|---|---|\n")
+    for combo, m in metrics["by_combo"].items():
+        rr = m.get("rewrite_summary", {})
+        changed = rr.get("total_changed", 0)
+        counted = rr.get("total_counted", 0)
+        rate = rr.get("avg_rewrite_changed_rate", 0.0)
+        avg_before = rr.get("avg_len_before", 0.0)
+        avg_after = rr.get("avg_len_after", 0.0)
+        lines.append(
+            f"| {combo} | {changed}/{counted} | {rate:.1%} | "
+            f"{avg_before:.1f} 字符 | {avg_after:.1f} 字符 |\n"
+        )
+    lines.append("\n")
+    lines.append("> **隐私边界**: 报告只展示 changed 计数 / 比例 / 平均长度 (字符数), "
+                 "**不展示** 任何 bullet 原文 / 改写前后文本 / request 详情 / JD 全文。\n\n")
+
     lines.append("## 八、与既有脚本的关系\n\n")
     lines.append("- `scripts/score_thresholds.py`: 阈值调优, 单维度 match_score 准确率, 跟本脚本独立\n")
     lines.append("- `scripts/match_golden_targets.py`: 黄金 JD × 6 role 全量扫描, 跟本脚本独立\n")

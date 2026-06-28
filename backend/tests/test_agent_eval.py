@@ -949,3 +949,349 @@ class TestEvalReportBaseUrlHostHidesPathAndQuery:
             eval_mod.OUTPUT_REPORT = original_output
             if output.exists():
                 output.unlink()
+
+# =========================================================================
+# R5-D Phase 3: rewrite impact 指标
+# =========================================================================
+class TestRewriteImpactCountsChangedBulletsWithoutStoringText:
+    """
+    R5-D Phase 3: _summarize_rewrite_impact (spec §3) — 计算 changed bullet 数,
+    **不**存储 bullet 原文到返回 dict。
+
+    锁点:
+      - changed_count / total / changed_rate / avg_len_before / avg_len_after 5 字段
+      - 返回 dict 里不含任何 bullet 原文 (输入是 list[str], 输出只有数字)
+      - 全 changed / 全 unchanged / 空列表 / 部分 changed 边界
+    """
+
+    def test_basic_partial_changed(self):
+        """3 bullet 中 1 个 changed → changed=1, total=3, rate=1/3"""
+        before = ["项目A: 设计架构", "项目B: 实现核心算法", "项目C: 性能优化"]
+        after = ["项目A: 设计架构", "项目B: 实现LLM算法", "项目C: 性能优化"]
+        impact = eval_mod._summarize_rewrite_impact(before, after)
+        assert impact["rewrite_changed_count"] == 1, (
+            f"应有 1 个 changed bullet, 实际 {impact['rewrite_changed_count']}"
+        )
+        assert impact["rewrite_total"] == 3, f"total 应为 3, 实际 {impact['rewrite_total']}"
+        assert abs(impact["rewrite_changed_rate"] - 1 / 3) < 0.01, (
+            f"rate 应 ≈ 0.333, 实际 {impact['rewrite_changed_rate']}"
+        )
+        assert impact["avg_len_before"] > 0
+        assert impact["avg_len_after"] > 0
+        # 隐私边界: 返回 dict **绝不**含 bullet 原文
+        impact_str = str(impact)
+        assert "项目A" not in impact_str, f"返回 dict 不应含 bullet 原文 '项目A': {impact_str}"
+        assert "项目B" not in impact_str, f"返回 dict 不应含 bullet 原文 '项目B': {impact_str}"
+        assert "项目C" not in impact_str, f"返回 dict 不应含 bullet 原文 '项目C': {impact_str}"
+
+    def test_all_unchanged(self):
+        """全 unchanged → changed=0, rate=0.0"""
+        before = ["a", "bb", "ccc"]
+        after = ["a", "bb", "ccc"]
+        impact = eval_mod._summarize_rewrite_impact(before, after)
+        assert impact["rewrite_changed_count"] == 0
+        assert impact["rewrite_total"] == 3
+        assert impact["rewrite_changed_rate"] == 0.0
+
+    def test_all_changed(self):
+        """全 changed → changed=N, rate=1.0"""
+        before = ["a", "b", "c"]
+        after = ["x", "y", "z"]
+        impact = eval_mod._summarize_rewrite_impact(before, after)
+        assert impact["rewrite_changed_count"] == 3
+        assert impact["rewrite_total"] == 3
+        assert impact["rewrite_changed_rate"] == 1.0
+
+    def test_empty_before_returns_zero_impact(self):
+        """before 空列表 → 全 0 字段 (offline + 无 highlights fallback)"""
+        impact = eval_mod._summarize_rewrite_impact([], [])
+        assert impact["rewrite_changed_count"] == 0
+        assert impact["rewrite_total"] == 0
+        assert impact["rewrite_changed_rate"] == 0.0
+        assert impact["avg_len_before"] == 0.0
+        assert impact["avg_len_after"] == 0.0
+
+    def test_after_shorter_than_before_uses_zip(self):
+        """after 比 before 短 → 只 zip 到 min(len), 不溢出"""
+        before = ["a", "b", "c", "d"]
+        after = ["x", "y"]  # 只有 2 个
+        impact = eval_mod._summarize_rewrite_impact(before, after)
+        assert impact["rewrite_total"] == 4  # total 用 len(before)
+        # zip 前 2 个都 changed
+        assert impact["rewrite_changed_count"] == 2
+        assert abs(impact["rewrite_changed_rate"] - 0.5) < 0.01
+
+
+class TestExtractProjectHighlightsHandlesMissingProjects:
+    """
+    R5-D Phase 3: _extract_project_highlights 防御性 — missing projects / missing
+    project_group / malformed preview 都应返空 list (offline + 空 materials 兜底)。
+    """
+
+    def test_normal_preview_extracts_all_highlights(self):
+        """正常 preview → 扁平抽出所有 project 高亮 (嵌套在 projects[i].content.highlights)"""
+        preview = {
+            "sections": [{
+                "type": "project_group",
+                "content": {
+                    "projects": [
+                        {"type": "project", "content": {"highlights": ["hl_a1", "hl_a2"]}},
+                        {"type": "project", "content": {"highlights": ["hl_b1"]}},
+                        {"type": "project", "content": {"highlights": ["hl_c1", "hl_c2"]}},
+                    ],
+                },
+            }],
+        }
+        highlights = eval_mod._extract_project_highlights(preview)
+        assert highlights == ["hl_a1", "hl_a2", "hl_b1", "hl_c1", "hl_c2"], (
+            f"应扁平抽出 5 条 highlight, 实际 {highlights}"
+        )
+
+    def test_missing_projects_field_returns_empty(self):
+        """project_group.content 没 projects 字段 → []"""
+        preview = {"sections": [{"type": "project_group", "content": {}}]}
+        assert eval_mod._extract_project_highlights(preview) == []
+
+    def test_no_project_group_section_returns_empty(self):
+        """sections 里没 project_group 段 → []"""
+        preview = {"sections": [
+            {"type": "header", "content": {"name": "x"}},
+            {"type": "education", "content": {}},
+            {"type": "skills", "content": {}},
+        ]}
+        assert eval_mod._extract_project_highlights(preview) == []
+
+    def test_empty_highlights_in_projects_returns_empty(self):
+        """project.content.highlights 全部空 list → []"""
+        preview = {"sections": [{
+            "type": "project_group",
+            "content": {"projects": [
+                {"type": "project", "content": {"highlights": []}},
+                {"type": "project", "content": {"highlights": []}},
+            ]},
+        }]}
+        assert eval_mod._extract_project_highlights(preview) == []
+
+    def test_malformed_preview_inputs_return_empty(self):
+        """malformed preview 输入 (非 dict / sections 非 list / sections 缺失) → [] 不抛"""
+        # 非 dict
+        assert eval_mod._extract_project_highlights(None) == []
+        assert eval_mod._extract_project_highlights("not a dict") == []
+        assert eval_mod._extract_project_highlights([]) == []
+        # 无 sections
+        assert eval_mod._extract_project_highlights({}) == []
+        # sections 非 list
+        assert eval_mod._extract_project_highlights({"sections": "broken"}) == []
+        assert eval_mod._extract_project_highlights({"sections": 42}) == []
+        # projects 非 list
+        assert eval_mod._extract_project_highlights(
+            {"sections": [{"type": "project_group", "content": {"projects": "broken"}}]}
+        ) == []
+        # project.content 不是 dict → 跳过
+        assert eval_mod._extract_project_highlights(
+            {"sections": [{"type": "project_group", "content": {"projects": [{"type": "project"}]}}]}
+        ) == []
+        # highlights 非 list
+        assert eval_mod._extract_project_highlights(
+            {"sections": [{"type": "project_group", "content": {"projects": [
+                {"type": "project", "content": {"highlights": "broken"}},
+            ]}}]}
+        ) == []
+        # 非 str 高亮元素过滤
+        assert eval_mod._extract_project_highlights(
+            {"sections": [{"type": "project_group", "content": {"projects": [
+                {"type": "project", "content": {"highlights": ["good", 123, None, "also_good"]}},
+            ]}}]}
+        ) == ["good", "also_good"]
+
+
+class TestEvalReportContainsRewriteImpactSummary:
+    """
+    R5-D Phase 3: write_report 输出含 rewrite impact 摘要 (含 rewrite_changed_rate)
+    (spec §3 验收第 1 条)。
+    """
+
+    def test_report_contains_rewrite_changed_rate_section(self, tmp_path):
+        """完整跑 main() 后, 报告含 'rewrite_changed_rate' + rewrite impact 章节标题"""
+        output = tmp_path / "report_rewrite_summary.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        em = eval_mod  # alias for clarity
+        em.OUTPUT_REPORT = output
+        try:
+            em.main(argv=["--mode", "offline"])
+            content = output.read_text(encoding="utf-8")
+            # 章节标题应含 "rewrite impact"
+            assert "rewrite impact" in content.lower(), (
+                f"报告应含 'rewrite impact' 章节标题, 头部: {content[:500]}"
+            )
+            # 字段名应出现 (spec §3 要求)
+            assert "rewrite_changed_rate" in content, (
+                f"报告应含 'rewrite_changed_rate' 字段, 头部: {content[:500]}"
+            )
+            # 至少一个 ratio 数值 (e.g. "0.0%" 或 "X/Y" 形式)
+            assert "%" in content, "报告应展示百分比格式的 rewrite rate"
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+    def test_evaluate_one_row_includes_rewrite_fields(self):
+        """evaluate_one 返回 row 含 5 rewrite_* 字段"""
+        eval_set = eval_mod.load_eval_set()
+        sample = eval_set[0]
+        row = eval_mod.evaluate_one(
+            sample,
+            enable_function_calling=False,
+            enable_agent_workflow=False,
+        )
+        # 5 spec 字段必须存在
+        for k in (
+            "rewrite_changed_count", "rewrite_total",
+            "rewrite_changed_rate", "avg_len_before", "avg_len_after",
+        ):
+            assert k in row, f"evaluate_one row 缺字段 {k!r}"
+        # baseline combo: changed=0, total>=0 (取决于 materials)
+        assert row["rewrite_changed_count"] == 0, (
+            f"baseline combo changed 应为 0, 实际 {row['rewrite_changed_count']}"
+        )
+        assert row["rewrite_total"] >= 0
+        assert isinstance(row["rewrite_changed_rate"], float)
+
+
+class TestEvalReportDoesNotLeakBulletText:
+    """
+    R5-D Phase 3: 报告**绝不**含 bullet 原文 (spec §3 验收第 2 条 + AGENTS.md 隐私边界)。
+
+    验证策略:
+      1. _summarize_rewrite_impact 输出 dict 不含 bullet 原文 (只用数字)
+      2. write_report 渲染后报告不含 sentinel (即使 baseline_highlights 含它)
+      3. 完整 main() 跑完后, 报告不含真实 materials.json 抽出的任意 bullet 文本
+    """
+
+    SENTINEL = "SENTINEL_BULLET_DO_NOT_LEAK_TO_REPORT_xyz123_unique"
+
+    def test_helper_output_does_not_leak_bullet_text(self):
+        """helper 输出 dict 不含 bullet 原文 (只含数字)"""
+        before = [self.SENTINEL, "normal_bullet_one"]
+        after = ["different_normal", "different_normal_two"]
+        impact = eval_mod._summarize_rewrite_impact(before, after)
+        impact_str = str(impact)
+        assert self.SENTINEL not in impact_str, (
+            f"_summarize_rewrite_impact 输出不应含 bullet 原文 sentinel: {impact_str}"
+        )
+        assert "normal_bullet_one" not in impact_str, (
+            f"输出不应含 before bullet 原文: {impact_str}"
+        )
+        # 输出 dict 必含 5 数字字段
+        for k in (
+            "rewrite_changed_count", "rewrite_total",
+            "rewrite_changed_rate", "avg_len_before", "avg_len_after",
+        ):
+            assert k in impact
+
+    def test_extract_returns_list_with_sentinel_for_unit_test(self):
+        """测试设置校验: _extract_project_highlights 确实会返回 sentinel (供后续测试用)"""
+        preview = {
+            "sections": [{
+                "type": "project_group",
+                "content": {"projects": [{
+                    "type": "project",
+                    "content": {"highlights": [self.SENTINEL, "regular"]},
+                }]},
+            }],
+        }
+        highlights = eval_mod._extract_project_highlights(preview)
+        assert self.SENTINEL in highlights, (
+            "测试设置: _extract_project_highlights 应能提取 sentinel"
+        )
+
+    def test_write_report_with_sentinel_baseline_does_not_leak(self, tmp_path):
+        """write_report 直接调, 验证报告正文不含 sentinel"""
+        # 复用 R5-D Phase 2 测试的 _make_min_* helpers
+        output = tmp_path / "report_no_leak.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        eval_mod.OUTPUT_REPORT = output
+        try:
+            min_eval_set = TestEvalReportIncludesLlmMetadata._make_min_eval_set()
+            min_metrics = TestEvalReportIncludesLlmMetadata._make_min_metrics()
+            min_rows = TestEvalReportIncludesLlmMetadata._make_min_rows()
+            # 注入 rewrite_summary 到 metrics (让章节能渲染)
+            min_metrics["rewrite_summary_global"] = {
+                "avg_rewrite_changed_rate": 0.0,
+                "avg_len_before": 10.0,
+                "avg_len_after": 10.0,
+                "total_changed": 0,
+                "total_counted": 0,
+            }
+            # 给每 row 加 rewrite_* 字段
+            for row in min_rows:
+                row["rewrite_changed_count"] = 0
+                row["rewrite_total"] = 0
+                row["rewrite_changed_rate"] = 0.0
+                row["avg_len_before"] = 0.0
+                row["avg_len_after"] = 0.0
+
+            eval_mod.write_report(
+                eval_set=min_eval_set,
+                all_rows=min_rows,
+                metrics=min_metrics,
+                llm_enabled=False,
+                requested_mode="offline",
+                resolved_mode="offline",
+                llm_eval_config={
+                    "llm_mode": "offline",
+                    "llm_enabled": False,
+                    "llm_model": "gpt-4o-mini",
+                    "llm_base_url_host": "api.openai.com",
+                },
+            )
+            content = output.read_text(encoding="utf-8")
+            assert self.SENTINEL not in content, (
+                f"报告不应含 bullet 原文 sentinel, 实际报告前 500 字符: {content[:500]}"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+    def test_full_main_run_does_not_leak_real_bullets(self, tmp_path, monkeypatch):
+        """完整跑 main() 后, 报告不含 _extract_project_highlights 从真实 preview
+        抽到的任何 highlight 文本 (抽样检查: 取第一份 sample 的 baseline highlights)"""
+        eval_set = eval_mod.load_eval_set()
+        first_sample = eval_set[0]
+        # 跑一次 baseline preview 拿真实 highlights (作为 baseline)
+        from core.generator import preview_resume  # noqa: WPS433
+        preview = preview_resume(
+            target_role=first_sample["role_id"],
+            template="classic",
+            jd_text=first_sample["text"],
+            enable_function_calling=False,
+            enable_agent_workflow=False,
+        )
+        real_highlights = eval_mod._extract_project_highlights(preview)
+        # 真实 highlights 不为空 — 否则测试不具代表性
+        assert len(real_highlights) > 0, (
+            "真实 materials.json 应有 highlights; 若空则测试无效"
+        )
+
+        # 跑完整 main(), monkeypatch OUTPUT_REPORT 到 tmp_path
+        output = tmp_path / "report_full_main.md"
+        monkeypatch.setattr(eval_mod, "OUTPUT_REPORT", output)
+        monkeypatch.setattr(eval_mod, "is_llm_enabled", lambda: False)
+
+        try:
+            eval_mod.main(argv=["--mode", "offline"])
+            content = output.read_text(encoding="utf-8")
+            # 抽样检查: 真实 highlights 中的任意一条都不应出现在报告
+            for hl in real_highlights[:3]:  # 抽前 3 条
+                # 抠掉 placeholder (避免误报)
+                stripped_hl = hl.replace("13800000000", "").replace("your_email@example.com", "")
+                if len(stripped_hl) < 10:
+                    continue  # 太短容易误报, 跳过
+                assert stripped_hl not in content, (
+                    f"报告不应含真实 bullet 原文 (长 {len(stripped_hl)} 字符): "
+                    f"{stripped_hl[:80]}..."
+                )
+        finally:
+            if output.exists():
+                output.unlink()

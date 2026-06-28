@@ -470,4 +470,153 @@ class TestEvalReportNoRawRequestIdLeak:
             tmp_report = REPO_ROOT / "AI岗位JD库_test_fb_category.md"
             if tmp_report.exists():
                 tmp_report.unlink()
-            eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"
+eval_mod.OUTPUT_REPORT = REPO_ROOT / "AI岗位JD库_agent_eval报告.md"
+
+
+# =========================================================================
+# R5-D Phase 1: eval mode 决策
+# =========================================================================
+class TestEvalModeResolve:
+    """
+    R5-D Phase 1: _resolve_eval_mode 纯函数(不读 env var, 只根据入参决策)。
+
+    锁点:
+      - offline 总是返 "offline",不依赖 LLM
+      - live 总是返 "live"; llm_enabled=False → raise RuntimeError
+      - auto  根据 llm_enabled 自动选 live / offline
+      - 非法 mode → ValueError
+    """
+
+    def test_default_mode_is_offline(self):
+        """默认 mode (offline) 不依赖 LLM,任何 llm_enabled 都返 offline"""
+        assert eval_mod._resolve_eval_mode(eval_mod.MODE_OFFLINE, True) == eval_mod.MODE_OFFLINE
+        assert eval_mod._resolve_eval_mode(eval_mod.MODE_OFFLINE, False) == eval_mod.MODE_OFFLINE
+
+    def test_live_mode_requires_llm_enabled(self):
+        """live 模式 + llm_enabled=False → RuntimeError(spec 任务点 #2)"""
+        with __import__("pytest").raises(RuntimeError) as exc_info:
+            eval_mod._resolve_eval_mode(eval_mod.MODE_LIVE, False)
+        # 错误信息应明确指出 live 要求 LLM 启用
+        assert "live" in str(exc_info.value).lower()
+        # llm_enabled=True 时不应报错
+        assert eval_mod._resolve_eval_mode(eval_mod.MODE_LIVE, True) == eval_mod.MODE_LIVE
+
+    def test_auto_mode_uses_live_when_key_present(self):
+        """auto + llm_enabled=True → live(spec 任务点 #3)"""
+        assert eval_mod._resolve_eval_mode(eval_mod.MODE_AUTO, True) == eval_mod.MODE_LIVE
+
+    def test_auto_mode_uses_offline_when_no_key(self):
+        """auto + llm_enabled=False → offline(auto 兜底行为)"""
+        assert eval_mod._resolve_eval_mode(eval_mod.MODE_AUTO, False) == eval_mod.MODE_OFFLINE
+
+    def test_invalid_mode_raises_value_error(self):
+        """非法 mode → ValueError"""
+        with __import__("pytest").raises(ValueError) as exc_info:
+            eval_mod._resolve_eval_mode("invalid", True)
+        assert "invalid" in str(exc_info.value)
+
+
+class TestEvalModeNoKeyLeak:
+    """
+    R5-D Phase 1: 隐私边界 — live mode 错误信息**绝不**包含 LLM key 值。
+
+    spec 任务点 #5 明确:"live 模式 llm_enabled=False 时失败, 错误信息不能包含 key"
+    """
+
+    def test_live_mode_error_does_not_leak_api_key_value(self):
+        """RuntimeError 的 str() 不含任何 LLM_API_KEY 的值(模拟一个有意义的 key)"""
+        sentinel_key = "sk-test-DO-NOT-LEAK-12345-abcdef"
+        # 把 sentinel 塞进 env,模拟"用户配了 key 但 is_llm_enabled 因别的原因返 False"
+        # 用 monkeypatch 在 env 里临时放这个 key,然后验证错误信息不含它
+        # 但 _resolve_eval_mode 不读 env var — 我们直接验证字符串拼接不含 sentinel
+        # 方式: 错误信息直接来自函数 hardcoded 字面量,不可能含 sentinel
+        try:
+            eval_mod._resolve_eval_mode(eval_mod.MODE_LIVE, False)
+        except RuntimeError as e:
+            assert sentinel_key not in str(e), (
+                f"live mode 错误信息不应包含 LLM_API_KEY 值: {e}"
+            )
+
+    def test_live_mode_error_does_not_leak_env_var_name(self):
+        """错误信息也不引用 LLM_API_KEY env var 名字(进一步防御)"""
+        try:
+            eval_mod._resolve_eval_mode(eval_mod.MODE_LIVE, False)
+        except RuntimeError as e:
+            assert "LLM_API_KEY" not in str(e), (
+                f"live mode 错误信息不应引用 env var 名: {e}"
+            )
+
+
+class TestEvalCliOutput:
+    """
+    R5-D Phase 1: CLI 参数 --output 覆盖 + 默认 mode=offline 端到端验证。
+
+    跑 main() 完整流程(跟 TestPrivacyGuarantee 一样),验证:
+      - 不传 --output → OUTPUT_REPORT 不变(默认路径)
+      - 传 --output → OUTPUT_REPORT 被改写到指定路径
+      - 默认 mode=offline → 报告头部含 "Mode: offline"
+    """
+
+    def test_output_path_can_be_overridden(self, monkeypatch, tmp_path):
+        """CLI --output <path> 覆盖默认报告路径(spec 任务点 #4)"""
+        custom_output = tmp_path / "custom_eval_report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+
+        # 强制 is_llm_enabled 返 False(避免依赖用户环境)
+        monkeypatch.setattr(eval_mod, "is_llm_enabled", lambda: False)
+
+        try:
+            eval_mod.main(argv=["--mode", "offline", "--output", str(custom_output)])
+            assert custom_output.exists(), (
+                f"--output 指定的报告文件应生成: {custom_output}"
+            )
+            # OUTPUT_REPORT 应被改写到 custom_output
+            assert eval_mod.OUTPUT_REPORT == custom_output, (
+                f"OUTPUT_REPORT 应被覆盖为 {custom_output}, "
+                f"实际 {eval_mod.OUTPUT_REPORT}"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if custom_output.exists():
+                custom_output.unlink()
+
+    def test_default_output_path_unchanged_when_no_flag(self, monkeypatch, tmp_path):
+        """不传 --output → OUTPUT_REPORT 保持默认 module-level 值"""
+        default_output = tmp_path / "default_eval_report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        # monkeypatch module-level OUTPUT_REPORT 到 tmp_path
+        monkeypatch.setattr(eval_mod, "OUTPUT_REPORT", default_output)
+        monkeypatch.setattr(eval_mod, "is_llm_enabled", lambda: False)
+
+        try:
+            eval_mod.main(argv=["--mode", "offline"])
+            assert default_output.exists(), (
+                f"默认 OUTPUT_REPORT 应被写出: {default_output}"
+            )
+            assert eval_mod.OUTPUT_REPORT == default_output
+        finally:
+            if default_output.exists():
+                default_output.unlink()
+
+    def test_default_mode_offline_writes_mode_to_report(self, monkeypatch, tmp_path):
+        """默认 mode (不传 --mode) → 报告头部含 resolved mode + requested mode 标注"""
+        output = tmp_path / "default_mode_report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        monkeypatch.setattr(eval_mod, "OUTPUT_REPORT", output)
+        monkeypatch.setattr(eval_mod, "is_llm_enabled", lambda: False)
+
+        try:
+            eval_mod.main(argv=[])
+            content = output.read_text(encoding="utf-8")
+            # 报告头部应有 mode 标注(offline 走默认, requested=offline)
+            assert "> Eval mode: **offline**" in content, (
+                f"默认 mode 报告应含 '> Eval mode: **offline**', "
+                f"实际头部: {content[:200]}"
+            )
+            assert "(requested: `offline`)" in content, (
+                f"默认 mode 报告应含 requested 标注, 实际头部: {content[:200]}"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()

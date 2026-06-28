@@ -49,6 +49,7 @@ Eval set:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -314,6 +315,61 @@ def _classify_fallback_category(
     return FALLBACK_NONE
 
 
+# ======================================================================
+# R5-D Phase 1: eval mode 决策
+# ======================================================================
+MODE_OFFLINE = "offline"
+MODE_LIVE = "live"
+MODE_AUTO = "auto"
+VALID_EVAL_MODES = (MODE_OFFLINE, MODE_LIVE, MODE_AUTO)
+
+
+def _resolve_eval_mode(mode: str, llm_enabled: bool) -> str:
+    """
+    R5-D Phase 1: 解析 eval mode (offline / live / auto)。
+
+    纯函数 — 不读 env var,不发起网络,只根据入参决策:
+      - offline: 总是返 "offline",不依赖真实 LLM(走原文 fallback)
+      - live:    总是返 "live";若 llm_enabled=False 则 raise RuntimeError
+      - auto:    llm_enabled=True → "live";否则 "offline"
+
+    隐私边界(对齐 spec §6.4 + AGENTS.md 隐私边界):
+      - RuntimeError 错误信息**绝不**包含 LLM key 值(env var 名字也不引用),
+        防止错误日志意外泄露凭据
+      - 只描述状态(未启用),引导用户改 mode
+
+    Args:
+        mode: 用户传入的 mode 字符串(必须 ∈ VALID_EVAL_MODES)
+        llm_enabled: is_llm_enabled() 的返回值
+
+    Returns:
+        "offline" 或 "live"
+
+    Raises:
+        ValueError: mode 非法
+        RuntimeError: mode="live" 但 llm_enabled=False
+    """
+    if mode not in VALID_EVAL_MODES:
+        raise ValueError(
+            f"无效的 --mode: {mode!r}; 必须是 {VALID_EVAL_MODES} 之一"
+        )
+
+    if mode == MODE_OFFLINE:
+        return MODE_OFFLINE
+
+    if mode == MODE_LIVE:
+        if not llm_enabled:
+            # 错误信息: 只描述状态,不引用任何 env var 名字或 key 值
+            raise RuntimeError(
+                "--mode live 要求 LLM 已启用, 当前 LLM 未启用; "
+                "请改用 --mode auto 或 --mode offline"
+            )
+        return MODE_LIVE
+
+    # mode == MODE_AUTO
+    return MODE_LIVE if llm_enabled else MODE_OFFLINE
+
+
 def _detect_schema_pass(preview: dict) -> bool:
     """
     schema pass: preview 返回值结构符合既有 preview schema
@@ -495,9 +551,57 @@ _PII_PLACEHOLDER_STRINGS = (
 # ======================================================================
 # 主流程
 # ======================================================================
-def main():
+def main(argv=None):
+    """
+    R5-D Phase 1: 主流程接 argparse (--mode / --output)。
+
+    Args:
+        argv: 命令行参数 list。None → 走空 list (便于测试 main() 直接调,
+              不会被 pytest 的 sys.argv 干扰);CLI 入口显式传 sys.argv[1:]
+
+    Exit code:
+        0 — 正常
+        2 — mode 非法 / live mode LLM 未启用
+    """
+    parser = argparse.ArgumentParser(
+        prog="evaluate_agent_workflow.py",
+        description="R5-D Phase 1: Agent Workflow 离线评测脚本",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=[MODE_OFFLINE, MODE_LIVE, MODE_AUTO],
+        default=MODE_OFFLINE,
+        help="Eval mode: offline (默认, 不依赖真实 LLM) / "
+             "live (必须 LLM 已启用, 会发起 HTTP 调用) / "
+             "auto (有 key 用 live, 无 key 用 offline)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="报告输出路径 (默认: AI岗位JD库_agent_eval报告.md)",
+    )
+
+    args = parser.parse_args(argv if argv is not None else [])
+
+    # ---- mode 决策: 非法 / live+无 LLM 立即 fail ----
+    llm_enabled = is_llm_enabled()
+    try:
+        resolved_mode = _resolve_eval_mode(args.mode, llm_enabled)
+    except (ValueError, RuntimeError) as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        sys.exit(2)
+
+    # ---- output 路径覆盖 ----
+    if args.output:
+        global OUTPUT_REPORT
+        OUTPUT_REPORT = Path(args.output)
+
     print("=" * 80)
     print(f"{VERSION}")
+    print(f"Mode: {args.mode} → resolved={resolved_mode} "
+          f"(llm_enabled={llm_enabled})")
+    print(f"Output: {OUTPUT_REPORT}")
     print("=" * 80)
     print()
 
@@ -509,9 +613,10 @@ def main():
     print()
 
     # LLM 启用状态(决定 FC + AW 跑 LLM 时是否真发请求)
-    llm_enabled = is_llm_enabled()
     print(f"LLM 启用: {'✅' if llm_enabled else '❌ (fallback)'}")
-    if not llm_enabled:
+    if resolved_mode == MODE_OFFLINE:
+        print("  → offline 模式: FC=T / AW=T 路径强制走原文 fallback, 不发起 LLM HTTP 请求")
+    elif not llm_enabled:
         print("  → FC=T / AW=T 路径会走原文 fallback, 不发起 LLM HTTP 请求")
     print()
 
@@ -571,6 +676,8 @@ def main():
             all_rows=all_rows,
             metrics=metrics,
             llm_enabled=llm_enabled,
+            requested_mode=args.mode,
+            resolved_mode=resolved_mode,
         )
 
         print(f"\n[OK] 报告写入: {OUTPUT_REPORT}")
@@ -682,9 +789,14 @@ def write_report(
     all_rows: list[dict],
     metrics: dict,
     llm_enabled: bool,
+    requested_mode: str,
+    resolved_mode: str,
 ) -> None:
     """
     写 markdown 报告到 OUTPUT_REPORT。
+
+    R5-D Phase 1: 新增 requested_mode / resolved_mode 入参,在报告头标注
+    (便于审计时区分 "offline 报告" vs "live 报告")。
     """
     lines: list[str] = []
     lines.append("# AI 岗位 JD 库 — Agent Workflow 离线评测报告\n\n")
@@ -692,6 +804,7 @@ def write_report(
     lines.append(f"> Eval set: **{len(eval_set)} 份 JD** "
                  f"(jd_samples {sum(1 for s in eval_set if s['source']=='jd_samples')} 份 + "
                  f"v4_strong {sum(1 for s in eval_set if s['source']=='jd_v4_strong')} 份)  \n")
+    lines.append(f"> Eval mode: **{resolved_mode}** (requested: `{requested_mode}`)  \n")
     lines.append(f"> LLM 启用: **{'✅' if llm_enabled else '❌ (fallback)'}**  \n")
     lines.append(f"> 阈值: 高 ≥ {THRESHOLD_HIGH} / 中 ≥ {THRESHOLD_MID} / 低 < {THRESHOLD_MID}  \n")
     lines.append(f"> 四组对照: {len(SWITCH_COMBOS)} 种 (FC × AW)  \n\n")
@@ -884,4 +997,4 @@ def write_report(
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

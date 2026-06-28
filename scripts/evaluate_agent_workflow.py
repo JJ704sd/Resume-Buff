@@ -57,6 +57,7 @@ import time
 from pathlib import Path
 from collections import Counter
 from typing import Optional
+from urllib.parse import urlparse
 
 # ---- 路径: 把 backend/ 加到 sys.path 让 core.* 可导入 ----
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -370,6 +371,57 @@ def _resolve_eval_mode(mode: str, llm_enabled: bool) -> str:
     return MODE_LIVE if llm_enabled else MODE_OFFLINE
 
 
+# ======================================================================
+# R5-D Phase 2: 报告元信息 — llm_mode / llm_enabled / llm_model / llm_base_url_host
+# ======================================================================
+
+# 跟 backend/core/llm_rewriter.py 同步 (DEFAULT_BASE_URL / DEFAULT_MODEL)
+# 不直接 import llm_rewriter 是为了解耦 — eval 脚本只读 env var,
+# 重复 DEFAULT 字面量风险低, llm_rewriter 改了这里手动同步即可
+_DEFAULT_BASE_URL_EVAL = "https://api.openai.com/v1"
+_DEFAULT_MODEL_EVAL = "gpt-4o-mini"
+
+
+def _get_llm_eval_config(llm_enabled: bool, resolved_mode: str) -> dict:
+    """
+    R5-D Phase 2: 报告顶部元信息 helper。
+
+    输入: llm_enabled (is_llm_enabled() 的返回值) + resolved_mode ("offline"/"live")
+    输出 dict (4 字段, 顺序固定):
+      - llm_mode:         "offline" / "live" — 反映实际跑的模式
+      - llm_enabled:      bool — 反映当前进程 LLM 是否启用
+      - llm_model:        str  — 当前 LLM_MODEL env var (空时回落到 default)
+      - llm_base_url_host:str  — 当前 LLM_BASE_URL 的 host 部分 (无 path/query)
+
+    隐私边界(对齐 spec §6.4 + AGENTS.md 隐私边界):
+      - **绝不**读 / 打印 / 写入 LLM_API_KEY
+      - base_url 只输出 host (urllib.parse.urlparse(...).hostname),
+        不含 scheme / path / query / fragment — 即使 endpoint 含敏感路径也不泄露
+      - urlparse 失败 / 空字符串 → llm_base_url_host 返空字符串 (不抛)
+
+    纯函数 — 不写文件, 不发起网络, 可被测试直接调用。
+    """
+    # 读 model (跟 llm_rewriter._call_with_retry 用同源 DEFAULT_MODEL)
+    raw_model = os.environ.get("LLM_MODEL", "").strip()
+    model = raw_model or _DEFAULT_MODEL_EVAL
+
+    # 读 base_url — 只抽 hostname, 不输出 path/query
+    raw_base_url = os.environ.get("LLM_BASE_URL", "").strip().rstrip("/")
+    base_url_for_parse = raw_base_url or _DEFAULT_BASE_URL_EVAL
+    try:
+        parsed = urlparse(base_url_for_parse if "://" in base_url_for_parse else f"https://{base_url_for_parse}")
+        host = parsed.hostname or ""
+    except Exception:
+        host = ""
+
+    return {
+        "llm_mode": resolved_mode,
+        "llm_enabled": llm_enabled,
+        "llm_model": model,
+        "llm_base_url_host": host,
+    }
+
+
 def _detect_schema_pass(preview: dict) -> bool:
     """
     schema pass: preview 返回值结构符合既有 preview schema
@@ -670,6 +722,9 @@ def main(argv=None):
         # schema_pass_rate / fallback_rate / 平均 latency / score 一致性
         metrics = compute_metrics(all_rows)
 
+        # ---- R5-D Phase 2: 报告元信息 ----
+        llm_eval_config = _get_llm_eval_config(llm_enabled, resolved_mode)
+
         # ---- 写报告 ----
         write_report(
             eval_set=eval_set,
@@ -678,6 +733,7 @@ def main(argv=None):
             llm_enabled=llm_enabled,
             requested_mode=args.mode,
             resolved_mode=resolved_mode,
+            llm_eval_config=llm_eval_config,
         )
 
         print(f"\n[OK] 报告写入: {OUTPUT_REPORT}")
@@ -791,12 +847,17 @@ def write_report(
     llm_enabled: bool,
     requested_mode: str,
     resolved_mode: str,
+    llm_eval_config: Optional[dict] = None,
 ) -> None:
     """
     写 markdown 报告到 OUTPUT_REPORT。
 
     R5-D Phase 1: 新增 requested_mode / resolved_mode 入参,在报告头标注
     (便于审计时区分 "offline 报告" vs "live 报告")。
+
+    R5-D Phase 2: 新增 llm_eval_config 入参 (来自 _get_llm_eval_config),
+    在报告顶部新增 "LLM 元信息 (R5-D Phase 2)" 章节展示 llm_mode /
+    llm_enabled / llm_model / llm_base_url_host — 不含任何 API key。
     """
     lines: list[str] = []
     lines.append("# AI 岗位 JD 库 — Agent Workflow 离线评测报告\n\n")
@@ -808,6 +869,20 @@ def write_report(
     lines.append(f"> LLM 启用: **{'✅' if llm_enabled else '❌ (fallback)'}**  \n")
     lines.append(f"> 阈值: 高 ≥ {THRESHOLD_HIGH} / 中 ≥ {THRESHOLD_MID} / 低 < {THRESHOLD_MID}  \n")
     lines.append(f"> 四组对照: {len(SWITCH_COMBOS)} 种 (FC × AW)  \n\n")
+
+    # ---- R5-D Phase 2: LLM 元信息章节 ----
+    # 放在头部下方、Eval set 概览之前 — 让审计一眼看到本次跑的 LLM 配置
+    if llm_eval_config:
+        lines.append("## 0、LLM 元信息 (R5-D Phase 2)\n\n")
+        lines.append("| 字段 | 值 |\n")
+        lines.append("|---|---|\n")
+        lines.append(f"| `llm_mode` | `{llm_eval_config.get('llm_mode', '')}` |\n")
+        lines.append(f"| `llm_enabled` | `{llm_eval_config.get('llm_enabled', False)}` |\n")
+        lines.append(f"| `llm_model` | `{llm_eval_config.get('llm_model', '')}` |\n")
+        lines.append(f"| `llm_base_url_host` | `{llm_eval_config.get('llm_base_url_host', '')}` |\n")
+        lines.append("\n")
+        lines.append("> 隐私边界: 报告不含任何 API key 类凭据; "
+                     "base_url 只展示 host 部分, 不含 path / query / fragment。\n\n")
 
     lines.append("## 一、Eval set 概览\n\n")
     lines.append("| jd_id | company | role_id | source | expected_label | text 长度 |\n")

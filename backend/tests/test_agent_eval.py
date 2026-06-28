@@ -27,6 +27,7 @@ R5-A Phase 4: Agent eval 离线评测脚本测试
 """
 import re
 import sys
+import os
 from pathlib import Path
 
 # 把 scripts/ 加到 sys.path 让 evaluate_agent_workflow 可导
@@ -615,6 +616,334 @@ class TestEvalCliOutput:
             )
             assert "(requested: `offline`)" in content, (
                 f"默认 mode 报告应含 requested 标注, 实际头部: {content[:200]}"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+
+# =========================================================================
+# R5-D Phase 2: 报告元信息 — llm_mode / llm_enabled / llm_model / llm_base_url_host
+# =========================================================================
+class TestEvalLlmMetadataHelper:
+    """
+    R5-D Phase 2: _get_llm_eval_config helper 单元测试。
+
+    锁点:
+      - 返回 dict 含 4 字段 (llm_mode / llm_enabled / llm_model / llm_base_url_host)
+      - 绝不读 LLM_API_KEY (即使 env 设了 sentinel, 输出 dict 不含它)
+      - base_url 含 path/query → 只输出 host 部分
+    """
+
+    def test_helper_returns_4_required_fields(self, monkeypatch):
+        """helper 返回 dict 含 4 字段"""
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        config = eval_mod._get_llm_eval_config(False, "offline")
+        assert set(config.keys()) == {
+            "llm_mode", "llm_enabled", "llm_model", "llm_base_url_host",
+        }, f"_get_llm_eval_config 应返回 4 字段, 实际 {set(config.keys())}"
+        assert config["llm_mode"] == "offline"
+        assert config["llm_enabled"] is False
+        # 默认 model 应回落到 helper 内部 DEFAULT
+        assert isinstance(config["llm_model"], str) and len(config["llm_model"]) > 0
+        assert isinstance(config["llm_base_url_host"], str)
+
+    def test_helper_propagates_live_mode_and_llm_enabled(self, monkeypatch):
+        """helper 把入参 llm_enabled / resolved_mode 准确反映到输出"""
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        config = eval_mod._get_llm_eval_config(True, "live")
+        assert config["llm_mode"] == "live"
+        assert config["llm_enabled"] is True
+
+    def test_helper_does_not_read_api_key(self, monkeypatch):
+        """helper 不读 LLM_API_KEY (即使 env 设了 sentinel, 输出 dict 不含它)"""
+        sentinel_key = "sk-DO-NOT-LEAK-12345-abcdef-DO-NOT-LEAK"
+        monkeypatch.setenv("LLM_API_KEY", sentinel_key)
+        config = eval_mod._get_llm_eval_config(False, "offline")
+        # 输出 dict 任何字段都不应含 sentinel
+        for k, v in config.items():
+            assert sentinel_key not in str(v), (
+                f"_get_llm_eval_config 不应读 LLM_API_KEY; "
+                f"字段 {k}={v!r} 含 sentinel"
+            )
+
+    def test_helper_base_url_host_extracts_host_only(self, monkeypatch):
+        """base_url 含 path/query/fragment 时, helper 只抽 host"""
+        monkeypatch.setenv(
+            "LLM_BASE_URL",
+            "https://api.example.com/v1/chat/completions?token=abc",
+        )
+        config = eval_mod._get_llm_eval_config(True, "live")
+        assert config["llm_base_url_host"] == "api.example.com", (
+            f"只应抽 host, 实际 {config['llm_base_url_host']!r}"
+        )
+
+    def test_helper_base_url_host_hides_path(self, monkeypatch):
+        """base_url_host 输出不含 path"""
+        monkeypatch.setenv(
+            "LLM_BASE_URL",
+            "https://secret.example.com/v1/internal/endpoint",
+        )
+        config = eval_mod._get_llm_eval_config(True, "live")
+        assert "/v1/" not in config["llm_base_url_host"], (
+            f"base_url_host 不应含 path, 实际 {config['llm_base_url_host']!r}"
+        )
+        assert "internal" not in config["llm_base_url_host"]
+        assert "endpoint" not in config["llm_base_url_host"]
+        assert config["llm_base_url_host"] == "secret.example.com"
+
+    def test_helper_base_url_host_hides_query(self, monkeypatch):
+        """base_url_host 输出不含 query 参数"""
+        monkeypatch.setenv(
+            "LLM_BASE_URL",
+            "https://api.example.com/v1/chat?api_key=should_not_leak&foo=bar",
+        )
+        config = eval_mod._get_llm_eval_config(True, "live")
+        assert "api_key" not in config["llm_base_url_host"]
+        assert "should_not_leak" not in config["llm_base_url_host"]
+        assert "foo=bar" not in config["llm_base_url_host"]
+        assert "?" not in config["llm_base_url_host"]
+
+    def test_helper_uses_env_model_when_set(self, monkeypatch):
+        """env LLM_MODEL 非空时, helper 读它(不回落 default)"""
+        monkeypatch.setenv("LLM_MODEL", "claude-3-5-sonnet-test")
+        config = eval_mod._get_llm_eval_config(False, "offline")
+        assert config["llm_model"] == "claude-3-5-sonnet-test", (
+            f"LLM_MODEL env 应被读到, 实际 {config['llm_model']!r}"
+        )
+
+    def test_helper_handles_missing_or_malformed_base_url(self, monkeypatch):
+        """base_url 空字符串 / 异常 → host 空字符串 (不抛)"""
+        # 空字符串
+        monkeypatch.setenv("LLM_BASE_URL", "")
+        config = eval_mod._get_llm_eval_config(False, "offline")
+        # 空时会回落到 helper 内部 default → 应有 host
+        assert config["llm_base_url_host"] == "api.openai.com", (
+            f"空 base_url 应回落到 default host, 实际 {config['llm_base_url_host']!r}"
+        )
+        # 完全怪异的字符串 — 不抛, host 可能是空也可能解析到某种 host
+        monkeypatch.setenv("LLM_BASE_URL", "not a url at all !!!")
+        config = eval_mod._get_llm_eval_config(False, "offline")
+        assert isinstance(config["llm_base_url_host"], str)
+
+
+class TestEvalReportIncludesLlmMetadata:
+    """
+    R5-D Phase 2: write_report() 输出含 LLM 元信息章节 + 4 字段 (spec 任务点 #2)。
+
+    用 write_report() 直接调 (而非 main()), 避免设 LLM_API_KEY 触发慢路径;
+    构造最小化输入覆盖报告章节渲染逻辑。
+
+    锁点:
+      - 报告含 '## 0、LLM 元信息' 章节
+      - 含 4 字段名 (llm_mode / llm_enabled / llm_model / llm_base_url_host)
+      - 章节顺序: 在 '## 一、Eval set 概览' 之前
+    """
+
+    @staticmethod
+    def _make_min_eval_set():
+        return [{
+            "jd_id": "TEST_JD_001",
+            "company": "TestCo",
+            "title": "Test JD",
+            "role_id": "algorithm",
+            "text": "Test JD text.",
+            "expected_label": "推荐投",
+            "expected_rec": "高",
+            "source": "jd_samples",
+        }]
+
+    @staticmethod
+    def _make_min_metrics():
+        return {
+            "by_combo": {
+                "baseline (FC=F, AW=F)": {
+                    "n": 1, "schema_pass_rate": 1.0, "fallback_rate": 0.0,
+                    "pii_safe_rate": 1.0, "avg_latency_ms": 100,
+                    "tools_used_top": [], "fallback_category_breakdown": {"none": 1},
+                    "any_error": False,
+                },
+            },
+            "score_consistency": [
+                {"jd_id": "TEST_JD_001", "consistent": True, "score_values": [85]},
+            ],
+            "rec_consistency": [
+                {"jd_id": "TEST_JD_001", "consistent": True, "rec_values": ["高"]},
+            ],
+            "n_score_consistent": 1,
+            "n_rec_consistent": 1,
+            "total_jds": 1,
+            "fallback_category_total": {"none": 1},
+        }
+
+    @staticmethod
+    def _make_min_rows():
+        return [{
+            "jd_id": "TEST_JD_001",
+            "role_id": "algorithm",
+            "expected_label": "推荐投",
+            "expected_rec": "高",
+            "score": 85,
+            "recommendation": "高",
+            "schema_pass": True,
+            "fallback_used": False,
+            "fallback_category": "none",
+            "tools_used": [],
+            "request_id": None,
+            "request_id_short": None,
+            "latency_ms": 100,
+            "error_type": None,
+            "pii_safe": True,
+            "source": "jd_samples",
+            "combo": "baseline (FC=F, AW=F)",
+            "combo_fc": False,
+            "combo_aw": False,
+        }]
+
+    def test_write_report_includes_llm_metadata_section_and_4_fields(self, tmp_path):
+        """write_report() 输出含 '## 0、LLM 元信息' 章节 + 4 字段名 (spec 任务点 #2)"""
+        output = tmp_path / "report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        eval_mod.OUTPUT_REPORT = output
+        try:
+            eval_mod.write_report(
+                eval_set=self._make_min_eval_set(),
+                all_rows=self._make_min_rows(),
+                metrics=self._make_min_metrics(),
+                llm_enabled=False,
+                requested_mode="offline",
+                resolved_mode="offline",
+                llm_eval_config={
+                    "llm_mode": "offline",
+                    "llm_enabled": False,
+                    "llm_model": "gpt-4o-mini",
+                    "llm_base_url_host": "api.openai.com",
+                },
+            )
+            content = output.read_text(encoding="utf-8")
+            assert "## 0、LLM 元信息" in content, (
+                f"报告应含 '## 0、LLM 元信息' 章节, 头部: {content[:600]}"
+            )
+            for field in ("llm_mode", "llm_enabled", "llm_model", "llm_base_url_host"):
+                assert field in content, (
+                    f"报告应含字段名 {field!r}"
+                )
+            # 章节顺序: LLM 元信息 在 Eval set 概览 之前
+            meta_pos = content.find("## 0、LLM 元信息")
+            eval_set_pos = content.find("## 一、Eval set 概览")
+            assert 0 <= meta_pos < eval_set_pos, (
+                f"LLM 元信息章节应在 Eval set 概览之前: "
+                f"meta_pos={meta_pos}, eval_set_pos={eval_set_pos}"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+
+class TestEvalReportDoesNotIncludeApiKey:
+    """
+    R5-D Phase 2: 报告不含 LLM_API_KEY 的值或变量名引用 (spec 任务点 #4)。
+
+    验证策略:
+      - 即使设 LLM_API_KEY env, helper 输出 dict 不含 sentinel
+      - write_report 渲染 helper 输出后, 报告正文不含 sentinel, 也不含 'LLM_API_KEY' 字样
+    """
+
+    def test_helper_output_and_report_omit_api_key(self, tmp_path, monkeypatch):
+        """helper 输出 + write_report 渲染 → 报告不含 LLM_API_KEY 值/env var 名 (spec 任务点 #4)"""
+        sentinel_key = "sk-DO-NOT-LEAK-sentinel-9876543210-DO-NOT-LEAK"
+        monkeypatch.setenv("LLM_API_KEY", sentinel_key)
+        output = tmp_path / "report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        eval_mod.OUTPUT_REPORT = output
+        try:
+            # 1. helper 输出不应含 sentinel (spec 任务点 #4 子项 #1)
+            helper_output = eval_mod._get_llm_eval_config(False, "offline")
+            for k, v in helper_output.items():
+                assert sentinel_key not in str(v), (
+                    f"helper 不应输出含 api key: 字段 {k}={v!r} 含 sentinel"
+                )
+
+            # 2. write_report 渲染 helper 输出 → 报告不含 sentinel + 不含 'LLM_API_KEY' 字样
+            eval_mod.write_report(
+                eval_set=TestEvalReportIncludesLlmMetadata._make_min_eval_set(),
+                all_rows=TestEvalReportIncludesLlmMetadata._make_min_rows(),
+                metrics=TestEvalReportIncludesLlmMetadata._make_min_metrics(),
+                llm_enabled=False,
+                requested_mode="offline",
+                resolved_mode="offline",
+                llm_eval_config=helper_output,
+            )
+            content = output.read_text(encoding="utf-8")
+            assert sentinel_key not in content, (
+                f"报告不应含 LLM_API_KEY 的值, 发现 sentinel: {sentinel_key}"
+            )
+            # write_report 自己不应在章节里输出 LLM_API_KEY env var 名
+            assert "LLM_API_KEY" not in content, (
+                f"报告不应在正文引用 'LLM_API_KEY' env var 名"
+            )
+        finally:
+            eval_mod.OUTPUT_REPORT = original_output
+            if output.exists():
+                output.unlink()
+
+
+class TestEvalReportBaseUrlHostHidesPathAndQuery:
+    """
+    R5-D Phase 2: base_url_host 只输出 host, 不含 path / query (spec 任务点 #3 + #5)。
+
+    验证: env 设含敏感 path + query 的 base_url, helper 抽出的 host 不含 path/query,
+    write_report 渲染后报告里也不展示 path/query。
+    """
+
+    def test_helper_and_report_hide_base_url_path_and_query(self, tmp_path, monkeypatch):
+        """base_url 含 path/query → helper 只抽 host, write_report 渲染后只展示 host (spec 任务点 #3 + #5)"""
+        base_url = "https://api.example.com/v1/internal/chat?secret=TOPSECRET&foo=bar"
+        monkeypatch.setenv("LLM_BASE_URL", base_url)
+        output = tmp_path / "report.md"
+        original_output = eval_mod.OUTPUT_REPORT
+        eval_mod.OUTPUT_REPORT = output
+        try:
+            helper_output = eval_mod._get_llm_eval_config(False, "offline")
+            assert helper_output["llm_base_url_host"] == "api.example.com", (
+                f"helper 应只抽 host, 实际 {helper_output['llm_base_url_host']!r}"
+            )
+            # 渲染到报告
+            eval_mod.write_report(
+                eval_set=TestEvalReportIncludesLlmMetadata._make_min_eval_set(),
+                all_rows=TestEvalReportIncludesLlmMetadata._make_min_rows(),
+                metrics=TestEvalReportIncludesLlmMetadata._make_min_metrics(),
+                llm_enabled=False,
+                requested_mode="offline",
+                resolved_mode="offline",
+                llm_eval_config=helper_output,
+            )
+            content = output.read_text(encoding="utf-8")
+            # host 应展示
+            assert "api.example.com" in content, (
+                f"报告应展示 host 'api.example.com'"
+            )
+            # path / query 不应展示
+            assert "/v1/internal/chat" not in content, (
+                f"报告不应含 base_url path '/v1/internal/chat'"
+            )
+            assert "internal" not in content, (
+                f"报告不应含 base_url path 片段 'internal'"
+            )
+            assert "secret=TOPSECRET" not in content, (
+                f"报告不应含 base_url query 'secret=TOPSECRET'"
+            )
+            assert "TOPSECRET" not in content, (
+                f"报告不应含 query 参数值 'TOPSECRET'"
+            )
+            assert "foo=bar" not in content, (
+                f"报告不应含 query 参数 'foo=bar'"
             )
         finally:
             eval_mod.OUTPUT_REPORT = original_output

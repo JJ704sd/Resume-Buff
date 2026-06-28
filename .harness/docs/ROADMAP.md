@@ -35,7 +35,7 @@
   - **R5-C Phase 4** — 前端高级 Agent 面板契约(`AgentSummary` / `EvidenceSummary` / `ExternalResumePerspective` / `BulletEvaluation` 类型 + `preview/generate` 透传 enable_agent_workflow / session_id / external_resume_text);前端 App.vue 默认收起诊断面板
   - **R5-C Phase 5** — 文档与回放闭环(`scripts/replay_agent_trace.py` 加 `## Fallback Summary` 段 + `--tools-used` 参数触发 `## Tools Cross-Validation (R5-C Phase 5)` 段 + 5 个常量分类 `none` / `tool_error_fallback` / `unknown`;ROADMAP / README / AGENTS 三方同步 baseline 530→544 测试数)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **544 个 pytest 全绿 + 0 skipped**(R5-B Phase 2A baseline 497 + **17 R5-C Phase 1** in test_agent_eval.py: 3 TestEvalUsesAgentSummaryRequestId + 5 TestEvalToolsUsedPrefersAgentSummary + 3 TestEvalFallbackCategoryNone + 4 TestEvalFallbackCategoryLlmDisabled + 2 TestEvalReportNoRawRequestIdLeak + **16 R5-C Phase 2** NEW FILE `test_r5c_phase2_external_resume.py`: 2 TestExternalResumeApiField + 3 TestExternalResumeWorkflowUsesText + 2 TestParseExternalResumeTool + 2 TestCompareResumeJdTool + 1 TestExternalResumePermission + 3 TestExternalResumePrivacy + 1 TestExternalResumePreviewOutput + 2 TestExternalResumeOldPathUnchanged + **10 R5-C Phase 3** NEW FILE `test_r5c_phase3_bullet_evaluation.py`: 1 TestBulletEvaluationSelectsTopProjects + 2 TestBulletEvaluationOutputSchema + 1 TestBulletEvaluationNoRawBulletInTrace + 1 TestBulletEvaluationSkippedWithoutJd + 2 TestBulletEvaluationNoBulletsNotError + 1 TestAffectsPreviewStillFalseUntilConsumed + 2 TestBulletEvaluationOldPathUnchanged + **14 R5-C Phase 5** in test_agent_trace_replay.py: 3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C)
+- **547 个 pytest 全绿 + 0 skipped**(2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544,R5-D Phase 0 把活跃文档基线从 544 修正为 547);计算口径:R5-B Phase 2A baseline 497 + **17 R5-C Phase 1** in test_agent_eval.py: 3 TestEvalUsesAgentSummaryRequestId + 5 TestEvalToolsUsedPrefersAgentSummary + 3 TestEvalFallbackCategoryNone + 4 TestEvalFallbackCategoryLlmDisabled + 2 TestEvalReportNoRawRequestIdLeak + **16 R5-C Phase 2** NEW FILE `test_r5c_phase2_external_resume.py`: 2 TestExternalResumeApiField + 3 TestExternalResumeWorkflowUsesText + 2 TestParseExternalResumeTool + 2 TestCompareResumeJdTool + 1 TestExternalResumePermission + 3 TestExternalResumePrivacy + 1 TestExternalResumePreviewOutput + 2 TestExternalResumeOldPathUnchanged + **10 R5-C Phase 3** NEW FILE `test_r5c_phase3_bullet_evaluation.py`: 1 TestBulletEvaluationSelectsTopProjects + 2 TestBulletEvaluationOutputSchema + 1 TestBulletEvaluationNoRawBulletInTrace + 1 TestBulletEvaluationSkippedWithoutJd + 2 TestBulletEvaluationNoBulletsNotError + 1 TestAffectsPreviewStillFalseUntilConsumed + 2 TestBulletEvaluationOldPathUnchanged + **14 R5-C Phase 5** in test_agent_trace_replay.py: 3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C)
 
 **最近 7 个 commit** (`main` / `origin/main` 当前基线):
 - `c6ead64` feat(round5-c#phase2): 外部简历文本进入 Agent workflow
@@ -140,7 +140,7 @@
   2. Phase 2 `external_resume_text` 字段默认 None 完全不污染老路径(preview 不写 `external_resume_perspective` 字段); 但 `enable_external_resume` bool 仍保留向后兼容
   3. Phase 3 evaluate step 改 `has_jd` 触发(不再依赖 FC),但 evaluate_bullet_jd_match 工具仍 `affects_preview=False`(诊断输出,不注 build_sections / rewrite_highlights)
   4. Phase 5 replay `_observed_tools` 严格只接受 str 类型工具名(非 str / None / 空 字符串统一跳过),防止 events 里脏数据污染交叉验证
-- **效果**:**544 passed + 0 skipped**(R5-B Phase 2A baseline 497 + 17 Phase 1 + 16 Phase 2 + 10 Phase 3 + 14 Phase 5); 五阶段均零 P0/P1 安全阻塞; `enable_agent_workflow=False` 老路径字节级稳定; eval 报告可被 Phase 1 fallback taxonomy 解释; 外部简历能进入 Agent workflow 诊断(原文不泄漏); per-bullet 评估可解释但不污染改写
+- **效果**:**547 passed + 0 skipped**(R5-D Phase 0 起活跃基线,2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544);计算口径沿用 R5-C:R5-B Phase 2A baseline 497 + 17 Phase 1 + 16 Phase 2 + 10 Phase 3 + 14 Phase 5;五阶段均零 P0/P1 安全阻塞; `enable_agent_workflow=False` 老路径字节级稳定; eval 报告可被 Phase 1 fallback taxonomy 解释; 外部简历能进入 Agent workflow 诊断(原文不泄漏); per-bullet 评估可解释但不污染改写
 - **spec 文档**: `.harness/docs/round5-c-agent-capability-spec.md`(5 phase 全部 ✅)
 - **下一步**:等用户明确启动下一轮(如真实 LLM key 接入、GUI 面板实际打开、vector DB RAG 升级等)
 
@@ -324,7 +324,7 @@
 | 后端入口 | `backend/main.py` |
 | 核心域 | `backend/core/generator.py` + `backend/core/jd_parser.py` + `backend/core/llm_rewriter.py` + `backend/core/jd_ranker.py` + **R4 session** `backend/core/session.py` + **R5-A** `backend/core/agent_tools.py` + `backend/core/agent_workflow.py` + **`backend/core/evidence.py`** |
 | API | `backend/api/resume.py` + `backend/api/jd.py` |
-| 测试 | `backend/tests/` **544 pytest** (R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5) |
+| 测试 | `backend/tests/` **547 pytest** (R5-D Phase 0 起活跃基线,2026-06-28 push `414a7cd` 时 pre-push hook 实测;R5-C 收尾时为 544;计算口径沿用:R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5) |
 | 前端入口 | `frontend/src/App.vue` |
 | 设计文档 | `.harness/docs/` (含 `round5-c-agent-capability-spec.md` 5 phase 已 ✅) |
 | 项目记忆 | `.harness/memory/MEMORY.md` |
@@ -334,4 +334,4 @@
 
 ---
 
-_最后更新:2026-06-28 R5-C Phase 5 文档与回放闭环 收尾;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`);R5-B Phase 2A 已通过 PR #6 合并到 main(merge `09a2704`);R5-C Phase 1-5 全部落地 baseline 530→544 pytest 全绿,由 orchestrator 维护;下一轮候选待用户明确启动_
+_最后更新:2026-06-28 R5-C Phase 5 文档与回放闭环 收尾;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`);R5-B Phase 2A 已通过 PR #6 合并到 main(merge `09a2704`);R5-C Phase 1-5 全部落地 baseline 530→544 pytest 全绿(R5-C 收尾时快照,R5-D Phase 0 起活跃基线修正为 547 — 2026-06-28 push `414a7cd` 时 pre-push hook 实测);由 orchestrator 维护;下一轮候选待用户明确启动_

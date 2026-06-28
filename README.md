@@ -9,7 +9,7 @@
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
 - 当前功能基线:R5-C Phase 5,已合并 PR #7 (`codex/r5c-agent-closeout`)
-- 后端测试基线:544 passed + 0 skipped
+- 后端测试基线:547 passed + 0 skipped
 - 详细开发锁点:见 [AGENTS.md](AGENTS.md)
 - 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
 

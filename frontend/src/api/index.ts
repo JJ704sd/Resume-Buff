@@ -35,6 +35,76 @@ export interface Section {
   content: any
 }
 
+// ----- R5-C Phase 4: 前端高级 Agent 面板契约 -----
+// 仅在 enable_agent_workflow=True 时由后端 workflow preview 返回;
+// 老路径 (enable_agent_workflow=False) 字节级一致不返这些字段。
+// 前端展示只取摘要和计数, 不展示 text / jd / bullet 原文(隐私边界 spec §6.4)。
+
+export interface AgentSummary {
+  /** 短 uuid, "r" + 8 位 hex, 不含 PII / 时间戳 */
+  request_id: string
+  /** 任务图总步数(含本地步骤和工具步骤) */
+  steps_executed: number
+  /** 影响 preview 的有效工具(只列 affects_preview=True 且 status=success) */
+  tools_used: string[]
+  /** workflow 是否降级到旧路径 */
+  fallback_used: boolean
+  /** 降级原因(异常类型名 / 步骤名), fallback_used=False 时为 null */
+  fallback_reason: string | null
+  /** workflow 总耗时,毫秒 */
+  latency_ms: number
+}
+
+export interface EvidenceSummary {
+  /** 来源类型: "project" | "skill" | "honor" | "cert" */
+  source_type: string
+  /** 来源 id: project.id / skill group 名 / honor name / cert name */
+  source_id: string
+  /** 原文(text 字段前端不展示, 仅内部计算统计用, 防 PII 泄漏) */
+  text: string
+  /** 这条 evidence 里命中 JD 关键词的 normalized 列表(去重) */
+  matched_keywords: string[]
+  /** 置信度 [0.0, 1.0], round 3 位小数 */
+  confidence: number
+}
+
+export interface ExternalResumePerspective {
+  /** JD 要求 ∩ 简历里有 */
+  have_keywords: string[]
+  /** JD 要求 ∩ (简历里没 + 素材库也没) */
+  need_keywords: string[]
+  /** JD 要求 - 简历里有 ∩ 素材库能提供 */
+  materials_can_cover: string[]
+  /** 简历里有但 JD 没要求 */
+  resume_only_keywords: string[]
+  /** 补充建议, 1~N 条短句 */
+  suggestions: string[]
+  /** 4 维关键词计数 */
+  counts: {
+    have: number
+    need: number
+    materials_can_cover: number
+    resume_only: number
+  }
+}
+
+export interface BulletEvaluation {
+  /** 项目 id (来自 materials.json projects[].id) */
+  project_id: string
+  /** 该项目 highlights 列表内索引 (0..N-1) */
+  bullet_index: number
+  /** 命中 JD 关键词 */
+  matched_keywords: string[]
+  /** 缺失 JD 关键词 */
+  missing_keywords: string[]
+  /** == len(matched_keywords) */
+  matched_count: number
+  /** == len(missing_keywords) */
+  missing_count: number
+  /** 1 句人话建议(spec §4.3) */
+  suggestion: string
+}
+
 export interface PreviewResponse {
   target_role: string
   template: string  // Round 3 J
@@ -45,6 +115,15 @@ export interface PreviewResponse {
   // Round 3 I: 各 section / 各 project / 各 skill group 的 JD 命中关键词数
   // (None = 未传 JD,前端不显示角标)
   jd_match_counts: { projects: number[]; skill_groups: number[] } | null
+  // ----- R5-C Phase 4: Agent workflow 高级信息(可选, 仅 enable_agent_workflow=True 时存在) -----
+  /** workflow 摘要: request_id / 步数 / 有效工具 / fallback / 耗时 */
+  agent_summary?: AgentSummary
+  /** 轻量 RAG evidence 摘要 dict list(前端只统计 source_type / confidence, 不展示 text) */
+  evidence_summary?: EvidenceSummary[] | null
+  /** 外部简历 have/need/gap 4 维摘要(无外部简历 / workflow 未跑时为 null) */
+  external_resume_perspective?: ExternalResumePerspective | null
+  /** per-bullet 真实评估摘要(前端只展示计数 + 建议, 不展示 bullet 原文) */
+  bullet_evaluations?: BulletEvaluation[] | null
 }
 
 // ----- Round 2 #2: JD 解析 + 匹配度评分 -----
@@ -116,6 +195,15 @@ export const resumeApi = {
     jd_text?: string | null,
     // R3-M.3: academic 模板 detailed/compact 切换;其他模板传 null/undefined
     academic_layout?: 'compact' | 'detailed' | null,
+    // ----- R5-C Phase 4: Agent workflow 透传(后端默认 False 字节级一致) -----
+    /** R5-A Phase 1: 启用 Agent workflow(默认 False, 老路径不返 agent_summary 等字段) */
+    enable_agent_workflow?: boolean,
+    /** R4-F: Function Calling 开关(默认 False, 走老改写路径) */
+    enable_function_calling?: boolean,
+    /** R4-M: 会话 id(同 session 累积 LLM 历史, 默认 None 不传) */
+    session_id?: string | null,
+    /** R5-C Phase 2: 外部简历全文(默认 None 不传; 仅 enable_agent_workflow=True 时有意义) */
+    external_resume_text?: string | null,
   ) =>
     api
       .post<PreviewResponse>('/resume/preview', {
@@ -124,6 +212,10 @@ export const resumeApi = {
         template,
         jd_text,
         academic_layout: academic_layout ?? null,
+        enable_agent_workflow: enable_agent_workflow ?? false,
+        enable_function_calling: enable_function_calling ?? false,
+        session_id: session_id ?? null,
+        external_resume_text: external_resume_text ?? null,
       })
       .then(r => r.data),
   generate: (
@@ -132,11 +224,26 @@ export const resumeApi = {
     template?: string,
     jd_text?: string | null,
     academic_layout?: 'compact' | 'detailed' | null,
+    // ----- R5-C Phase 4: Agent workflow 透传(generate 路径仅前 3 个, external_resume 不传) -----
+    enable_agent_workflow?: boolean,
+    enable_function_calling?: boolean,
+    session_id?: string | null,
   ) =>
     api
       .post(
         '/resume/generate',
-        { target_role, intention, template, jd_text, academic_layout: academic_layout ?? null },
+        {
+          target_role,
+          intention,
+          template,
+          jd_text,
+          academic_layout: academic_layout ?? null,
+          enable_agent_workflow: enable_agent_workflow ?? false,
+          enable_function_calling: enable_function_calling ?? false,
+          session_id: session_id ?? null,
+          // spec §5.2: generate 路径不默认传 external_resume_text
+          // (字段在 PreviewRequest/GenerateRequest 已就位, 但前端不在 generate 调用)
+        },
         { responseType: 'blob' },
       )
       .then(r => r.data as Blob),

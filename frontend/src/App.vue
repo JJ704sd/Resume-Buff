@@ -12,6 +12,8 @@ import {
   type PreviewResponse,
   type JdMatchResult,
   type Section,
+  type EvidenceSummary,
+  type BulletEvaluation,
 } from './api'
 import ResumeUploader from './components/ResumeUploader.vue'  // R3-G
 
@@ -53,6 +55,40 @@ const jdAwareBadgeEnabled = ref(true)
 
 // Round 2 #3: LLM 改写 toggle (UI 提示,实际启用需后端 LLM_API_KEY)
 const llmHintShown = ref(true)
+
+// ----- R5-C Phase 4: Agent workflow 高级面板 -----
+// 默认关。开启时:
+//   - preview() 多传 enable_agent_workflow=true
+//   - previewData 上出现 agent_summary / evidence_summary /
+//     external_resume_perspective / bullet_evaluations 字段
+//   - 预览页头部出现默认收起的"Agent Workflow 诊断"面板
+//   - 不开启时整个面板不渲染,与原 UI 字节级一致(spec §5.4 验收)
+const enableAgentWorkflow = ref(false)
+// 前端生成的 session_id(不存 PII,纯随机 uuid4); 默认空 = 后端按 None 处理
+// 仅在 enable_agent_workflow=true 时后端才会真正用(否则字段透传但不影响主流程)
+const agentSessionId = ref<string>('')
+// el-collapse v-model — 空数组 = 全部收起
+const agentPanelActive = ref<string[]>([])
+
+function generateAgentSessionId(): string {
+  // crypto.randomUUID() 浏览器原生,无依赖。失败时退到 Math.random 兜底。
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch {
+    /* fallthrough */
+  }
+  return 's-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+// 勾上 enableAgentWorkflow 时 lazy 生成一次 session_id(后续同会话复用)
+function ensureAgentSessionId(): string {
+  if (!agentSessionId.value) {
+    agentSessionId.value = generateAgentSessionId()
+  }
+  return agentSessionId.value
+}
 
 // 流程
 type Stage = 'select' | 'preview' | 'done'
@@ -97,14 +133,27 @@ async function onPreview() {
     // R3-M.3: 仅 academic 模板透传 academic_layout,其他模板传 null(后端忽略)
     const layoutForBackend =
       selectedTemplate.value === 'academic' ? academicLayout.value : null
+    // R5-C Phase 4: Agent workflow 透传。enableAgentWorkflow=false 时,
+    // 后端走老路径字节级一致(spec §5.4 验收 — UI 不变)。
+    const enableAgent = enableAgentWorkflow.value
+    const sessionId = enableAgent ? ensureAgentSessionId() : null
+    const extResume = enableAgent && externalResumeText.value.trim()
+      ? externalResumeText.value.trim()
+      : null
     previewData.value = await resumeApi.preview(
       selectedRole.value,
       customIntention.value.trim() || undefined,
       selectedTemplate.value,
       jdForBackend,
       layoutForBackend,
+      enableAgent,
+      false,                       // enable_function_calling: 默认 False,保持旧路径
+      sessionId,
+      extResume,
     )
     stage.value = 'preview'
+    // 新一轮 preview 时,默认收起 Agent 面板,避免上一次展开状态残留
+    agentPanelActive.value = []
     ElMessage.success('预览已生成,请 review 每个模块内容')
   } catch (e: any) {
     ElMessage.error(`预览失败: ${e?.response?.data?.detail ?? e?.message ?? '未知错误'}`)
@@ -218,12 +267,19 @@ async function onConfirmDownload() {
     // R3-M.3: 仅 academic 模板透传 academic_layout
     const layoutForBackend =
       selectedTemplate.value === 'academic' ? academicLayout.value : null
+    // R5-C Phase 4: generate 路径透传 enable_agent_workflow + session_id,
+    // 跟 preview 保持一致(spec §5.2: generate 不传 external_resume_text)。
+    const enableAgent = enableAgentWorkflow.value
+    const sessionId = enableAgent && agentSessionId.value ? agentSessionId.value : null
     const blob = await resumeApi.generate(
       selectedRole.value,
       customIntention.value.trim() || undefined,
       selectedTemplate.value,
       jdForBackend,
       layoutForBackend,
+      enableAgent,
+      false,    // enable_function_calling: 默认 False
+      sessionId,
     )
     const roleName = currentRole.value?.name ?? '简历'
     const filename = `${summary.value?.name ?? '简历'}_${roleName}_${new Date().toISOString().slice(0, 10)}.docx`
@@ -279,6 +335,157 @@ function projectMatchCount(projectIndex: number): number {
 function skillMatchCount(groupIndex: number): number {
   return previewData.value?.jd_match_counts?.skill_groups[groupIndex] ?? 0
 }
+
+// ---------- R5-C Phase 4: Agent 面板辅助 (computed + helpers) ----------
+// 隐私边界: 仅展示摘要 / 计数 / 关键词标签 / 短建议; 不展示 evidence.text /
+// bullet 原文 / JD 原文 / 简历原文 / 真实姓名手机邮箱(spec §6.4)
+
+/** 预览页是否应渲染 Agent 面板 — 仅在 enable_agent_workflow=true 且后端真返回 agent_summary 时 */
+const hasAgentPanel = computed(() => Boolean(previewData.value?.agent_summary))
+
+/** evidence_summary 是否非空(用于折叠面板内的子节) */
+const evidenceList = computed<EvidenceSummary[]>(() => {
+  const es = previewData.value?.evidence_summary
+  return Array.isArray(es) ? es : []
+})
+const hasEvidence = computed(() => evidenceList.value.length > 0)
+
+/** bullet_evaluations 是否非空 */
+const bulletList = computed<BulletEvaluation[]>(() => {
+  const be = previewData.value?.bullet_evaluations
+  return Array.isArray(be) ? be : []
+})
+const hasBulletEvaluations = computed(() => bulletList.value.length > 0)
+
+/** 外部简历 perspective 是否存在且非空(无外部简历时为 null,前端不渲染) */
+const extPerspective = computed(() => previewData.value?.external_resume_perspective ?? null)
+const hasExtPerspective = computed(() =>
+  Boolean(extPerspective.value) && Boolean(extPerspective.value?.counts),
+)
+
+// evidence 来源分桶统计(spec §5.3 panel 要求 "来源类型统计, 不展示完整 evidence text")
+interface EvidenceStats {
+  bySource: { project: number; skill: number; honor: number; cert: number }
+  total: number
+  maxConfidence: number
+  avgConfidence: number
+  totalMatchedKw: number  // 所有 evidence.matched_keywords 去重后求和(等价总和)
+}
+const evidenceStats = computed<EvidenceStats>(() => {
+  const list = evidenceList.value
+  const bySource = { project: 0, skill: 0, honor: 0, cert: 0 }
+  let maxC = 0
+  let sumC = 0
+  let totalKw = 0
+  for (const ev of list) {
+    const t = ev.source_type
+    if (t === 'project') bySource.project++
+    else if (t === 'skill') bySource.skill++
+    else if (t === 'honor') bySource.honor++
+    else if (t === 'cert') bySource.cert++
+    if (ev.confidence > maxC) maxC = ev.confidence
+    sumC += ev.confidence
+    totalKw += Array.isArray(ev.matched_keywords) ? ev.matched_keywords.length : 0
+  }
+  const total = list.length
+  return {
+    bySource,
+    total,
+    maxConfidence: maxC,
+    avgConfidence: total > 0 ? sumC / total : 0,
+    totalMatchedKw: totalKw,
+  }
+})
+
+// bullet 评估聚合摘要(spec §4.3 / §5.3 — 不展示 bullet 原文)
+interface ProjectBulletStat {
+  project_id: string
+  total: number
+  matched: number
+  missing: number
+  /** 该项目 top-1 suggestion(其他在面板里另列) */
+  topSuggestion: string
+}
+interface BulletStats {
+  total: number
+  totalMatched: number
+  totalMissing: number
+  /** 按 project_id 分组(只在调用方用到 N 个项目时填充) */
+  byProject: ProjectBulletStat[]
+  /** 全局 top 建议(最多 3 条, 非空 suggestion 优先) */
+  topSuggestions: string[]
+}
+const bulletStats = computed<BulletStats>(() => {
+  const list = bulletList.value
+  let totalMatched = 0
+  let totalMissing = 0
+  const projMap = new Map<string, ProjectBulletStat>()
+  const suggestions: string[] = []
+  for (const b of list) {
+    totalMatched += b.matched_count
+    totalMissing += b.missing_count
+    const pid = b.project_id || '(unknown)'
+    let s = projMap.get(pid)
+    if (!s) {
+      s = { project_id: pid, total: 0, matched: 0, missing: 0, topSuggestion: '' }
+      projMap.set(pid, s)
+    }
+    s.total++
+    s.matched += b.matched_count
+    s.missing += b.missing_count
+    if (!s.topSuggestion && b.suggestion) s.topSuggestion = b.suggestion
+    if (b.suggestion) suggestions.push(b.suggestion)
+  }
+  return {
+    total: list.length,
+    totalMatched,
+    totalMissing,
+    byProject: Array.from(projMap.values()),
+    topSuggestions: suggestions.slice(0, 3),
+  }
+})
+
+/** fallback 文案(给面板展示用,不暴露底层异常 message) */
+function fallbackText(): string {
+  const s = previewData.value?.agent_summary
+  if (!s) return ''
+  if (!s.fallback_used) return '正常 (无 fallback)'
+  const reason = s.fallback_reason ? ` · 原因: ${s.fallback_reason}` : ''
+  return `降级${reason}`
+}
+
+/** 复制 request_id 到剪贴板 */
+async function copyRequestId() {
+  const rid = previewData.value?.agent_summary?.request_id
+  if (!rid) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(rid)
+      ElMessage.success(`已复制 request_id: ${rid}`)
+      return
+    }
+  } catch {
+    /* fallthrough */
+  }
+  // 旧浏览器降级
+  const ta = document.createElement('textarea')
+  ta.value = rid
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  try {
+    document.execCommand('copy')
+    ElMessage.success(`已复制 request_id: ${rid}`)
+  } catch {
+    ElMessage.warning('复制失败,请手动选中')
+  } finally {
+    document.body.removeChild(ta)
+  }
+}
+
+/** 当前 agent workflow 的工具调用列表(有效工具,只列 affects_preview=True 且 success) */
+const agentToolsUsed = computed(() => previewData.value?.agent_summary?.tools_used ?? [])
 </script>
 
 <template>
@@ -395,6 +602,37 @@ function skillMatchCount(groupIndex: number): number {
                     <el-checkbox v-model="jdAwareBadgeEnabled" :disabled="!jdAware" size="small">
                       显示「命中 N 关键词」角标(预览页)
                     </el-checkbox>
+                  </div>
+                </el-form-item>
+
+                <!-- R5-C Phase 4: Agent workflow 高级开关(默认关, 不开启时 UI 字节级一致) -->
+                <el-form-item label="Agent Workflow">
+                  <el-switch
+                    v-model="enableAgentWorkflow"
+                    active-text="启用"
+                    inactive-text="关闭 (默认)"
+                    inline-prompt
+                    style="--el-switch-on-color: #6f42c1;"
+                  />
+                  <el-tag
+                    size="small"
+                    type="info"
+                    effect="plain"
+                    style="margin-left: 8px"
+                  >R5-C Phase 4 · 高级 / 实验性</el-tag>
+                  <div class="hint">
+                    {{
+                      enableAgentWorkflow
+                        ? '预览页将展示工具调用 / evidence / 外部简历 / bullet 评估 摘要(默认收起)'
+                        : '不开启时与原 UI 字节级一致(spec §5.4 验收)'
+                    }}
+                  </div>
+                  <div
+                    v-if="enableAgentWorkflow && agentSessionId"
+                    class="hint"
+                    style="margin-top: 4px; font-family: monospace;"
+                  >
+                    session_id: <b>{{ agentSessionId.slice(0, 8) }}…</b>(前端随机生成, 不含 PII)
                   </div>
                 </el-form-item>
 
@@ -631,6 +869,192 @@ function skillMatchCount(groupIndex: number): number {
             title="请仔细 review 下方每个模块,这是将要写入 .docx 的全部内容。确认无误后再点底部「确认下载」。"
             style="margin-bottom: 16px"
           />
+
+          <!-- R5-C Phase 4: Agent Workflow 诊断面板
+               默认全部收起; 仅在 enable_agent_workflow=true 且后端真返回 agent_summary 时渲染。
+               隐私: 仅展示摘要 / 计数 / 关键词 / 短建议, 不展示 evidence.text / bullet 原文
+                     / JD 原文 / 简历原文 / 真实姓名手机邮箱(spec §6.4)。 -->
+          <el-collapse
+            v-if="hasAgentPanel && previewData.agent_summary"
+            v-model="agentPanelActive"
+            class="agent-panel"
+            style="margin-bottom: 16px"
+          >
+            <el-collapse-item name="agent_overview" title="Agent Workflow 诊断 (高级 / 实验性)">
+              <div class="agent-section">
+                <div class="agent-section-title">1) Request / 耗时</div>
+                <div class="agent-row">
+                  <span class="agent-lbl">request_id:</span>
+                  <code class="agent-mono">{{ previewData.agent_summary.request_id }}</code>
+                  <el-button
+                    size="small"
+                    link
+                    type="primary"
+                    @click="copyRequestId"
+                  >复制</el-button>
+                </div>
+                <div class="agent-row">
+                  <span class="agent-lbl">步骤数:</span>
+                  <el-tag size="small" type="info" effect="plain">
+                    {{ previewData.agent_summary.steps_executed }}
+                  </el-tag>
+                  <span class="agent-lbl" style="margin-left: 16px">总耗时:</span>
+                  <el-tag size="small" type="info" effect="plain">
+                    {{ previewData.agent_summary.latency_ms }} ms
+                  </el-tag>
+                </div>
+              </div>
+
+              <div class="agent-section">
+                <div class="agent-section-title">2) Fallback 状态</div>
+                <el-tag
+                  v-if="!previewData.agent_summary.fallback_used"
+                  type="success"
+                  size="small"
+                  effect="dark"
+                >✓ {{ fallbackText() }}</el-tag>
+                <el-tag
+                  v-else
+                  type="warning"
+                  size="small"
+                  effect="dark"
+                >⚠ {{ fallbackText() }}</el-tag>
+              </div>
+
+              <div class="agent-section">
+                <div class="agent-section-title">3) 有效工具调用</div>
+                <div class="agent-row">
+                  <span class="agent-lbl">影响 preview 的工具 ({{ agentToolsUsed.length }} 个):</span>
+                  <el-tag
+                    v-for="t in agentToolsUsed"
+                    :key="t"
+                    size="small"
+                    type="info"
+                    effect="plain"
+                    style="margin-left: 4px"
+                  >{{ t }}</el-tag>
+                  <span
+                    v-if="agentToolsUsed.length === 0"
+                    class="hint"
+                    style="margin-left: 4px"
+                  >无(展示型工具不计)</span>
+                </div>
+                <div class="hint" style="margin-top: 4px">
+                  tools_used 只列 affects_preview=True 且 status=success 的工具(R5-B Phase 2A 语义)
+                </div>
+              </div>
+
+              <div v-if="hasEvidence" class="agent-section">
+                <div class="agent-section-title">4) Evidence 来源统计 (不展示原文)</div>
+                <div class="agent-row">
+                  <span class="agent-lbl">来源分桶:</span>
+                  <el-tag size="small" effect="plain">project {{ evidenceStats.bySource.project }}</el-tag>
+                  <el-tag size="small" effect="plain" style="margin-left: 4px">skill {{ evidenceStats.bySource.skill }}</el-tag>
+                  <el-tag size="small" effect="plain" style="margin-left: 4px">honor {{ evidenceStats.bySource.honor }}</el-tag>
+                  <el-tag size="small" effect="plain" style="margin-left: 4px">cert {{ evidenceStats.bySource.cert }}</el-tag>
+                </div>
+                <div class="agent-row" style="margin-top: 4px">
+                  <span class="agent-lbl">总命中关键词:</span>
+                  <el-tag size="small" type="success" effect="plain">{{ evidenceStats.totalMatchedKw }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 16px">最高 confidence:</span>
+                  <el-tag size="small" type="info" effect="plain">
+                    {{ evidenceStats.maxConfidence.toFixed(3) }}
+                  </el-tag>
+                  <span class="agent-lbl" style="margin-left: 16px">平均 confidence:</span>
+                  <el-tag size="small" type="info" effect="plain">
+                    {{ evidenceStats.avgConfidence.toFixed(3) }}
+                  </el-tag>
+                </div>
+                <div class="hint" style="margin-top: 4px">
+                  evidence summary 共 {{ evidenceStats.total }} 条; 原文(text)未在此面板展示(spec §6.4)
+                </div>
+              </div>
+
+              <div v-if="hasExtPerspective && extPerspective" class="agent-section">
+                <div class="agent-section-title">5) 外部简历诊断 (have / need / gap)</div>
+                <div class="agent-row">
+                  <span class="agent-lbl">已有:</span>
+                  <el-tag size="small" type="success" effect="plain">{{ extPerspective.counts.have }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 12px">缺:</span>
+                  <el-tag size="small" type="danger" effect="plain">{{ extPerspective.counts.need }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 12px">素材库可补:</span>
+                  <el-tag size="small" type="warning" effect="plain">{{ extPerspective.counts.materials_can_cover }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 12px">简历独有:</span>
+                  <el-tag size="small" type="info" effect="plain">{{ extPerspective.counts.resume_only }}</el-tag>
+                </div>
+                <div
+                  v-if="extPerspective.have_keywords.length"
+                  class="agent-row"
+                  style="margin-top: 4px"
+                >
+                  <span class="agent-lbl">已有:</span>
+                  <span
+                    v-for="k in extPerspective.have_keywords"
+                    :key="'ah-'+k"
+                    class="kw-chip matched"
+                    style="margin-left: 2px"
+                  >{{ k }}</span>
+                </div>
+                <div
+                  v-if="extPerspective.need_keywords.length"
+                  class="agent-row"
+                  style="margin-top: 4px"
+                >
+                  <span class="agent-lbl">还缺:</span>
+                  <span
+                    v-for="k in extPerspective.need_keywords"
+                    :key="'an-'+k"
+                    class="kw-chip missing"
+                    style="margin-left: 2px"
+                  >{{ k }}</span>
+                </div>
+                <div
+                  v-if="extPerspective.suggestions.length"
+                  class="agent-row"
+                  style="margin-top: 6px"
+                >
+                  <span class="agent-lbl">建议:</span>
+                  <ul class="agent-suggestion-list">
+                    <li
+                      v-for="(s, i) in extPerspective.suggestions"
+                      :key="'as-'+i"
+                    >{{ s }}</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div v-if="hasBulletEvaluations" class="agent-section">
+                <div class="agent-section-title">6) Bullet 评估摘要 (不展示原 bullet)</div>
+                <div class="agent-row">
+                  <span class="agent-lbl">评估条数:</span>
+                  <el-tag size="small" type="info" effect="plain">{{ bulletStats.total }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 12px">总命中:</span>
+                  <el-tag size="small" type="success" effect="plain">{{ bulletStats.totalMatched }}</el-tag>
+                  <span class="agent-lbl" style="margin-left: 12px">总缺失:</span>
+                  <el-tag size="small" type="danger" effect="plain">{{ bulletStats.totalMissing }}</el-tag>
+                </div>
+                <div
+                  v-for="proj in bulletStats.byProject"
+                  :key="'bp-'+proj.project_id"
+                  class="agent-row"
+                  style="margin-top: 6px"
+                >
+                  <span class="agent-lbl">项目 {{ proj.project_id }}:</span>
+                  <el-tag size="small" type="info" effect="plain">{{ proj.total }} 条</el-tag>
+                  <span style="margin-left: 4px; color: #67c23a">命中 {{ proj.matched }}</span>
+                  <span style="margin-left: 4px; color: #f56c6c">缺 {{ proj.missing }}</span>
+                  <span
+                    v-if="proj.topSuggestion"
+                    class="hint"
+                    style="margin-left: 8px"
+                  >→ {{ proj.topSuggestion }}</span>
+                </div>
+                <div class="hint" style="margin-top: 4px">
+                  仅展示每条 bullet 的 matched / missing 计数与 1 句建议; bullet 原文未在此面板展示(spec §6.4)
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
 
           <el-collapse v-model="defaultActive">
             <el-collapse-item
@@ -923,5 +1347,70 @@ body {
   color: #e6a23c;
   border: 1px solid #faecd8;
   vertical-align: middle;
+}
+
+/* ===== R5-C Phase 4: Agent Workflow 诊断面板 =====
+   风格克制: 单色边框 + 浅色背景, 区别于主预览内容(避免视觉噪声) */
+.agent-panel {
+  border: 1px solid #e4e2f3;
+  border-radius: 6px;
+  background: #fafafd;
+  padding: 0 4px;
+}
+.agent-panel :deep(.el-collapse-item__header) {
+  font-weight: 600;
+  font-size: 14px;
+  color: #4a3c8c;
+}
+.agent-panel :deep(.el-collapse-item__wrap) {
+  background: #ffffff;
+  border-top: 1px dashed #e4e2f3;
+}
+.agent-section {
+  padding: 8px 4px 12px;
+  border-bottom: 1px dashed #eee;
+}
+.agent-section:last-child {
+  border-bottom: none;
+}
+.agent-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a3c8c;
+  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+}
+.agent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.agent-lbl {
+  font-weight: 600;
+  color: #555;
+  font-size: 12px;
+}
+.agent-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #f0eef8;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #4a3c8c;
+  font-size: 12px;
+  word-break: break-all;
+}
+.agent-suggestion-list {
+  margin: 2px 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.7;
+  width: 100%;
+}
+.agent-suggestion-list li {
+  margin: 1px 0;
 }
 </style>

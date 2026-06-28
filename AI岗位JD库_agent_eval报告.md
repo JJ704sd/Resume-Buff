@@ -1,10 +1,22 @@
 # AI 岗位 JD 库 — Agent Workflow 离线评测报告
 
-> 版本: R5-A Phase 4 (Agent eval 报告, 2026-06-27)  
+> 版本: R5-D Phase 4 (latency + fallback 聚合增强, 2026-06-28)  
 > Eval set: **12 份 JD** (jd_samples 8 份 + v4_strong 4 份)  
+> Eval mode: **offline** (requested: `offline`)  
 > LLM 启用: **❌ (fallback)**  
 > 阈值: 高 ≥ 80 / 中 ≥ 60 / 低 < 60  
 > 四组对照: 4 种 (FC × AW)  
+
+## 0、LLM 元信息 (R5-D Phase 2)
+
+| 字段 | 值 |
+|---|---|
+| `llm_mode` | `offline` |
+| `llm_enabled` | `False` |
+| `llm_model` | `gpt-4o-mini` |
+| `llm_base_url_host` | `api.openai.com` |
+
+> 隐私边界: 报告不含任何 API key 类凭据; base_url 只展示 host 部分, 不含 path / query / fragment。
 
 ## 一、Eval set 概览
 
@@ -27,12 +39,12 @@
 
 ## 二、四组开关对照总览
 
-| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | pii_safe_rate | tools_used (top) | fallback_category |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | 12 | 100.0% | 0.0% | 1 | 100.0% | — | none×12 |
-| FC only (FC=T, AW=F) | 12 | 100.0% | 0.0% | 1 | 100.0% | n/a (FC enabled, old path)×12 | llm_disabled_fallback×12 |
-| AW only (FC=F, AW=T) | 12 | 100.0% | 0.0% | 10 | 100.0% | retrieve_evidence×12 | llm_disabled_fallback×12 |
-| FC+AW (FC=T, AW=T) | 12 | 100.0% | 0.0% | 8 | 100.0% | retrieve_evidence×12 | llm_disabled_fallback×12 |
+| 组合 | N | schema_pass_rate | fallback_rate | avg_latency_ms | p95_latency_ms | max_latency_ms | pii_safe_rate | tools_used (top) | fallback_category |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | 12 | 100.0% | 0.0% | 0 | 1 | 1 | 100.0% | — | none×12 |
+| FC only (FC=T, AW=F) | 12 | 100.0% | 0.0% | 0 | 1 | 1 | 100.0% | n/a (FC enabled, old path)×12 | llm_disabled_fallback×12 |
+| AW only (FC=F, AW=T) | 12 | 100.0% | 0.0% | 7 | 8 | 8 | 100.0% | retrieve_evidence×12 | llm_disabled_fallback×12 |
+| FC+AW (FC=T, AW=T) | 12 | 100.0% | 0.0% | 7 | 8 | 8 | 100.0% | retrieve_evidence×12 | llm_disabled_fallback×12 |
 
 ## 三、score / recommendation 一致性(开 FC/AW 不应影响 match_score)
 
@@ -45,111 +57,111 @@
 
 ### `baiyun_2026_algorithm` — role=`algorithm`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 86 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 86 | 高 | ✅ | `llm_disabled_fallback` | 2 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r2fb` | 86 | 高 | ✅ | `llm_disabled_fallback` | 11 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rda3` | 86 | 高 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 86 | 高 | ✅ | `none` | 0 | — | 0/11 (0%) |
+| FC only (FC=T, AW=F) | `—` | 86 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/11 (0%) |
+| AW only (FC=F, AW=T) | `r217` | 86 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/11 (0%) |
+| FC+AW (FC=T, AW=T) | `r823` | 86 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/11 (0%) |
 
 ### `baiyun_2026_fullstack` — role=`general`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r487` | 100 | 高 | ✅ | `llm_disabled_fallback` | 12 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rd5d` | 100 | 高 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 0 | — | 0/18 (0%) |
+| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/18 (0%) |
+| AW only (FC=F, AW=T) | `rbd1` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/18 (0%) |
+| FC+AW (FC=T, AW=T) | `r58c` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/18 (0%) |
 
 ### `baiyun_2026_product` — role=`product`, expected=别投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 33 | 低 | ✅ | `none` | 2 | — |
-| FC only (FC=T, AW=F) | `—` | 33 | 低 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r870` | 33 | 低 | ✅ | `llm_disabled_fallback` | 12 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rf3d` | 33 | 低 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 33 | 低 | ✅ | `none` | 0 | — | 0/12 (0%) |
+| FC only (FC=T, AW=F) | `—` | 33 | 低 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/12 (0%) |
+| AW only (FC=F, AW=T) | `raa9` | 33 | 低 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/12 (0%) |
+| FC+AW (FC=T, AW=T) | `r569` | 33 | 低 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/12 (0%) |
 
 ### `baiyun_2026_qa` — role=`test_qa`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 2 | — |
-| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `ra38` | 100 | 高 | ✅ | `llm_disabled_fallback` | 10 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rade` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — | 0/15 (0%) |
+| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/15 (0%) |
+| AW only (FC=F, AW=T) | `r2e0` | 100 | 高 | ✅ | `llm_disabled_fallback` | 6 | retrieve_evidence | 0/15 (0%) |
+| FC+AW (FC=T, AW=T) | `rfad` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/15 (0%) |
 
 ### `deepseek_2026_agi_match` — role=`algorithm`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 80 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 80 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r865` | 80 | 高 | ✅ | `llm_disabled_fallback` | 12 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `r8a9` | 80 | 高 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 80 | 高 | ✅ | `none` | 1 | — | 0/11 (0%) |
+| FC only (FC=T, AW=F) | `—` | 80 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/11 (0%) |
+| AW only (FC=F, AW=T) | `r63f` | 80 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/11 (0%) |
+| FC+AW (FC=T, AW=T) | `r2f0` | 80 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/11 (0%) |
 
 ### `deepseek_2026_data_label` — role=`data_annot`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 83 | 高 | ✅ | `none` | 2 | — |
-| FC only (FC=T, AW=F) | `—` | 83 | 高 | ✅ | `llm_disabled_fallback` | 2 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `rc55` | 83 | 高 | ✅ | `llm_disabled_fallback` | 11 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `r359` | 83 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 83 | 高 | ✅ | `none` | 1 | — | 0/8 (0%) |
+| FC only (FC=T, AW=F) | `—` | 83 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/8 (0%) |
+| AW only (FC=F, AW=T) | `r39a` | 83 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/8 (0%) |
+| FC+AW (FC=T, AW=T) | `rc49` | 83 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/8 (0%) |
 
 ### `alibaba_2026_data_eng` — role=`data_annot`, expected=建议补充, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 67 | 中 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 67 | 中 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r86c` | 67 | 中 | ✅ | `llm_disabled_fallback` | 10 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `raf6` | 67 | 中 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 67 | 中 | ✅ | `none` | 1 | — | 0/8 (0%) |
+| FC only (FC=T, AW=F) | `—` | 67 | 中 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/8 (0%) |
+| AW only (FC=F, AW=T) | `r7f3` | 67 | 中 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/8 (0%) |
+| FC+AW (FC=T, AW=T) | `rb9d` | 67 | 中 | ✅ | `llm_disabled_fallback` | 6 | retrieve_evidence | 0/8 (0%) |
 
 ### `bytedance_2026_qa` — role=`test_qa`, expected=推荐投, source=jd_samples
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `rd25` | 100 | 高 | ✅ | `llm_disabled_fallback` | 10 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rf91` | 100 | 高 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — | 0/15 (0%) |
+| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/15 (0%) |
+| AW only (FC=F, AW=T) | `r5f1` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/15 (0%) |
+| FC+AW (FC=T, AW=T) | `r9bb` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/15 (0%) |
 
 ### `JD-B014` — role=`algorithm`, expected=v4_no_ground_truth, source=jd_v4_strong
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r202` | 100 | 高 | ✅ | `llm_disabled_fallback` | 10 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `r254` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — | 0/11 (0%) |
+| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/11 (0%) |
+| AW only (FC=F, AW=T) | `r962` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/11 (0%) |
+| FC+AW (FC=T, AW=T) | `r146` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/11 (0%) |
 
 ### `JD-B015` — role=`test_qa`, expected=v4_no_ground_truth, source=jd_v4_strong
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r82d` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `r451` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 100 | 高 | ✅ | `none` | 0 | — | 0/15 (0%) |
+| FC only (FC=T, AW=F) | `—` | 100 | 高 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/15 (0%) |
+| AW only (FC=F, AW=T) | `rec1` | 100 | 高 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/15 (0%) |
+| FC+AW (FC=T, AW=T) | `r7b6` | 100 | 高 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/15 (0%) |
 
 ### `JD-A011` — role=`data_annot`, expected=v4_no_ground_truth, source=jd_v4_strong
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 67 | 中 | ✅ | `none` | 0 | — |
-| FC only (FC=T, AW=F) | `—` | 67 | 中 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `reb5` | 67 | 中 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `r37f` | 67 | 中 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 67 | 中 | ✅ | `none` | 0 | — | 0/8 (0%) |
+| FC only (FC=T, AW=F) | `—` | 67 | 中 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) | 0/8 (0%) |
+| AW only (FC=F, AW=T) | `r8a9` | 67 | 中 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/8 (0%) |
+| FC+AW (FC=T, AW=T) | `rc64` | 67 | 中 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/8 (0%) |
 
 ### `JD-BY003` — role=`product`, expected=v4_no_ground_truth, source=jd_v4_strong
 
-| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used |
-|---|---|---|---|---|---|---|---|
-| baseline (FC=F, AW=F) | `—` | 33 | 低 | ✅ | `none` | 1 | — |
-| FC only (FC=T, AW=F) | `—` | 33 | 低 | ✅ | `llm_disabled_fallback` | 1 | n/a (FC enabled, old path) |
-| AW only (FC=F, AW=T) | `r96e` | 33 | 低 | ✅ | `llm_disabled_fallback` | 9 | retrieve_evidence |
-| FC+AW (FC=T, AW=T) | `rb58` | 33 | 低 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence |
+| 组合 | request_id (前4字符) | score | recommendation | schema_pass | fallback_category | latency_ms | tools_used | rewrite_rate |
+|---|---|---|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | `—` | 33 | 低 | ✅ | `none` | 0 | — | 0/12 (0%) |
+| FC only (FC=T, AW=F) | `—` | 33 | 低 | ✅ | `llm_disabled_fallback` | 0 | n/a (FC enabled, old path) | 0/12 (0%) |
+| AW only (FC=F, AW=T) | `rcdd` | 33 | 低 | ✅ | `llm_disabled_fallback` | 8 | retrieve_evidence | 0/12 (0%) |
+| FC+AW (FC=T, AW=T) | `reb8` | 33 | 低 | ✅ | `llm_disabled_fallback` | 7 | retrieve_evidence | 0/12 (0%) |
 
 ## 五、失败 case 分析
 
@@ -185,18 +197,41 @@
 | `schema_retry_fallback` | 0 |
 | `workflow_abort_fallback` | 0 |
 
+**每组 fallback_category 分布** (跟总览表、by_combo 指标完全一致):
+
+| 组合 | none | llm_disabled | tool_error | schema_retry | workflow_abort |
+|---|---|---|---|---|---|
+| baseline (FC=F, AW=F) | 12 | 0 | 0 | 0 | 0 |
+| FC only (FC=T, AW=F) | 0 | 12 | 0 | 0 | 0 |
+| AW only (FC=F, AW=T) | 0 | 12 | 0 | 0 | 0 |
+| FC+AW (FC=T, AW=T) | 0 | 12 | 0 | 0 | 0 |
+
 ## 七、结论
 
 - **schema pass rate 4 组均 100%** (12 JD × 4 = 48 次 preview 调用全部通过 schema 校验)
 - **fallback rate 4 组均 0%** (无意外降级)
 - **score 一致性 12/12**: match_score 纯规则化, 4 组开关对 score 无影响, 符合预期
 - **recommendation 一致性 12/12**: 4 组开关对 recommendation 无影响
-- **AW 开启 vs baseline 平均 latency 差**: +9ms (AW 走完整任务图, baseline 走老路径, 预期有少量 overhead)
+- **AW 开启 vs baseline 平均 latency 差**: +7ms (AW 走完整任务图, baseline 走老路径, 预期有少量 overhead)
 - **LLM 启用**: ❌ (无 key, FC / AW 走原文 fallback)  
   - 真实 LLM 场景下 FC+AW 的 latency 会显著高于 fallback (HTTP RTT 决定), 当前评测反映的是离线 fallback 路径的真实表现
 - **fallback taxonomy 摘要**: none × 12 / llm_disabled × 36 / tool_error × 0 / schema_retry × 0 / workflow_abort × 0
 
 ---
+
+### 7.1 rewrite impact 摘要 (R5-D Phase 3)
+
+按 FC × AW 组合聚合: 总 changed bullet 数 / 总 bullet 数 → rewrite_changed_rate。
+baseline (FC=F, AW=F) 作 "before"; 后续 3 组作 "after" 做对比; offline (LLM 关闭) 时各组应均接近 0%, live 时 AW 路径应有显著改动率。
+
+| 组合 | changed / total | rewrite_changed_rate | avg_len_before | avg_len_after |
+|---|---|---|---|---|
+| baseline (FC=F, AW=F) | 0/144 | 0.0% | 44.1 字符 | 44.1 字符 |
+| FC only (FC=T, AW=F) | 0/144 | 0.0% | 44.1 字符 | 44.1 字符 |
+| AW only (FC=F, AW=T) | 0/144 | 0.0% | 44.1 字符 | 44.1 字符 |
+| FC+AW (FC=T, AW=T) | 0/144 | 0.0% | 44.1 字符 | 44.1 字符 |
+
+> **隐私边界**: 报告只展示 changed 计数 / 比例 / 平均长度 (字符数), **不展示** 任何 bullet 原文 / 改写前后文本 / request 详情 / JD 全文。
 
 ## 八、与既有脚本的关系
 

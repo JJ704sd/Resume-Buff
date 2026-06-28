@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-27 R5-A closeout 收尾)
+## 0. 当前项目快照(2026-06-28 R5-C Phase 5 文档与回放闭环 收尾)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -26,23 +26,25 @@
 - JD-driven generation:粘贴 JD 后项目/highlight/skill 按命中数倒序 + 段落命中关键词角标
 - **R3-P LLM Prompt 工程升级**(`SYSTEM_PROMPT` v2 加 2 个 few-shot 示例 + 显式 JSON schema + 失败 retry 1 次;LLM 智能改写无 key 静默降级)
 - **R4 Agent MVP** — Function Calling 协议接入(R4-F tools schema + evaluate_bullet_jd_match 工具函数)+ Agent Loop(R4-A max_step=3 + 单工具约束 + trace 日志)+ Session 记忆(R4-M 进程内 deque 上限 10 + 隐私隔离不写内容只写 id+步数);**MVP 优先打 AI Agent R&D JD 缺口**;R4-C Chat UI 留 P2(用户偏好 GUI 暂停)
-- **R5-A Agent 增强 4 phase + closeout**(对应 `.harness/docs/agent-enhancement-spec.md`):
-  - **Phase 1** — Agent 编排层(`core/agent_workflow.py` 受控 Plan-and-Execute + `build_task_graph()` 确定性产任务图 LLM 不参与规划 + `run_agent_workflow()` 失败降级到旧路径)+ 工具注册表(`core/agent_tools.py` AGENT_TOOLS 4 个核心工具 + 统一 `execute_agent_tool()` 入口 + 隐私边界 `ToolResult` 不存 args/input 原文);`enable_agent_workflow` 字段默认 False,字节级一致
-  - **Phase 2** — 结构化 JSONL trace(`core/logger.py` `log_agent_trace_jsonl` 写 `backend/logs/agent_trace.jsonl` + 11 字段稳定 schema + `request_id` 短 uuid 前缀 "r" + input_size/output_size 只算 bytes 不存原文 + 写入失败静默降级不影响主流程)+ 会话回放(`scripts/replay_agent_trace.py` argparse CLI 支持 `--request-id`/`--session-id`/`--path` 输出 markdown 摘要不输出原文敏感字段);旧 R4-A `agent_trace.log` 完全不动兼容共存
-  - **Phase 3** — 轻量 RAG evidence(`core/evidence.py` 新增 `EvidenceSnippet` frozen dataclass + `build_evidence_snippets` 切 projects/skills/honors/certs 4 类 snippets + `retrieve_evidence` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 排序稳定 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤 + `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限);**零向量数据库 / 零 embedding API / 零新依赖**(`SPEC §5.3`);`enable_agent_workflow=True` 时任务图插入 retrieve_evidence step(match_score 之后 retrieve_materials 之前),失败 `use_default` 降级不阻断主流程,evidence 透传到 `rewrite_highlights` + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写";evidence=None 字节级一致
-  - **Phase 4** — Agent 离线评测报告(scripts/evaluate_agent_workflow.py 跑固定 eval set 12 JD = jd_samples 8 份非公告型 + v4_strong 4 份 × 4 组开关对照 (FC × AW 笛卡尔积);输出 AI岗位JD库_agent_eval报告.md 含 8 节;不挂 pre-push hook (SPEC §12 #3 默认手动脚本);不修改既有 match_score / score_thresholds.py / match_golden_targets.py / replay_agent_trace.py;无 LLM key 时全部走原文 fallback;PII 用 placeholder 白名单
-  - **R5-A closeout** — 补齐 `agent_summary` / `enable_external_resume` 透传 / required args validation / `match_score.target_role` 工具 schema bugfix;PR #4 已合并到 `main`(merge `12dfcf1`)
+- **R5-A Agent 增强 4 phase + closeout** + **R5-B Phase 2A 工具契约/权限/effective tools** + **R5-C Phase 1-5 真实闭环**:
+  - **R5-A Phase 1-4 + closeout** — Agent 编排层(`build_task_graph()` 确定性产任务图)+ 工具注册表(AGENT_TOOLS 4 个核心 + 统一入口 + 隐私边界)+ JSONL trace(11 字段稳定 schema + request_id 短 uuid)+ 会话回放脚本 + 轻量 RAG evidence(`core/evidence.py` 切片 + lexical retrieval + 零向量数据库)+ 离线评测报告(12 JD × 4 开关对照);PR #4 合并到 `main`(merge `12dfcf1`)
+  - **R5-B Phase 2A** — 工具契约/权限/effective tools(`core/tool_schema.py` 轻量 JSON schema validator 子集 + `_check_permission_context(spec, context)` 校验 allow_jd_text/allow_materials/allow_external_resume/max_pii_risk + `affects_preview=True` 元数据 + `agent_summary.tools_used` 只列成功且真正影响 preview 的工具);PR #6 合并到 `main`(merge `09a2704`)
+  - **R5-C Phase 1** — eval request_id 优先从 `agent_summary.request_id` 取(替代脆弱的 JSONL 末尾反推)+ fallback taxonomy 分类(`none` / `llm_disabled_fallback` / `tool_error_fallback` / `schema_retry_fallback` / `workflow_abort_fallback`)
+  - **R5-C Phase 2** — 外部简历进入 Agent workflow(`PreviewRequest.external_resume_text` 字段透传 + 任务图插入 `parse_external_resume` + `compare_resume_jd` 两步 + `core/jd_parser.py` 两个新工具函数输出 `{have, need, materials_can_cover, resume_only_keywords, suggestions, counts}` 4 维摘要,不含原文);workflow preview 返回值新增 `external_resume_perspective` 字段
+  - **R5-C Phase 3** — per-bullet 真实评估数据流(`_evaluate_top_bullets(materials, target_role, jd_focus, jd_context, *, top_projects=3, bullets_per_project=3)` helper + workflow 主循环 evaluate step 走批量而非单条 representative + workflow preview 返回 `bullet_evaluations` 字段不含 bullet 原文)
+  - **R5-C Phase 4** — 前端高级 Agent 面板契约(`AgentSummary` / `EvidenceSummary` / `ExternalResumePerspective` / `BulletEvaluation` 类型 + `preview/generate` 透传 enable_agent_workflow / session_id / external_resume_text);前端 App.vue 默认收起诊断面板
+  - **R5-C Phase 5** — 文档与回放闭环(`scripts/replay_agent_trace.py` 加 `## Fallback Summary` 段 + `--tools-used` 参数触发 `## Tools Cross-Validation (R5-C Phase 5)` 段 + 5 个常量分类 `none` / `tool_error_fallback` / `unknown`;ROADMAP / README / AGENTS 三方同步 baseline 530→544 测试数)
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **441 个 pytest 全绿 + 0 skipped**(283 R4 baseline + **20 R5-A Phase 1: 6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee** + **32 R5-A Phase 2: 4 TestLogAgentTraceJsonlSchema + 3 TestLogAgentTraceJsonlTypes + 2 TestLogAgentTraceJsonlPrivacy + 3 TestLogAgentTraceJsonlRobustness + 9 TestWorkflowJsonlTrace + 3 TestReplayFilter + 3 TestReplayMarkdown + 3 TestReplayScript + 2 TestReplayRobustness** + **62 R5-A Phase 3: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 TestEvidencePhase3 + 8 TestEvidenceIntegration** + **11 R5-A Phase 4: 3 TestEvalSetLoading + 4 TestSingleEvaluation + 2 TestPiiScanner + 2 TestPrivacyGuarantee** + **14 R5-A closeout: 3 TestEnableExternalResumePassthrough + 7 TestAgentSummaryField + 4 TestAgentToolArgsValidation**)
+- **544 个 pytest 全绿 + 0 skipped**(R5-B Phase 2A baseline 497 + **17 R5-C Phase 1** in test_agent_eval.py: 3 TestEvalUsesAgentSummaryRequestId + 5 TestEvalToolsUsedPrefersAgentSummary + 3 TestEvalFallbackCategoryNone + 4 TestEvalFallbackCategoryLlmDisabled + 2 TestEvalReportNoRawRequestIdLeak + **16 R5-C Phase 2** NEW FILE `test_r5c_phase2_external_resume.py`: 2 TestExternalResumeApiField + 3 TestExternalResumeWorkflowUsesText + 2 TestParseExternalResumeTool + 2 TestCompareResumeJdTool + 1 TestExternalResumePermission + 3 TestExternalResumePrivacy + 1 TestExternalResumePreviewOutput + 2 TestExternalResumeOldPathUnchanged + **10 R5-C Phase 3** NEW FILE `test_r5c_phase3_bullet_evaluation.py`: 1 TestBulletEvaluationSelectsTopProjects + 2 TestBulletEvaluationOutputSchema + 1 TestBulletEvaluationNoRawBulletInTrace + 1 TestBulletEvaluationSkippedWithoutJd + 2 TestBulletEvaluationNoBulletsNotError + 1 TestAffectsPreviewStillFalseUntilConsumed + 2 TestBulletEvaluationOldPathUnchanged + **14 R5-C Phase 5** in test_agent_trace_replay.py: 3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C)
 
 **最近 7 个 commit** (`main` / `origin/main` 当前基线):
+- `c6ead64` feat(round5-c#phase2): 外部简历文本进入 Agent workflow
+- `09a2704` Merge pull request #6 from JJ704sd/feat/round5-b-phase2a-tool-contract
+- `593169e` docs(round5-b#2a): 当前能力表 + AGENTS 锁点同步
+- `232ea30` feat(round5-b#2a): 工具契约 / 权限 / 真实数据流
+- `488e43e` Merge pull request #5 from JJ704sd/codex/r5b-doc-baseline
+- `c7e99aa` docs(round5-b): 校准 Agent 文档基线
 - `12dfcf1` Merge pull request #4 from JJ704sd/feat/round5-a-agent-phase1
-- `ce57802` docs(round5-a closeout): closeout 文档同步 + 测试数 427 -> 441
-- `b60a215` fix(round5-a closeout): agent_summary + enable_external_resume + tool args validation + match_score schema bugfix
-- `9caf7bd` Merge pull request #3 from JJ704sd/feat/round5-a-agent-phase1
-- `0c6b057` docs(round5-b): future spec + 架构审计文档
-- `503005e` feat(round5-a phase4): Agent 离线评测报告 + 12 JD x 4 组开关对照
-- `9eca73a` docs(round5-a phase3): 测试数 352 -> 416 + R5-A Phase 3 当前能力表 + ROADMAP/MEMORY 同步
 
 ---
 
@@ -106,20 +108,41 @@
 
 ### R5-A Agent 增强 — 4 phase + closeout 全部落地 ✅ 完成 (2026-06-27, merge `12dfcf1`)
 - **背景**:R4 MVP 优先打 AI Agent R&D JD 结构性缺口;R5-A 在 R4 基础上补"可观测 + 可规划 + 可调用 + 可评测"工作流,设计文档 `.harness/docs/agent-enhancement-spec.md` 拆 4 phase;Phase 4 已在 `503005e` 完成,closeout 已在 `b60a215` 修复 API/工具契约补缺并通过 PR #4 合并到 `main`
-- **实施路径**(5 个核心 commit 顺序落地):
-  1. `1679a22` **Phase 1** — Agent 编排层(`core/agent_workflow.py` 受控 Plan-and-Execute: `build_task_graph(has_jd, enable_function_calling, has_external_resume)` 确定性产任务图 LLM 不参与规划 + step 序号连续 + `AgentStep` frozen=True; `run_agent_workflow()` 失败时降级到 `build_sections` / `render_docx` 旧路径)+ 工具注册表(`core/agent_tools.py` AGENT_TOOLS 4 个核心工具 `parse_jd` / `match_score` / `evaluate_bullet_jd_match` / `rewrite_highlights` + 统一 `execute_agent_tool(tool_name, args, context)` 入口; 未知工具 → `TOOL_NOT_ALLOWED` 不抛 / TypeError → `TOOL_ARGS_INVALID` / 其他异常 → `TOOL_RUNTIME_ERROR`; `ToolResult` dataclass **不存 args / input 原文** 隐私边界); `PreviewRequest.enable_agent_workflow` / `GenerateRequest.enable_agent_workflow` 字段默认 False 字节级一致; **283 → 320 +20 pytest** (6 TestBuildTaskGraph + 2 TestAgentStepSchema + 6 TestRunAgentWorkflow + 3 TestBackwardCompatibility + 3 TestPrivacyGuarantee)
-  2. `7c5af05` **Phase 2** — 结构化 JSONL trace(`core/logger.py` `JSONL_TRACE_FIELDS` 11 字段稳定 schema ts / request_id / session_id / workflow / step / tool / latency_ms / status / error_type / input_size / output_size; `log_agent_trace_jsonl(event)` 写 `backend/logs/agent_trace.jsonl`; `_estimate_input_size` / `_estimate_output_size` 用 `json.dumps(...).encode("utf-8")` 算 bytes 不存原文; 写入失败 IO / 磁盘满 / 编码错 logger 内部 try/except 静默降级不影响主流程; `generate_request_id()` 模块级函数生成短 uuid 前缀 "r") + 会话回放(`scripts/replay_agent_trace.py` argparse CLI `--request-id` / `--session-id` / `--path` 输出 markdown 摘要只渲染 7 列 step/tool/latency_ms/status/error_type/input_size/output_size 不输出原文); 每个 step 含本地步骤(intent / retrieve / aggregate / parse_external_resume)写一条 trace `status="skipped"`; 旧 R4-A `log_agent_trace` / `agent_trace.log` 签名/格式/路径完全不动兼容共存; **320 → 352 +32 pytest** (4 + 3 + 2 + 3 + 9 + 3 + 3 + 3 + 2); **安全审查无 P0/P1 阻塞** (JSONL 不存原文 PII / 写入失败不阻断 / replay 不输出敏感内容)
-  3. `380906f` **Phase 3** — 轻量 RAG evidence(`core/evidence.py` 新增 420 行: `EvidenceSnippet` frozen dataclass 5 字段 source_type/source_id/text/matched_keywords/confidence; `build_evidence_snippets(materials, role)` 切 projects/skills/honors/certs 4 类 snippets role 缺时 fallback general; `retrieve_evidence(jd_keywords, role, materials, top_k=8, min_confidence=0.0)` 复用 `KEYWORD_GROUPS` surface/normalized 做 lexical retrieval + 排序稳定 `(-confidence, source_type, source_id)` + 0 命中 snippet 过滤; `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限 + `(N more)` 截断标记; `evidence_to_dict_list` frozen dataclass 转 JSON 友好 dict list tuple→list round 3 位小数); `core/agent_tools.py` 注册 `retrieve_evidence` 工具(`ToolSpec.pii_risk=medium` 跟 match_score 同级; callable 包 lambda 走 `evidence_to_dict_list`); `core/agent_workflow.py` has_jd 时任务图插入 `retrieve_evidence` step(match_score 之后 retrieve_materials 之前; `step.required=False, fallback="use_default"`) + 显式 evidence 透传时 step.status="skipped" 跳过执行 + `enable_agent_workflow=True` 时 preview 返回值新增 `evidence_summary` 字段(dict list 供前端高级信息区); `core/llm_rewriter.py` `rewrite_highlights` 加 `evidence` kwarg(None 字节级一致) + `_build_request_payload` 加 `evidence_summary` kwarg + `SYSTEM_PROMPT` 加第 8 条硬性约束"只能基于 evidence 中存在的事实改写" + `EVIDENCE_CONSTRAINT_SUFFIX` 单独常量后缀; `core/generator.py` `build_sections` / `preview_resume` / `generate_resume_docx` 加 `evidence` kwarg 透传(零修改上层行为, None 旧路径字节级一致); **352 → 416 +62 pytest** (45 `test_evidence.py`: 9 TestBuildEvidenceSnippets + 5 TestKeywordHit + 6 TestComputeConfidence + 9 TestRetrieveEvidence + 4 TestSummarizeEvidenceForPrompt + 3 TestEvidenceToDictList + 4 TestAgentToolsIntegration + 4 TestMatchScoreRegression + 1 TestKeyWordGroupsReuse + 9 `test_agent_workflow.py` TestEvidencePhase3 + 8 `test_llm_rewriter.py` TestEvidenceIntegration); **零向量数据库 / 零 embedding API / 零新依赖** (spec §5.3); **安全审查无 P0/P1 阻塞** (trace 不含 evidence text 原文只记 bytes / evidence_summary 不含 PII materials 已脱敏 / 无新增外部网络调用 / write fail 静默降级不影响主流程)
-  4. `503005e` **Phase 4** — Agent 离线评测报告(`scripts/evaluate_agent_workflow.py` 跑固定 eval set 12 JD × 4 组开关对照,输出 `AI岗位JD库_agent_eval报告.md`;无 LLM key 时原文 fallback 不报错,有真实 LLM key 时产出 schema pass / fallback / latency 指标;`backend/tests/test_agent_eval.py` +11 case;**416 → 427 pytest 全绿**;不挂 pre-push hook)
-  5. `b60a215` **closeout** — 根据 `.planning/agent-architecture-audit/findings.md` 修复 `agent_summary` 响应、`enable_external_resume` 整链透传、required args validation 和 `match_score.target_role` 工具 schema bugfix;**427 → 441 pytest 全绿**;PR #4 merge `12dfcf1`
+- **实施路径**(5 个核心 commit 顺序落地) — 详见顶部"快照"段:
+  1. `1679a22` Phase 1 — Agent 编排层 + 工具注册表(283 → 320)
+  2. `7c5af05` Phase 2 — 结构化 JSONL trace + 会话回放(320 → 352)
+  3. `380906f` Phase 3 — 轻量 RAG evidence + 零向量数据库(352 → 416)
+  4. `503005e` Phase 4 — Agent 离线评测报告 12 JD × 4 开关对照(416 → 427)
+  5. `b60a215` closeout — agent_summary + enable_external_resume + required args + match_score schema bugfix(427 → 441)
+- **实施坑**:已写进 MEMORY.md / spec(Phase 1 测试数计算口径 / Phase 3 evidence 任务图插入位置 / evidence=None 字节级一致 / evidence 80 字符截断)
+- **效果**:**441 passed + 0 skipped**;四阶段与 closeout 均零 P0/P1 安全阻塞;**默认 disable 全部新能力**(enable_agent_workflow=False + evidence=None + enable_function_calling=False + session_id=None),**零行为变更**
+- **spec 文档**: `.harness/docs/agent-enhancement-spec.md`(Phase 1+2+3+4+closeout 状态均已 ✅)
+
+### R5-B Phase 2A — 工具契约 / 权限 / 真实数据流 ✅ 完成 (2026-06-28, merge `09a2704`)
+- **背景**:R5-A 已建好 Agent 编排层,但工具契约没显式 schema 校验,context 权限边界没定义,`tools_used` 含展示型工具噪声;R5-B Phase 2A 把 R5-A 已有能力补"契约 + 权限 + 语义"三件套
+- **设计**: `.harness/docs/round5-b-agent-capability-spec.md` §3
+- **实施路径**(1 commit + 文档同步):
+  1. `232ea30` 工具契约(`core/tool_schema.py` 轻量 JSON schema validator 子集 type / required / properties / items / minimum / maximum, 零依赖纯 stdlib + `_check_permission_context(spec, context)` 校验 allow_jd_text / allow_materials / allow_external_resume / max_pii_risk, 权限不匹配返 PRIVACY_VIOLATION 早于 schema 校验 + `ToolSpec.metadata={"affects_preview": bool}` 新字段 + `affects_preview()` helper + `retrieve_evidence` 标 `affects_preview=True` 真正注入 build_sections → rewrite_highlights + `_build_step_context(tool_name, has_jd, has_external_resume)` 派发 context + `agent_summary.tools_used` 升级为有效语义只列 `affects_preview=True` 且 `status=success` 的工具 + 错误描述只含字段名 + 类型名 + 权限名,不含 args / JD / bullet 原文); **441 → 487 +46 pytest** (19 test_tool_schema + 18 test_agent_tools + 9 test_agent_workflow); 441 老测试零回退
+  2. `593169e` 文档同步 — 当前能力表 + AGENTS 锁点同步 baseline 487
+- **效果**:**487 passed + 0 skipped**;`agent_summary.tools_used` 只列影响 preview 的有效工具,展示型工具(`parse_jd` / `match_score` / `evaluate_bullet_jd_match` / `rewrite_highlights`)不再混入;老路径 `enable_agent_workflow=False` 字节级一致(agent_summary 字段只在 workflow 路径加);**不挂 pre-push hook / 不引入新 LLM 调用 / 不引入新依赖 / 不实际消费 external_resume / 不实施 GUI 面板**
+- **下一步**:R5-C Phase 1-5 真实闭环(详见下方)
+
+### R5-C — Agent 真实闭环与可解释化 5 phase 全部落地 ✅ 完成 (2026-06-28)
+- **背景**:R5-B Phase 2A 解决"工具能不能被安全调用"问题;R5-C 推进到"可评测 + 可解释 + 可被前端安全消费"
+- **设计**: `.harness/docs/round5-c-agent-capability-spec.md` 5 phase
+- **Phase 1 — eval request_id 精确关联 + fallback taxonomy**(spec §2) — eval 优先读 `preview["agent_summary"]["request_id"]` 替代脆弱的 JSONL 末尾反推 + 新增 fallback_category 5 类常量(none / llm_disabled_fallback / tool_error_fallback / schema_retry_fallback / workflow_abort_fallback)+ 报告新增 "6.1 fallback taxonomy 摘要" 段
+- **Phase 2 — 外部简历进入 Agent workflow**(spec §3) — `PreviewRequest.external_resume_text` 字段透传 + `run_agent_workflow` 接受 `external_resume_text` kwarg + 任务图 `has_external_resume=True` 插入 `parse_external_resume` + `compare_resume_jd` 两步(spec §3.3)+ `core/jd_parser.py` 两个新工具函数输出 4 维摘要不含原文 + workflow preview 返回 `external_resume_perspective` 字段; 17 个新 pytest(`tests/test_r5c_phase2_external_resume.py`); 老路径完全不含此字段字节级一致; 提交 `c6ead64`
+- **Phase 3 — per-bullet 真实评估数据流**(spec §4) — `_evaluate_top_bullets(materials, target_role, jd_focus, jd_context, *, top_projects=3, bullets_per_project=3)` helper + workflow 主循环 evaluate step 走批量而非单条 representative + workflow preview 返回 `bullet_evaluations` 字段(老路径不含); 10 个新 pytest(`tests/test_r5c_phase3_bullet_evaluation.py`); `evaluate_bullet_jd_match` 仍 `affects_preview=False`(spec §4.4)
+- **Phase 4 — 前端高级 Agent 面板契约** — `frontend/src/api/index.ts` 加 `AgentSummary` / `EvidenceSummary` / `ExternalResumePerspective` / `BulletEvaluation` TS 类型 + `preview/generate` 透传 enable_agent_workflow / session_id / external_resume_text + 前端 App.vue 默认收起诊断面板
+- **Phase 5 — 文档与回放闭环** — `scripts/replay_agent_trace.py` 加 `## Fallback Summary` 段(基于 trace status/error_type 推断 category, 涵盖 none / tool_error_fallback)+ `--tools-used <csv>` 参数触发 `## Tools Cross-Validation (R5-C Phase 5)` 段(对账 caller 提供的 agent_summary.tools_used, 输出 status ok/missing/unexpected); ROADMAP / README / AGENTS 三方同步 baseline 530→544 测试数; **15 个新 pytest** (3 TestReplayFallbackSummary + 7 TestReplayToolsCrossValidation + 2 TestReplayPiiSafetyR5C + 2 TestReplayRobustnessR5C)
 - **实施坑**(已写进 MEMORY.md / spec):
-  1. Phase 1 测试数计算口径:R4 baseline 283 → Phase 1 320 (+37, 不是 +20 单纯加 Phase 1 测试; 累计计算包含基础测试调整) → Phase 2 352 (+32) → Phase 3 416 (+62),**实际测试增量需扣除测试文件内 fixture / helper 等带来的间接调整**
-  2. Phase 3 evidence 任务图插入位置很关键:`match_score` 之后, `retrieve_materials` 之前 — 顺序不能颠倒(evidence 依赖 match_score 算出的 jd_keywords 透传)
-  3. `evidence=None` 字节级一致是 R5-A Phase 3 的硬约束(老 352 测试零回退),实现路径上 `_build_request_payload` 在 evidence_summary 为 None 时不写字段 + system prompt 不追加 `EVIDENCE_CONSTRAINT_SUFFIX` 后缀,这两条缺一不可
-  4. `_summarize_evidence_for_prompt` 单条 80 字符截断 + 总 2000 字符上限是为了避免 evidence 注入 LLM context 后超 token 上限;截断标记 `(N more)` 提示 LLM 还有更多 evidence 但当前 summary 已截断
-- **效果**:**441 passed + 0 skipped**(含 R5-A Phase 4 +11、closeout +14);四阶段与 closeout 均零 P0/P1 安全阻塞;`agent_summary` / `evidence_summary` 都仅在 `enable_agent_workflow=True` 路径提供,默认 False 不污染老路径;`agent_trace.jsonl` 跟 `agent_trace.log` 并存,R4-A 老格式用户数据兼容;**默认 disable 全部新能力**(enable_agent_workflow=False + evidence=None + enable_function_calling=False + session_id=None),**零行为变更**,等用户明确启用才走新路径
-- **spec 文档**: `.harness/docs/agent-enhancement-spec.md`(Phase 1+2+3+4+closeout 状态均已 ✅),`.harness/docs/round5-b-agent-capability-spec.md` 为下一轮入口
-- **下一步**:Round 5-B 推荐先做 Phase 2A 工具 schema/context/effective tools,再做 eval request_id 关联;GUI 高级面板继续等用户明确启动
+  1. Phase 1 `request_id` 从 agent_summary 取需要 workflow 路径先跑(`enable_agent_workflow=True`); 老路径(AW=F)走 JSONL 反查兜底
+  2. Phase 2 `external_resume_text` 字段默认 None 完全不污染老路径(preview 不写 `external_resume_perspective` 字段); 但 `enable_external_resume` bool 仍保留向后兼容
+  3. Phase 3 evaluate step 改 `has_jd` 触发(不再依赖 FC),但 evaluate_bullet_jd_match 工具仍 `affects_preview=False`(诊断输出,不注 build_sections / rewrite_highlights)
+  4. Phase 5 replay `_observed_tools` 严格只接受 str 类型工具名(非 str / None / 空 字符串统一跳过),防止 events 里脏数据污染交叉验证
+- **效果**:**544 passed + 0 skipped**(R5-B Phase 2A baseline 497 + 17 Phase 1 + 16 Phase 2 + 10 Phase 3 + 14 Phase 5); 五阶段均零 P0/P1 安全阻塞; `enable_agent_workflow=False` 老路径字节级稳定; eval 报告可被 Phase 1 fallback taxonomy 解释; 外部简历能进入 Agent workflow 诊断(原文不泄漏); per-bullet 评估可解释但不污染改写
+- **spec 文档**: `.harness/docs/round5-c-agent-capability-spec.md`(5 phase 全部 ✅)
+- **下一步**:等用户明确启动下一轮(如真实 LLM key 接入、GUI 面板实际打开、vector DB RAG 升级等)
 
 ---
 
@@ -301,14 +324,14 @@
 | 后端入口 | `backend/main.py` |
 | 核心域 | `backend/core/generator.py` + `backend/core/jd_parser.py` + `backend/core/llm_rewriter.py` + `backend/core/jd_ranker.py` + **R4 session** `backend/core/session.py` + **R5-A** `backend/core/agent_tools.py` + `backend/core/agent_workflow.py` + **`backend/core/evidence.py`** |
 | API | `backend/api/resume.py` + `backend/api/jd.py` |
-| 测试 | `backend/tests/` **416 pytest** (283 R4 baseline + 20 R5-A Phase 1 + 32 R5-A Phase 2 + 62 R5-A Phase 3) |
+| 测试 | `backend/tests/` **544 pytest** (R5-B Phase 2A baseline 497 + 17 R5-C Phase 1 + 16 R5-C Phase 2 + 10 R5-C Phase 3 + 14 R5-C Phase 5) |
 | 前端入口 | `frontend/src/App.vue` |
-| 设计文档 | `.harness/docs/` (含 `agent-enhancement-spec.md` R5-A spec) |
+| 设计文档 | `.harness/docs/` (含 `round5-c-agent-capability-spec.md` 5 phase 已 ✅) |
 | 项目记忆 | `.harness/memory/MEMORY.md` |
 | 本地隐私数据 | `简历帮知识库/` (`.gitignore`,不进库) |
 | JD 库 | `AI岗位JD库_v4_intern.json` + 4 份报告 md |
-| 扩库 / 打标 / 阈值脚本 | `scripts/build_v4.py` + `scripts/score_intern_match.py` + `scripts/label_samples.py` + `scripts/score_thresholds.py` + `scripts/match_golden_targets.py` + **`scripts/replay_agent_trace.py`** (R5-A Phase 2 会话回放 CLI) |
+| 扩库 / 打标 / 阈值脚本 | `scripts/build_v4.py` + `scripts/score_intern_match.py` + `scripts/label_samples.py` + `scripts/score_thresholds.py` + `scripts/match_golden_targets.py` + **`scripts/replay_agent_trace.py`** (R5-A Phase 2 + R5-C Phase 5: Fallback Summary 段 + --tools-used 交叉验证) + **`scripts/evaluate_agent_workflow.py`** (R5-A Phase 4 + R5-C Phase 1: fallback taxonomy 5 类) |
 
 ---
 
-_最后更新:2026-06-27 R5-B.0 文档基线校准;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`,427 → 441 全绿含 14 closeout 新 pytest),由 orchestrator 维护;下一轮推荐启动 Round 5-B Phase 2A 工具契约/权限/真实数据流_
+_最后更新:2026-06-28 R5-C Phase 5 文档与回放闭环 收尾;R5-A Phase 1-4 + closeout 已通过 PR #4 合并到 main(merge `12dfcf1`);R5-B Phase 2A 已通过 PR #6 合并到 main(merge `09a2704`);R5-C Phase 1-5 全部落地 baseline 530→544 pytest 全绿,由 orchestrator 维护;下一轮候选待用户明确启动_

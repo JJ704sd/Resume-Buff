@@ -270,3 +270,220 @@ class TestHelpers:
 
     def test_get_tool_spec_returns_none_for_unknown_tool(self):
         assert get_tool_spec("nope") is None
+
+
+# =========================================================================
+# R5-B Phase 2A: Context 权限校验
+# =========================================================================
+class TestToolPermissionContext:
+    """R5-B Phase 2A: context 权限边界 + affects_preview 元数据
+
+    锁点 (round5-b-agent-capability-spec.md §3.2):
+      - allow_jd_text / allow_materials / allow_external_resume / max_pii_risk
+      - 权限不匹配返回 PRIVACY_VIOLATION (早于 schema 校验)
+      - 错误描述只含字段名 + 权限名, 不含 args 原文
+    """
+
+    def test_default_context_allows_jd_and_materials(self):
+        """缺省 context (无 context 参数) → JD / materials 工具可调用"""
+        from core.generator import load_materials
+        mats = load_materials()
+        # parse_jd 不需要 materials, 但需要 allow_jd_text (默认 True)
+        result = execute_agent_tool("parse_jd", args={"text": "熟悉大模型评测"})
+        assert result.status == "success", (
+            f"缺省 context 应允许 parse_jd, 实际: {result.error_msg}"
+        )
+
+    def test_deny_jd_text_blocks_parse_jd(self):
+        """allow_jd_text=False → parse_jd 返回 PRIVACY_VIOLATION"""
+        result = execute_agent_tool(
+            "parse_jd",
+            args={"text": "熟悉大模型评测"},
+            context={"allow_jd_text": False, "allow_materials": True},
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.PRIVACY_VIOLATION
+        # 错误描述只含权限名, 不含 args 原文
+        assert "jd" in result.error_msg.lower()
+        assert "熟悉大模型评测" not in result.error_msg  # 不含 JD 原文
+
+    def test_deny_materials_blocks_match_score(self):
+        """allow_materials=False → match_score 返回 PRIVACY_VIOLATION"""
+        result = execute_agent_tool(
+            "match_score",
+            args={"text": "熟悉 Python", "target_role": "tech_metric", "materials": {}},
+            context={"allow_jd_text": True, "allow_materials": False},
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.PRIVACY_VIOLATION
+        assert "materials" in result.error_msg.lower()
+
+    def test_max_pii_risk_low_blocks_medium_tools(self):
+        """max_pii_risk=low → pii_risk=medium 的工具被拒"""
+        # match_score pii_risk="medium", 低 context 应拒绝
+        result = execute_agent_tool(
+            "match_score",
+            args={"text": "x", "target_role": "tech_metric", "materials": {}},
+            context={"allow_jd_text": True, "allow_materials": True, "max_pii_risk": "low"},
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.PRIVACY_VIOLATION
+        assert "pii" in result.error_msg.lower() or "medium" in result.error_msg.lower()
+
+    def test_max_pii_risk_high_allows_medium_tools(self):
+        """max_pii_risk=high → medium 工具可调用(向后兼容)"""
+        result = execute_agent_tool(
+            "match_score",
+            args={"text": "熟悉 Python", "target_role": "tech_metric", "materials": {}},
+            context={"allow_jd_text": True, "allow_materials": True, "max_pii_risk": "high"},
+        )
+        assert result.status == "success", (
+            f"high risk context 应允许 medium tool, 实际: {result.error_msg}"
+        )
+
+    def test_privacy_violation_does_not_call_tool(self):
+        """PRIVACY_VIOLATION 不调用 callable (latency_ms=0)"""
+        result = execute_agent_tool(
+            "parse_jd",
+            args={"text": "x"},
+            context={"allow_jd_text": False},
+        )
+        assert result.latency_ms == 0
+        assert result.output is None
+
+    def test_external_resume_requires_allow_flag(self):
+        """external_resume 相关工具需 allow_external_resume=True
+        (当前无实际 external_resume 工具, 但 _check_permission_context 已实现该分支)"""
+        # 直接测试 _check_permission_context helper (不通过 execute_agent_tool)
+        from core.agent_tools import ToolSpec, _check_permission_context
+
+        fake_ext_spec = ToolSpec(
+            name="parse_external_resume",
+            callable=lambda text: text,
+            permission="read_external_resume",
+            pii_risk="medium",
+            timeout_ms=300,
+        )
+        # 默认 allow_external_resume=False → 拒绝
+        assert _check_permission_context(fake_ext_spec, {}) is not None
+        # 显式 True → 允许
+        assert _check_permission_context(fake_ext_spec, {"allow_external_resume": True}) is None
+
+    def test_context_check_runs_before_schema_check(self):
+        """context 权限校验早于 schema 校验 — 避免敏感数据进入校验日志"""
+        # 即使 args 类型错, 也应先返 PRIVACY_VIOLATION 而非 TOOL_ARGS_INVALID
+        result = execute_agent_tool(
+            "parse_jd",
+            args={"text": 12345},  # type 错
+            context={"allow_jd_text": False},  # 但权限先拒
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.PRIVACY_VIOLATION, (
+            f"权限校验应早于 schema 校验, 实际 error_type: {result.error_type}"
+        )
+
+
+# =========================================================================
+# R5-B Phase 2A: affects_preview 元数据
+# =========================================================================
+class TestAffectsPreview:
+    """R5-B Phase 2A: ToolSpec.metadata["affects_preview"] 控制 tools_used 语义"""
+
+    def test_retrieve_evidence_affects_preview_true(self):
+        """retrieve_evidence 是当前唯一真正影响 preview 的工具"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("retrieve_evidence") is True
+
+    def test_match_score_affects_preview_false(self):
+        """match_score 当前是展示型 (output 未被 build_sections 消费)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("match_score") is False
+
+    def test_parse_jd_affects_preview_false(self):
+        """parse_jd 当前是展示型"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("parse_jd") is False
+
+    def test_rewrite_highlights_affects_preview_false(self):
+        """rewrite_highlights 当前是展示型 (代表 bullet, 占位)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("rewrite_highlights") is False
+
+    def test_evaluate_bullet_affects_preview_false(self):
+        """evaluate_bullet_jd_match 当前是展示型 (representative 单条)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("evaluate_bullet_jd_match") is False
+
+    def test_unknown_tool_returns_false(self):
+        """未注册工具 → affects_preview 返 False (不抛)"""
+        from core.agent_tools import affects_preview
+        assert affects_preview("nonexistent_tool") is False
+
+
+# =========================================================================
+# R5-B Phase 2A: 完整 schema validator 集成 (execute_agent_tool 走通)
+# =========================================================================
+class TestExecuteAgentToolSchemaIntegration:
+    """R5-B Phase 2A: execute_agent_tool 集成新 schema validator (type + range + items)"""
+
+    def test_type_mismatch_returns_args_invalid(self):
+        """字段类型错 → TOOL_ARGS_INVALID (早于 callable)"""
+        # retrieve_evidence jd_keywords 必须是 array, 传 string 应拒
+        result = execute_agent_tool(
+            "retrieve_evidence",
+            args={
+                "jd_keywords": "not a list",  # type 错
+                "role": "tech_metric",
+                "materials": {},
+            },
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.TOOL_ARGS_INVALID
+        # 错误描述含字段名 + 类型摘要, 不含 args 原文
+        assert "jd_keywords" in result.error_msg
+        assert "array" in result.error_msg
+        assert "not a list" not in result.error_msg
+
+    def test_range_violation_returns_args_invalid(self):
+        """top_k 越界 → TOOL_ARGS_INVALID"""
+        result = execute_agent_tool(
+            "retrieve_evidence",
+            args={
+                "jd_keywords": ["LLM"],
+                "role": "tech_metric",
+                "materials": {},
+                "top_k": 100,  # > maximum 50
+            },
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.TOOL_ARGS_INVALID
+        assert "maximum" in result.error_msg
+
+    def test_array_items_type_violation(self):
+        """array items 类型错 → TOOL_ARGS_INVALID"""
+        result = execute_agent_tool(
+            "retrieve_evidence",
+            args={
+                "jd_keywords": ["LLM", 123],  # int 不应是 string
+                "role": "tech_metric",
+                "materials": {},
+            },
+        )
+        assert result.status == "error"
+        assert result.error_type == ToolErrorType.TOOL_ARGS_INVALID
+        assert "string" in result.error_msg
+
+    def test_valid_args_still_pass_through(self):
+        """完整合法 args → 走通 validator 调 callable"""
+        result = execute_agent_tool(
+            "retrieve_evidence",
+            args={
+                "jd_keywords": ["LLM"],
+                "role": "tech_metric",
+                "materials": {"projects": [], "skills": {}},
+                "top_k": 5,
+                "min_confidence": 0.0,
+            },
+        )
+        assert result.status == "success"
+        assert result.output is not None  # 返 dict list

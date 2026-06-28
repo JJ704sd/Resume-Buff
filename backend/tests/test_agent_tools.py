@@ -75,6 +75,9 @@ class TestRegistrySchema:
             assert spec.permission in {
                 "read_jd_text", "read_jd_and_materials", "read_bullet_and_jd_focus",
                 "read_materials_and_jd_keywords",  # R5-A Phase 3: retrieve_evidence 新增
+                # R5-C Phase 2: 外部简历工具新增 (spec §3.2 / §3.4)
+                "read_external_resume",
+                "read_jd_and_external_resume",
             }, f"{tool_name} permission 异常: {spec.permission}"
             assert spec.pii_risk in {"low", "medium", "high"}, f"{tool_name} pii_risk 异常"
             assert isinstance(spec.timeout_ms, int) and spec.timeout_ms > 0, (

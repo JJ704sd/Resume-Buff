@@ -47,8 +47,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from core.jd_parser import (
+    compare_resume_jd,
     evaluate_bullet_jd_match,
     match_score,
+    parse_external_resume,
     parse_jd,
 )
 from core.llm_rewriter import rewrite_highlights
@@ -235,6 +237,48 @@ AGENT_TOOLS: dict[str, ToolSpec] = {
             "required": ["highlights", "target_role"],
         },
     ),
+    # R5-C Phase 2: 外部简历工具 — 让外部简历文本进入 Agent 工具链
+    # 隐私边界 (round5-c-agent-capability-spec.md §3.4):
+    #   - 不存 / 不返 简历段落原文 (parse_external_resume 只返 profile 统计 + 命中关键词)
+    #   - 不存 / 不返 JD 原文 (compare_resume_jd 只返 4 维摘要 + 计数)
+    #   - JSONL trace 只写 input_size / output_size, 不写原文
+    "parse_external_resume": ToolSpec(
+        name="parse_external_resume",
+        callable=parse_external_resume,
+        permission="read_external_resume",
+        pii_risk="high",  # 含简历片段 (虽然只返关键词, 但入参本身敏感)
+        timeout_ms=300,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "external_resume_text": {"type": "string"},
+            },
+            "required": ["external_resume_text"],
+        },
+        # R5-C Phase 2 §3.3: 初期不标 affects_preview=True
+        # 后续若让外部简历影响素材排序 / 改写, 单独升版并补 baseline 测试
+        metadata={"affects_preview": False},
+    ),
+    "compare_resume_jd": ToolSpec(
+        name="compare_resume_jd",
+        callable=compare_resume_jd,
+        # 同时读 JD + 外部简历 — 用 read_jd_and_external_resume 复合权限,
+        # 校验同时需要 allow_jd_text + allow_external_resume
+        permission="read_jd_and_external_resume",
+        pii_risk="high",
+        timeout_ms=500,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "external_resume_text": {"type": "string"},
+                "jd_text": {"type": "string"},
+                "target_role": {"type": "string"},
+                "materials": {"type": "object"},
+            },
+            "required": ["external_resume_text", "jd_text", "target_role", "materials"],
+        },
+        metadata={"affects_preview": False},
+    ),
 }
 
 
@@ -305,6 +349,12 @@ def _check_permission_context(spec: ToolSpec, context: dict) -> Optional[str]:
     elif permission == "read_external_resume":
         if not context.get("allow_external_resume", False):
             return "permission read_external_resume requires allow_external_resume"
+    elif permission == "read_jd_and_external_resume":
+        # R5-C Phase 2: 复合权限 — 同时读 JD + 外部简历
+        if not context.get("allow_jd_text", True):
+            return "permission read_jd_and_external_resume requires allow_jd_text"
+        if not context.get("allow_external_resume", False):
+            return "permission read_jd_and_external_resume requires allow_external_resume"
     # unknown permission -> 不阻断 (宽容)
 
     return None

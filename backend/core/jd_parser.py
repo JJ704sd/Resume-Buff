@@ -876,3 +876,279 @@ def evaluate_bullet_jd_match(bullet: str, jd_focus: dict) -> dict:
         "missing_keywords": missing,
         "suggestion": suggestion,
     }
+
+
+# ----------------------------------------------------------------------
+# R5-C Phase 2: 外部简历工具 (Agent 工具链路)
+# ----------------------------------------------------------------------
+def parse_external_resume(external_resume_text: str) -> dict[str, Any]:
+    """
+    R5-C Phase 2: 把外部简历全文压缩成 profile + keywords 摘要.
+
+    输入:
+      - external_resume_text: 简历全文字符串 (前端 parse-external 拿到的段落拼接 / 用户粘贴)
+
+    输出 schema (稳定, 供 Agent 工具链消费):
+      {
+        "profile": {
+          "char_count":       int,    # 字符总数 (含空白)
+          "paragraph_count":  int,    # 段落数 (按双换行 split, 至少 1)
+        },
+        "keywords": list[str],  # KEYWORD_GROUPS 命中的 normalized 关键词 (sorted)
+      }
+
+    设计边界 (对齐 round5-c-agent-capability-spec.md §3.4 隐私):
+      - **绝不含** 段落原文 / 标题 / 邮箱 / 电话 / 姓名 (只返 profile 统计 + 关键词)
+      - **不**调 LLM, 纯规则化 (复用 KEYWORD_GROUPS surface 扫描)
+      - **不**联网, **不**落盘, 纯内存
+      - 空文本 → 返回空 schema (profile 全 0, keywords=[])
+
+    跟 _build_resume_perspective 区别:
+      - _build_resume_perspective 依赖 JD, 输出 have/need 视角
+      - parse_external_resume 不依赖 JD, 只产简历自身的 profile + 命中关键词
+    """
+    # 防御性: 空 / None 输入返空 schema
+    if not external_resume_text or not external_resume_text.strip():
+        return {
+            "profile": {"char_count": 0, "paragraph_count": 0},
+            "keywords": [],
+        }
+
+    text = external_resume_text
+    # char_count: 含空白 (跟 len() 一致, 不 strip)
+    char_count = len(text)
+    # paragraph_count: 按双换行 split, 至少 1; 单换行不切
+    paragraphs = [p for p in text.split("\n\n") if p.strip()]
+    paragraph_count = len(paragraphs) if paragraphs else 1
+
+    # 复用 match_score 的 surface 扫描逻辑 (normalize + KEYWORD_GROUPS surface 命中)
+    norm_text = _normalize_text(text)
+    keywords: set[str] = set()
+    for group_keywords in KEYWORD_GROUPS.values():
+        for surface, normalized, _w in group_keywords:
+            if surface.lower() in norm_text:
+                keywords.add(normalized)
+
+    return {
+        "profile": {
+            "char_count": char_count,
+            "paragraph_count": paragraph_count,
+        },
+        "keywords": sorted(keywords),
+    }
+
+
+def compare_resume_jd(
+    external_resume_text: str,
+    jd_text: str,
+    target_role: str,
+    materials: dict | None = None,
+) -> dict[str, Any]:
+    """
+    R5-C Phase 2: 对比外部简历 vs JD, 产出"have/need/materials_can_cover/resume_only"
+    四维摘要 + suggestions.
+
+    输入:
+      - external_resume_text: 简历全文
+      - jd_text:              JD 全文
+      - target_role:          6 个 role id 之一 (必须 ENABLED_ROLES, 否则 ValueError)
+      - materials:            可选素材库 (不传则 load_materials 读 json)
+
+    输出 schema (对齐 round5-c-agent-capability-spec.md §3.2):
+      {
+        "have_keywords":          list[str],  # JD 要求 ∩ 简历里有
+        "need_keywords":          list[str],  # JD 要求 - 简历里有 - 素材库能提供 (真正缺)
+        "materials_can_cover":    list[str],  # JD 要求 - 简历里有 ∩ 素材库能提供
+                                          # (素材库有但简历没写, 提醒用户"补进简历")
+        "resume_only_keywords":   list[str],  # 简历里有 ∩ JD 要求 - 素材库能提供
+                                          # (简历独有, 素材库没, 可考虑补素材库)
+        "suggestions":            list[str],  # 2-5 条人话建议
+        "counts": {
+          "have":                 int,
+          "need":                 int,
+          "materials_can_cover":  int,
+          "resume_only":          int,
+        },
+      }
+
+    设计边界 (对齐 round5-c-agent-capability-spec.md §3.4 隐私):
+      - **绝不含** 简历 / JD 原文 / 段落 / 邮箱 / 电话 / 姓名
+      - **不**调 LLM, 纯规则化 (复用 parse_jd + _build_resume_perspective + 素材库池)
+      - **不**联网, **不**落盘
+
+    算法:
+      1) parse_jd(jd_text) → 抽 normalized 关键词 (skills ∪ tools ∪ domains)
+      2) 计算 materials 候选池 (role + borrowed, match_score 同源算法)
+      3) required = JD normalized 关键词
+      4) 对每个 required kw:
+         - 在简历里命中 → have
+         - 在简历里未命中但在 pool 里 → materials_can_cover
+         - 都不命中 → need_candidates
+      5) need = need_candidates (因为简历没 + 素材库也没 = 真正缺)
+      6) resume_only = (简历 ∩ required) - pool (简历独有, 素材库没)
+      7) suggestions 基于 need 关键词 + materials_can_cover 关键词生成 2-5 条人话建议
+
+    Raises:
+        ValueError: target_role 不在 ENABLED_ROLES
+    """
+    # 1) 防御性: 任意一方空 → 返空 schema (不抛错, 让 Agent 链路能继续)
+    if (
+        not external_resume_text or not external_resume_text.strip()
+        or not jd_text or not jd_text.strip()
+    ):
+        return _empty_compare_schema()
+
+    # 2) target_role 校验 (抛 ValueError, 由 execute_agent_tool 转 TOOL_RUNTIME_ERROR)
+    if target_role not in ENABLED_ROLES:
+        raise ValueError(
+            f"不支持/未启用的岗位: {target_role!r},"
+            f"当前已启用: {ENABLED_ROLES}"
+        )
+    if target_role not in ROLE_CONFIG:
+        raise ValueError(f"岗位 {target_role!r} 不在 ROLE_CONFIG")
+
+    # 3) 准备 data (复用 match_score 的 parse_jd + 候选池逻辑)
+    mats = materials if materials is not None else load_materials()
+    role_cfg = ROLE_CONFIG[target_role]
+    parsed = parse_jd(jd_text)
+    pool = _build_candidate_pool(
+        role_cfg["skill_keys"], mats,
+        include_borrowed=True,
+    )
+
+    # 4) 归一化简历
+    norm_resume = _normalize_text(external_resume_text)
+
+    # 5) JD 要求关键词 (跨 group 合并去重)
+    required: set[str] = set()
+    for group_name in ("skills", "tools", "domains"):
+        required.update(parsed.get(group_name, []) or [])
+
+    if not required:
+        return _empty_compare_schema()
+
+    # 6) 对每个 required kw 三向分类
+    have: list[str] = []
+    materials_can_cover_list: list[str] = []
+    need_candidates: list[str] = []
+    resume_only_candidates: list[str] = []
+
+    seen: set[str] = set()
+    for kw in sorted(required):
+        if kw in seen:
+            continue
+        seen.add(kw)
+
+        # 收集这个 normalized 在 KEYWORD_GROUPS 里的所有 surface (同义词 alias)
+        surfaces: list[str] = []
+        for group_keywords in KEYWORD_GROUPS.values():
+            for surface, normalized, _w in group_keywords:
+                if normalized == kw:
+                    surfaces.append(surface)
+        # 任意 surface 在归一化简历里出现 → 简历里有
+        in_resume = any(s.lower() in norm_resume for s in surfaces)
+        # 素材库能否提供 (pool 是 normalized 集合)
+        in_materials = kw in pool
+
+        if in_resume and in_materials:
+            have.append(kw)
+        elif in_resume and not in_materials:
+            # 简历里有, 素材库没 → resume_only (可考虑补素材库)
+            have.append(kw)
+            resume_only_candidates.append(kw)
+        elif not in_resume and in_materials:
+            # 简历没, 素材库有 → materials_can_cover (提醒"补进简历")
+            materials_can_cover_list.append(kw)
+        else:
+            # 都没 → need
+            need_candidates.append(kw)
+
+    need = sorted(need_candidates)
+    resume_only = sorted(resume_only_candidates)
+
+    # 7) suggestions 生成 (基于 need + materials_can_cover)
+    suggestions = _build_compare_suggestions(
+        need_keywords=need,
+        materials_can_cover_keywords=sorted(materials_can_cover_list),
+        role_cfg=role_cfg,
+    )
+
+    return {
+        "have_keywords": sorted(have),
+        "need_keywords": need,
+        "materials_can_cover": sorted(materials_can_cover_list),
+        "resume_only_keywords": resume_only,
+        "suggestions": suggestions,
+        "counts": {
+            "have": len(have),
+            "need": len(need),
+            "materials_can_cover": len(materials_can_cover_list),
+            "resume_only": len(resume_only),
+        },
+    }
+
+
+def _empty_compare_schema() -> dict[str, Any]:
+    """compare_resume_jd 在空输入或无 JD 关键词时返的空 schema (schema 稳定)"""
+    return {
+        "have_keywords": [],
+        "need_keywords": [],
+        "materials_can_cover": [],
+        "resume_only_keywords": [],
+        "suggestions": [],
+        "counts": {
+            "have": 0,
+            "need": 0,
+            "materials_can_cover": 0,
+            "resume_only": 0,
+        },
+    }
+
+
+def _build_compare_suggestions(
+    need_keywords: list[str],
+    materials_can_cover_keywords: list[str],
+    role_cfg: dict,
+) -> list[str]:
+    """
+    compare_resume_jd 的建议生成器(纯规则化, 不调 LLM).
+
+    规则:
+      - need 关键词: 提示"素材库 + 简历都缺, 建议补充素材 + 改写简历"
+      - materials_can_cover 关键词: 提示"素材库有但简历没写, 建议在简历里展开"
+      - 两者都空: "你的简历和素材库都覆盖了 JD 要求"
+    """
+    suggestions: list[str] = []
+
+    # 1) 真正缺的关键词 (need)
+    if need_keywords:
+        # 最多列 3 个, 避免太长
+        listed = need_keywords[:3]
+        suggestions.append(
+            f"以下 JD 关键词在简历和素材库都缺失, 建议补充经验或扩展素材: "
+            f"{', '.join(listed)}"
+        )
+
+    # 2) 素材库有但简历没写的关键词 (materials_can_cover)
+    if materials_can_cover_keywords:
+        listed = materials_can_cover_keywords[:3]
+        suggestions.append(
+            f"素材库已覆盖但简历未体现, 建议在项目亮点里展开: "
+            f"{', '.join(listed)}"
+        )
+
+    # 3) 兜底: 全覆盖
+    if not suggestions:
+        suggestions.append(
+            "简历和素材库均已覆盖 JD 关键词, 可考虑调整表达 / 顺序优化呈现"
+        )
+
+    # 4) 求职意向对齐
+    intention = role_cfg.get("intention", "")
+    if intention and (need_keywords or materials_can_cover_keywords):
+        suggestions.append(
+            f"建议在求职意向部分对齐 '{intention}' 的方向"
+        )
+
+    # 截断到 5 条
+    return suggestions[:5]

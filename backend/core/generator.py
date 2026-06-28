@@ -1085,6 +1085,7 @@ def preview_resume(
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
     evidence: Optional[list] = None,  # R5-A Phase 3: evidence 透传, None 字节级一致
     enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
+    external_resume_text: Optional[str] = None,  # R5-C Phase 2: 老路径忽略, workflow 路径消费
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1113,6 +1114,11 @@ def preview_resume(
       - None  → 老路径字节级一致,LLM 不接收 evidence summary
       - list  → 透传给 build_sections → rewrite_highlights,LLM 改写受"基于 evidence 改写"约束
       - 当前 enable_agent_workflow=False 老路径仅是"透传" — 真正注入逻辑在 workflow 路径
+
+    R5-C Phase 2: external_resume_text(默认 None)
+      - 老路径 (enable_agent_workflow=False): 完全忽略, 字节级一致
+      - workflow 路径: 透传到 run_agent_workflow, 任务图加 2 步外部简历工具
+                       返 external_resume_perspective 字段
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
@@ -1134,6 +1140,7 @@ def preview_resume(
                 output_dir=None,  # preview 模式
                 evidence=evidence,  # R5-A Phase 3
                 enable_external_resume=enable_external_resume,  # R5-A closeout
+                external_resume_text=external_resume_text,  # R5-C Phase 2
             )
             # workflow 内部失败已 fallback 到旧路径, 这里无需再 try/except
             return result
@@ -1177,6 +1184,7 @@ def generate_resume_docx(
     enable_agent_workflow: bool = False,  # R5-A Phase 1: 默认 False, 字节级一致
     evidence: Optional[list] = None,  # R5-A Phase 3: 透传, None 字节级一致
     enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
+    external_resume_text: Optional[str] = None,  # R5-C Phase 2: 老路径忽略, workflow 路径消费
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
@@ -1190,6 +1198,8 @@ def generate_resume_docx(
       - True  → 走 core.agent_workflow.run_agent_workflow(output_dir=...)
                 失败 fallback 到老路径
     R5-A Phase 3: evidence(默认 None) 透传 build_sections → rewrite_highlights。
+    R5-C Phase 2: external_resume_text(默认 None) 透传到 run_agent_workflow (workflow 路径消费;
+      老路径忽略, 字节级一致)。
     """
     # R5-A Phase 1: enable_agent_workflow=True 走 workflow
     if enable_agent_workflow:
@@ -1207,6 +1217,7 @@ def generate_resume_docx(
                 output_dir=output_dir,
                 evidence=evidence,  # R5-A Phase 3
                 enable_external_resume=enable_external_resume,  # R5-A closeout
+                external_resume_text=external_resume_text,  # R5-C Phase 2
             )
             return result
         except Exception:

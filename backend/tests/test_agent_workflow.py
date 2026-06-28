@@ -104,7 +104,9 @@ class TestBuildTaskGraph:
         assert names.index("evaluate_bullet_jd_match") < names.index("rewrite_highlights")
 
     def test_with_external_resume_adds_parse_step(self):
-        """has_external_resume=True → +1 步(本轮 tool=None 占位)"""
+        """has_external_resume=True → +1 步 (R5-C Phase 2: tool=parse_external_resume)
+        注: 无 JD 时 compare_resume_jd 不加入(只 parse_external_resume)
+        """
         steps = build_task_graph(
             has_jd=False,
             enable_function_calling=False,
@@ -112,9 +114,11 @@ class TestBuildTaskGraph:
         )
         names = [s.name for s in steps]
         assert "parse_external_resume" in names
-        # 本轮 tool=None(P2 接入 core.resume_parser)
+        # R5-C Phase 2: parse_external_resume 已是真工具(不再是 P2 占位)
         ext_step = next(s for s in steps if s.name == "parse_external_resume")
-        assert ext_step.tool is None
+        assert ext_step.tool == "parse_external_resume"
+        assert ext_step.required is False
+        assert ext_step.fallback == "skip"
 
     def test_task_graph_is_deterministic(self):
         """同样输入跑两次 → 字节级一致 step list"""
@@ -838,7 +842,8 @@ class TestEnableExternalResumePassthrough:
         assert "parse_external_resume" not in names
 
     def test_true_adds_external_resume_step(self):
-        """enable_external_resume=True → 任务图含 parse_external_resume step"""
+        """enable_external_resume=True → 任务图含 parse_external_resume step
+        (R5-C Phase 2: tool=parse_external_resume, 不仅是 P2 占位)"""
         from core.agent_workflow import build_task_graph
         steps = build_task_graph(
             has_jd=False,
@@ -847,9 +852,9 @@ class TestEnableExternalResumePassthrough:
         )
         names = [s.name for s in steps]
         assert "parse_external_resume" in names
-        # 该 step 是 P2 占位(tool=None, required=False, fallback="skip")
+        # R5-C Phase 2: parse_external_resume 是真工具
         ext_step = next(s for s in steps if s.name == "parse_external_resume")
-        assert ext_step.tool is None
+        assert ext_step.tool == "parse_external_resume"
         assert ext_step.required is False
         assert ext_step.fallback == "skip"
 

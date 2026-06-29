@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.materials import router as materials_router
 from api.resume import router as resume_router
 from api.jd import router as jd_router  # Round 2 #2: JD 解析/匹配度
+from api.interview import router as interview_router  # Round 6-A Phase 1: JD-driven interview agent
 
 app = FastAPI(
     title="简历帮 API",
@@ -29,6 +30,7 @@ app.add_middleware(
 app.include_router(materials_router, prefix="/api/materials", tags=["materials"])
 app.include_router(resume_router, prefix="/api/resume", tags=["resume"])
 app.include_router(jd_router, prefix="/api/jd", tags=["jd"])
+app.include_router(interview_router, prefix="/api/interview", tags=["interview"])
 
 
 @app.get("/")

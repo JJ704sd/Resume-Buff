@@ -16,6 +16,7 @@ import {
   type BulletEvaluation,
 } from './api'
 import ResumeUploader from './components/ResumeUploader.vue'  // R3-G
+import InterviewAgentPanel from './components/InterviewAgentPanel.vue'  // R6-A Phase 3
 
 const summary = ref<MaterialSummary | null>(null)
 const roles = ref<Role[]>([])
@@ -486,6 +487,44 @@ async function copyRequestId() {
 
 /** 当前 agent workflow 的工具调用列表(有效工具,只列 affects_preview=True 且 success) */
 const agentToolsUsed = computed(() => previewData.value?.agent_summary?.tools_used ?? [])
+
+// ---------- Round 6-A Phase 3: 面试官面板挂载点 ----------
+// 桌面端:右侧 380px sticky sidecar(始终显示,sticky top 不覆盖预览)
+// 移动端:右下 FAB + 全屏 el-drawer(避免挤压素材库概览 / 预览核心内容, spec §3.3)
+const isMobile = ref(false)
+const drawerVisible = ref(false)
+let mediaQuery: MediaQueryList | null = null
+function syncIsMobile() {
+  isMobile.value = Boolean(mediaQuery?.matches)
+}
+onMounted(() => {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    mediaQuery = window.matchMedia('(max-width: 768px)')
+    syncIsMobile()
+    mediaQuery.addEventListener('change', syncIsMobile)
+  }
+})
+// 不卸载 listener:跨阶段 stage 切换需要它继续工作;进程退出时浏览器自动清理
+
+// InterviewAgentPanel 保存素材后触发 → 重跑 jdApi.match 刷新评分卡
+async function onRefreshMatch() {
+  if (!jdText.value.trim() || !selectedRole.value) return
+  try {
+    jdResult.value = await jdApi.match(
+      jdText.value.trim(),
+      selectedRole.value,
+      externalResumeText.value.trim() || null,
+    )
+  } catch (e: any) {
+    // 评分刷新失败不阻断主流程,仅记录
+    console.warn('onRefreshMatch failed:', e?.message ?? e)
+  }
+}
+// refresh-preview 复用既有的 onPreview() — 直接调,生成新预览
+async function onRefreshPreview() {
+  // 跟 onPreview 逻辑一致但复用 onPreview 即可(spec §3.3)
+  await onPreview()
+}
 </script>
 
 <template>
@@ -507,8 +546,9 @@ const agentToolsUsed = computed(() => previewData.value?.agent_summary?.tools_us
       </div>
     </header>
 
-    <main class="main">
-      <!-- ============ 阶段 1: 选择岗位 ============ -->
+    <div class="app-shell">
+      <main class="app-main">
+        <!-- ============ 阶段 1: 选择岗位 ============ -->
       <template v-if="stage === 'select'">
         <el-row :gutter="20">
           <el-col :span="16">
@@ -1160,7 +1200,48 @@ const agentToolsUsed = computed(() => previewData.value?.agent_summary?.tools_us
           </el-result>
         </el-card>
       </template>
-    </main>
+      </main>
+      <!-- R6-A Phase 3: 桌面端右侧 380px sticky sidecar
+           不挤掉素材库概览 / 预览核心内容(用 .app-shell flex + 主体 min-width: 0) -->
+      <aside v-if="!isMobile" class="interview-sidecar">
+        <InterviewAgentPanel
+          :target-role="selectedRole"
+          :jd-text="jdText"
+          :external-resume-text="externalResumeText"
+          @refresh-match="onRefreshMatch"
+          @refresh-preview="onRefreshPreview"
+        />
+      </aside>
+    </div>
+
+    <!-- 移动端:FAB 按钮(右下) + 全屏 drawer -->
+    <button
+      v-if="isMobile"
+      type="button"
+      class="interview-fab"
+      aria-label="打开简历面试官"
+      @click="drawerVisible = true"
+    >
+      <span class="fab-icon">💬</span>
+      <span class="fab-label">面试官</span>
+    </button>
+    <el-drawer
+      v-if="isMobile"
+      v-model="drawerVisible"
+      direction="rtl"
+      size="100%"
+      :with-header="false"
+    >
+      <div class="drawer-inner">
+        <InterviewAgentPanel
+          :target-role="selectedRole"
+          :jd-text="jdText"
+          :external-resume-text="externalResumeText"
+          @refresh-match="onRefreshMatch"
+          @refresh-preview="onRefreshPreview"
+        />
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -1412,5 +1493,106 @@ body {
 }
 .agent-suggestion-list li {
   margin: 1px 0;
+}
+
+/* ===== R6-A Phase 3: 面试官面板 sidecar / FAB / drawer =====
+   桌面端: app-shell flex, app-main 占主体(max-width 1280px 居中),
+   interview-sidecar 380px sticky top(不覆盖 preview 顶部)。
+   移动端(<= 768px): 不渲染 sidecar, 只显示右下 FAB + el-drawer 全屏聊天。
+   选择 / 预览 / 完成 三阶段共享同一挂载点(spec §3.3)。 */
+.app-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  max-width: 1720px;        /* 1280 主体 + 16 gap + 380 sidecar + 左右内边距 */
+  margin: 24px auto;
+  padding: 0 24px;
+}
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;              /* 防止 flex item 内容把布局撑爆 */
+  max-width: 1280px;
+}
+.interview-sidecar {
+  width: 380px;
+  flex: 0 0 380px;
+  position: sticky;
+  top: 16px;
+  /* 计算可视区高度: 100vh - top 16px - bottom 16px 留余量;
+     内部 .interview-panel 高度 100% 即可铺满 */
+  height: calc(100vh - 32px);
+  max-height: calc(100vh - 32px);
+  align-self: flex-start;
+}
+.interview-sidecar :deep(.interview-panel) {
+  height: 100%;
+}
+.interview-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 24px;
+  z-index: 1000;
+  background: linear-gradient(135deg, #1f4e79 0%, #2e75b6 100%);
+  color: #fff;
+  border: none;
+  border-radius: 24px;
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(31, 78, 121, 0.4);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.interview-fab:active {
+  transform: scale(0.96);
+}
+.fab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.fab-label {
+  line-height: 1;
+}
+.drawer-inner {
+  height: 100%;
+  padding: 0;
+  display: flex;
+}
+.drawer-inner :deep(.interview-panel) {
+  flex: 1;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+}
+
+/* 当 app-shell 进入窄屏时,让 sidecar 跟着滚动 — 此时再回退到 FAB + drawer */
+@media (max-width: 768px) {
+  .app-shell {
+    display: block;
+    max-width: 100%;
+    margin: 16px auto;
+    padding: 0 12px;
+  }
+  .app-main {
+    max-width: 100%;
+  }
+  .interview-sidecar {
+    display: none;
+  }
+}
+
+/* element-plus drawer 在移动端常默认 padding 8px — 我们把整面板做成全屏聊天,
+   内部 .interview-panel 自带 padding, 不需要额外边距 */
+:deep(.el-drawer) {
+  --el-drawer-padding-primary: 0;
+}
+:deep(.el-drawer__header) {
+  margin: 0;
+  padding: 0;
 }
 </style>

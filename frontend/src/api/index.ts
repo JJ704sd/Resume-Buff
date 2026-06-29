@@ -270,6 +270,124 @@ export const jdApi = {
       .then(r => r.data),
 }
 
+// ----- Round 6-A Phase 3: 面试官面板契约 -----
+// 前端只消费自己新增的 5 个类型 + 4 个端点,不直接 import R5-C 的 workflow 诊断字段
+// (AgentSummary / EvidenceSummary / ExternalResumePerspective / BulletEvaluation),
+// 避免与现有 R5-C Phase 4 预览页诊断面板混淆(spec §3.3)。
+
+export type InterviewState =
+  | 'EMPTY'
+  | 'DIAGNOSING'
+  | 'ASKING'
+  | 'DRAFT_READY'
+  | 'SAVED'
+  | 'ABORTED'
+
+export type InterviewAction =
+  | 'answer'
+  | 'skip_question'
+  | 'rephrase_question'
+  | 'switch_gap'
+  | 'draft_now'
+
+export interface InterviewMessage {
+  slot: string
+  text: string
+  quick_replies: string[]
+}
+
+export interface InterviewProgress {
+  captured: Record<string, boolean>
+  turn_count: number
+  can_draft: boolean
+}
+
+export interface InterviewGap {
+  gap_id: string
+  label: string
+  reason: string
+  keywords: string[]
+  tier: string
+  priority: number
+  suggested_slots: string[]
+}
+
+export interface InterviewDraftCard {
+  title: string
+  target_role?: string
+  source_gap_id?: string
+  background: string
+  responsibility: string
+  actions: string[]
+  methods: string[]
+  difficulty: string
+  result: string
+  metrics: string[]
+  skills: string[]
+  draft_bullets: string[]
+  warnings: string[]
+  summary?: string
+}
+
+export interface InterviewStartRequest {
+  target_role: string
+  jd_text: string
+}
+
+export interface InterviewStartResponse {
+  session_id: string
+  state: InterviewState
+  selected_gap: InterviewGap
+  message: InterviewMessage | null
+  progress: InterviewProgress
+}
+
+export interface InterviewReplyRequest {
+  session_id: string
+  message: string
+  action: InterviewAction
+}
+
+export interface InterviewReplyResponse {
+  state: InterviewState
+  message: InterviewMessage | null
+  captured_delta: Record<string, unknown> | null
+  progress: InterviewProgress
+  can_draft: boolean
+  force_draft: boolean
+}
+
+export interface InterviewDraftResponse {
+  state: InterviewState
+  draft_card: InterviewDraftCard
+}
+
+export interface InterviewSaveRequest {
+  session_id: string
+  edited_card: InterviewDraftCard
+  save_mode: 'append_project'
+}
+
+export interface InterviewSaveResponse {
+  ok: boolean
+  material_ref: { type: 'project'; id: string }
+  refresh: { should_refresh_preview: boolean; should_refresh_match: boolean }
+  preview_score_delta: { before: number; after: number } | null
+}
+
+export const interviewApi = {
+  start: (req: InterviewStartRequest) =>
+    api.post<InterviewStartResponse>('/interview/start', req).then(r => r.data),
+  reply: (req: InterviewReplyRequest) =>
+    api.post<InterviewReplyResponse>('/interview/reply', req).then(r => r.data),
+  draft: (session_id: string) =>
+    api
+      .post<InterviewDraftResponse>('/interview/draft', { session_id })
+      .then(r => r.data),
+  saveCard: (req: InterviewSaveRequest) =>
+    api.post<InterviewSaveResponse>('/interview/save-card', req).then(r => r.data),
+}
+
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

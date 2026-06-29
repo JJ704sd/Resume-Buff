@@ -3,7 +3,7 @@
 > 适用项目: 简历帮 / Resume-Buff  
 > GitHub: `JJ704sd/Resume-Buff`  
 > 日期: 2026-06-29  
-> 状态: Draft spec, 待评审后拆 implementation plan  
+> 状态: ✅ Phase 1+2+3+5 全部完成(deferred work),Phase 4 LLM 抽取未启动(plan §5.1 启动条件 3 条均未满足:Phase 4 LLM 抽取上线 + 真实 LLM key 接入 + 用户跑 10+ 轮真实面试)  
 > 目标: 把现有“JD 评分 + Agent 诊断 + LLM 改写”升级为一个用户能自然使用的 **JD 驱动简历面试官**。它从目标 JD 出发, 选择最值得补的一个经历缺口, 通过聊天追问收集事实, 经用户确认后写回素材库, 并刷新简历预览。
 
 ---

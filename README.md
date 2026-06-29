@@ -8,10 +8,10 @@
 
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
-- 当前功能基线:R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
+- 当前功能基线:**R6-A Phase 1+2+3+5 脚手架全部完成**(后端 `interview_agent` 状态机 + save-card 写库闭环 + 前端右侧 chat panel / 移动端 drawer + eval 脚本 9 样本 offline 跑通;Phase 4 LLM 抽取未启动);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
 - **默认 prompt 仍为 `v2-baseline`**:R5-E 新增 3 个候选 prompt (v3-priority / v4-counterexample / v5-minimal) 属实验,本轮**不 rollout winner**,后续基于 live A/B 报告决定
-- 后端测试基线:683 passed + 0 skipped
-- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程
+- 后端测试基线:**729 passed + 0 skipped**
+- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程;`scripts/evaluate_interview_agent.py --mode live` 脚本内显式拒绝(Phase 4 未启)
 - 详细开发锁点:见 [AGENTS.md](AGENTS.md)
 - 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
 
@@ -24,6 +24,7 @@
 - 模板选择:内置 classic、single_column、two_column、minimal、technical、academic、internet、bilingual 等排版。
 - 外部简历视角:可解析外部简历文本,对比 JD 与素材库覆盖情况。
 - 可选 LLM 改写:有 key 时改写项目亮点,无 key 时静默降级为原文。
+- **JD 驱动简历面试官 (R6-A Phase 1+2+3)**:粘贴 JD → 系统选一个最值得补的缺口 → 一问一答 → 生成 draft_card → 用户编辑 → 写回素材库(`save_card` 原子写闭环)→ 触发预览与评分刷新;桌面右侧 380px 聊天栏 / 移动端全屏 drawer;规则版槽位抽取(不调 LLM)。
 - **Prompt 版本化 + A/B 评测 harness (R5-E)**:默认 prompt 仍是 `v2-baseline`;新增 3 个候选 prompt 版本 (`v3-priority` / `v4-counterexample` / `v5-minimal`) 属实验,`scripts/evaluate_prompt_versions.py --mode offline` 跑 12 JD × 4 version 对比,**手动脚本不进入默认启动流程**;可选 `--judge on` 启用 LLM-as-Judge 评分。
 - Agent workflow 诊断:默认关闭;开启后可查看 evidence、工具摘要、bullet 评估、trace replay 等诊断信息。
 
@@ -128,6 +129,7 @@ scripts/
   replay_agent_trace.py   Agent trace 回放
   evaluate_agent_workflow.py  R5-D 离线评测报告 (FC × AW 4 开关对照)
   evaluate_prompt_versions.py  R5-E Prompt A/B 评测 (4 prompt version 对比 + 可选 judge)
+  evaluate_interview_agent.py  R6-A Phase 5 interview agent 评测 (脚手架; live mode 脚本内拒绝,Phase 4 未启)
   verify.ps1             本地验证脚本
 
 .harness/

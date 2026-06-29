@@ -8,9 +8,10 @@
 
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
-- 当前功能基线:R5-D 6 phase 全部完成(`scripts/evaluate_agent_workflow.py --mode {offline,live,auto}` + LLM 元信息 + rewrite impact + latency/fallback 聚合;**手动脚本,默认仍 offline**)
-- 后端测试基线:596 passed + 0 skipped
-- 真实 LLM eval (`scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程
+- 当前功能基线:R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
+- **默认 prompt 仍为 `v2-baseline`**:R5-E 新增 3 个候选 prompt (v3-priority / v4-counterexample / v5-minimal) 属实验,本轮**不 rollout winner**,后续基于 live A/B 报告决定
+- 后端测试基线:683 passed + 0 skipped
+- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程
 - 详细开发锁点:见 [AGENTS.md](AGENTS.md)
 - 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
 
@@ -23,6 +24,7 @@
 - 模板选择:内置 classic、single_column、two_column、minimal、technical、academic、internet、bilingual 等排版。
 - 外部简历视角:可解析外部简历文本,对比 JD 与素材库覆盖情况。
 - 可选 LLM 改写:有 key 时改写项目亮点,无 key 时静默降级为原文。
+- **Prompt 版本化 + A/B 评测 harness (R5-E)**:默认 prompt 仍是 `v2-baseline`;新增 3 个候选 prompt 版本 (`v3-priority` / `v4-counterexample` / `v5-minimal`) 属实验,`scripts/evaluate_prompt_versions.py --mode offline` 跑 12 JD × 4 version 对比,**手动脚本不进入默认启动流程**;可选 `--judge on` 启用 LLM-as-Judge 评分。
 - Agent workflow 诊断:默认关闭;开启后可查看 evidence、工具摘要、bullet 评估、trace replay 等诊断信息。
 
 ## 不做什么
@@ -124,7 +126,8 @@ frontend/
 
 scripts/
   replay_agent_trace.py   Agent trace 回放
-  evaluate_agent_workflow.py  离线评测报告
+  evaluate_agent_workflow.py  R5-D 离线评测报告 (FC × AW 4 开关对照)
+  evaluate_prompt_versions.py  R5-E Prompt A/B 评测 (4 prompt version 对比 + 可选 judge)
   verify.ps1             本地验证脚本
 
 .harness/

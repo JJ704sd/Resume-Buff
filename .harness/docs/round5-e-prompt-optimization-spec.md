@@ -2,11 +2,11 @@
 
 > 适用项目: 简历帮 / Resume-Buff  
 > GitHub: `JJ704sd/Resume-Buff` (`main`)  
-> 日期: 2026-06-28  
-> 状态: 待实施  
-> 当前仓库基线: 本地 `main...origin/main`, 最近提交 `6ee228e docs(round5-d): refresh agent eval report`  
-> 当前能力基线: R5-D 真实 LLM eval 闭环已完成;README / ROADMAP 标注 **596 passed + 0 skipped**  
-> 下一轮目标: 在不改变默认生成行为的前提下,给 `SYSTEM_PROMPT` 增加显式版本选择,并新增一个隐私安全的 prompt A/B 评测脚本,让后续是否 rollout winner 有真实数据依据。
+> 日期: 2026-06-28 (撰写) / 2026-06-29 (Phase 4 收尾)  
+> 状态: ✅ 完成 (Phase 0-4 全部落地, 不 rollout winner)  
+> 当前仓库基线: 本地 `main`, 最近提交 `51bf33b docs(round5-e): record prompt ab offline report`  
+> 当前能力基线: R5-E 已落 4 phase, README / AGENTS / ROADMAP 标注 **683 passed + 0 skipped** (R5-D 596 + R5-E Phase 1 +31 + R5-E Phase 2 +28 + R5-E Phase 3 +28)  
+> 下一轮目标: 在不改变默认生成行为的前提下,基于 live A/B 报告 (人工触发) 决定是否切换默认 prompt 版本 (R5-E closeout / R5-F prompt rollout);若 live 报告 hallucination 仍高,优先 R5-F embedding RAG 升级 evidence retrieval, 不急着切 prompt.
 
 ---
 
@@ -577,4 +577,41 @@ R5-E 完成后,下一轮再二选一:
 
 ---
 
-_最后更新:2026-06-28。_
+## 11. Phase 4 收尾记录 (2026-06-29)
+
+**最终测试基线**: 683 passed + 0 skipped
+- 计算口径: R5-D 596 baseline + R5-E Phase 1 +31 (test_prompt_versioning.py) +
+  R5-E Phase 2 +28 (test_prompt_eval.py: A/B 评测脚本 + 隐私边界 + version registry) +
+  R5-E Phase 3 +28 (test_prompt_eval.py: judge helper + schema + 网络失败 + offline 强制 disabled)
+
+**新增报告路径**:
+- `AI岗位JD库_prompt_ab报告.md` — Phase 2 offline 模式跑批, 12 JD × 4 version × 1 run = 48 条样本,
+  报告含 7 章节 (LLM 元信息 / Prompt 版本总览 / By Version 指标表 / By JD 摘要 / fallback
+  taxonomy 摘要 / Winner 建议 / 隐私检查), PII 自检 pass.
+- `AI岗位JD库_prompt_ab报告_live.md` — 可选 live 模式, 需用户手动跑, 入库前**必须**
+  人工隐私检查 (确认无真实 JD 原文 / bullet 原文 / API key).
+
+**5 个 R5-E commit 顺序落地**:
+1. `7e92789` feat(round5-e): add prompt version selection — Phase 1 (596 → 627)
+2. `1c65bf9` docs(round5-e): add prompt optimization spec — Phase 0 spec 入库
+3. `fae76c4` feat(round5-e): add prompt ab eval harness with judge — Phase 2 + 3 (627 → 655 → 683)
+4. `51bf33b` docs(round5-e): record prompt ab offline report — offline 报告入库
+5. (Phase 4 closeout commit) docs(round5-e): close prompt ab harness round — README / AGENTS / ROADMAP / spec 状态同步
+
+**未做的事 (留 R5-E closeout / R5-F)**:
+- 不改 `SYSTEM_PROMPT` 默认内容
+- 不把 `PROMPT_VERSION_BASELINE` 切到 winner (仍为 `v2-baseline`)
+- 不新增前端 prompt selector
+- live 报告 (含真实 LLM 调用) 不自动入库
+- 不实施 GUI Agent 面板
+
+**R5-E 关键设计选择**:
+- 默认路径 (prompt_version=None) 字节级稳定 — `PROMPT_VERSIONS["v2-baseline"]` 指向当前
+  `SYSTEM_PROMPT`, 切到 winner 必须显式 `prompt_version="<winner>"`
+- A/B 固定 FC=T + AW=T, 只变 prompt_version — 跟 R5-D 评测 4 开关对照解耦
+- 报告四层链路 (ToolResult / agent_summary / JSONL trace / report) 绝不存原文 —
+  privacy boundary 写进 AGENTS.md 锁点
+
+---
+
+_最后更新:2026-06-29 (Phase 4 收尾, spec 状态 ✅ 完成, 不 rollout winner)._

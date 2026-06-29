@@ -1,5 +1,5 @@
 """
-LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling, R5-A Phase 3 evidence)
+LLM 智能改写模块 (Round 2 #3, R3-P 升级, R4-F Function Calling, R5-A Phase 3 evidence, R5-E Phase 1 prompt versioning)
 
 设计原则:
   - MVP: 没 key / 没启用 / 调用失败 → 全部静默降级,绝不抛异常给上层
@@ -36,6 +36,21 @@ R5-A Phase 3: 轻量 RAG evidence 约束
   - evidence=None 时:
       1) 不注入 evidence_summary (字节级一致老路径)
       2) SYSTEM_PROMPT 不变 (字节级一致)
+
+R5-E Phase 1: Prompt 版本化基础设施
+  - 目标: 不改默认 SYSTEM_PROMPT 内容, 允许 caller 显式选择 prompt_version
+  - 默认路径(prompt_version=None): 解析为 "v2-baseline" → 与当前 SYSTEM_PROMPT
+    **同对象引用** (PROMPT_VERSIONS["v2-baseline"] = SYSTEM_PROMPT) →
+    字节级锁死
+  - 候选 prompt:
+      - v2-baseline:     当前生产 prompt(回归基线)
+      - v3-priority:     优先级铁律版(P0 schema / P1 不编造 / P2 evidence /
+                          P3 jd_focus / P4 表达)
+      - v4-counterexample: V3 + 4 个反例类别(不输出解释 / 不改顺序 / 不借事实 /
+                            不为 missing 硬塞)
+      - v5-minimal:      极简版(短 prompt 对照, schema + 不编造 + 顺序一致底线)
+  - 不在 Phase 1 切换默认 prompt / 不 rollout winner
+  - prompt_version 不通过日志 / trace / error 泄漏 prompt 正文
 """
 import json
 import os
@@ -179,6 +194,105 @@ EVIDENCE_CONSTRAINT_SUFFIX = (
 )
 
 
+# ----------------------------------------------------------------------
+# R5-E Phase 1: Prompt 版本化基础设施
+# ----------------------------------------------------------------------
+# 设计:
+#   - 默认 SYSTEM_PROMPT 内容**不动** — 保持生产 prompt 不被悄悄替换
+#   - 引入 PROMPT_VERSIONS 注册表, v2-baseline 直接指向当前 SYSTEM_PROMPT 对象
+#     (同一引用 → 默认路径字节级锁死, _select_system_prompt 返回时字符串一致)
+#   - 候选版本(v3-priority / v4-counterexample / v5-minimal)作为**显式实验**, 不切换默认
+#   - caller 不传 prompt_version 或传 None / 空字符串 → 解析为 "v2-baseline"
+#   - caller 传未知版本 → ValueError(错误信息只含版本 key, 不含 prompt 正文)
+PROMPT_VERSION_BASELINE = "v2-baseline"
+
+SYSTEM_PROMPT_V3_PRIORITY = (
+    "你是简历润色专家,根据目标岗位改写项目亮点(bullets 列表)。\n"
+    "\n"
+    "优先级从高到低,冲突时必须服从更高优先级:\n"
+    "P0 JSON schema: 只输出 {\"rewritten\": [{\"index\": 0, \"text\": \"...\"}]}。\n"
+    "   index 必须 0..N-1 且顺序、数量与输入 bullets 完全一致。\n"
+    "P1 事实边界: 不编造数字、技能、公司、项目名、结果;每个改写必须能由原 bullet 支撑。\n"
+    "P2 evidence 边界: 若提供 evidence_summary,只能引用原 bullet 或 evidence 中存在的事实。\n"
+    "P3 JD 对齐: matched 必须保留;missing/tier_required 只能在有事实支撑时靠拢。\n"
+    "P4 表达: 中文,每条一句话,20-50 字,突出动作、方法、结果。\n"
+)
+
+SYSTEM_PROMPT_V4_COUNTEREXAMPLE = SYSTEM_PROMPT_V3_PRIORITY + (
+    "\n"
+    "禁止事项:\n"
+    "1. 不要输出解释、前言、Markdown 或额外字段。\n"
+    "2. 不要改变 bullet 数量、index 顺序或把多条合并。\n"
+    "3. 不要从其他 bullet 借事实补到当前 bullet。\n"
+    "4. 不要为了 missing keyword 硬塞无依据术语。\n"
+)
+
+SYSTEM_PROMPT_V5_MINIMAL = (
+    "你是简历润色专家。只输出 JSON: "
+    "{\"rewritten\": [{\"index\": 0, \"text\": \"...\"}]}。"
+    "index 必须 0..N-1,数量和输入 bullets 一致。"
+    "不得编造原 bullet/evidence 没有的事实。"
+    "若有 jd_focus,只在事实支持时贴近关键词。"
+    "中文,每条一句话,20-50 字。"
+)
+
+PROMPT_VERSIONS: dict[str, str] = {
+    PROMPT_VERSION_BASELINE: SYSTEM_PROMPT,
+    "v3-priority": SYSTEM_PROMPT_V3_PRIORITY,
+    "v4-counterexample": SYSTEM_PROMPT_V4_COUNTEREXAMPLE,
+    "v5-minimal": SYSTEM_PROMPT_V5_MINIMAL,
+}
+
+
+def _resolve_prompt_version(prompt_version: str | None) -> str:
+    """
+    R5-E Phase 1: 解析 prompt_version → 注册表里的合法 key。
+
+    行为:
+      - None / 空字符串 / 全空白 → 解析为 PROMPT_VERSION_BASELINE ("v2-baseline")
+      - 合法 key(含 strip 后的) → 原样返回
+      - 未知 key → 抛 ValueError (错误信息只含版本 key, 不含 prompt 正文)
+
+    不读取 env var / yaml, 纯输入参数决定 — 便于测试断言。
+    """
+    # strip 后空 (None / 空串 / 全空白) → fallback 到 baseline
+    # 避免 baseline 解析路径再走一遍 .strip() (PROMPT_VERSION_BASELINE 已是干净字符串)
+    raw = (prompt_version or "").strip()
+    if not raw:
+        return PROMPT_VERSION_BASELINE
+    if raw not in PROMPT_VERSIONS:
+        # 错误信息只含版本 key (用户的输入), 不含 PROMPT_VERSIONS 任何 prompt 正文
+        raise ValueError(f"unknown prompt_version: {raw!r}")
+    return raw
+
+
+def _select_system_prompt(
+    prompt_version: str | None,
+    evidence_summary: str | None,
+) -> str:
+    """
+    R5-E Phase 1: 根据 prompt_version + evidence_summary 选 system prompt。
+
+    行为:
+      - 默认路径(prompt_version=None, evidence_summary=None):
+          base = PROMPT_VERSIONS["v2-baseline"] = SYSTEM_PROMPT
+          → 返回 SYSTEM_PROMPT(同一对象,字节级一致)
+      - prompt_version=None + evidence_summary 非空:
+          base = SYSTEM_PROMPT
+          → 返回 SYSTEM_PROMPT + EVIDENCE_CONSTRAINT_SUFFIX(字节级一致)
+      - prompt_version="v3-priority" 等:
+          base = PROMPT_VERSIONS["v3-priority"]
+          → evidence_summary 非空时拼接 EVIDENCE_CONSTRAINT_SUFFIX
+
+    注: candidate prompt 也遵循同一 evidence 拼接规则(激活事实约束),
+    不重写各自 prompt 的 evidence 段落 — 减少重复定义。
+    """
+    base = PROMPT_VERSIONS[_resolve_prompt_version(prompt_version)]
+    if evidence_summary is not None:
+        return base + EVIDENCE_CONSTRAINT_SUFFIX
+    return base
+
+
 def _env(name: str, default: str = "") -> str:
     """读 env var,strip 空白,空字符串视同未设置"""
     v = os.environ.get(name, default)
@@ -209,6 +323,7 @@ def _build_request_payload(
     tools: Optional[list[dict]] = None,
     history_messages: Optional[list[dict]] = None,
     evidence_summary: Optional[str] = None,  # R5-A Phase 3: evidence 摘要 (None 字节级一致)
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 显式选 prompt 版本 (None 字节级一致)
 ) -> dict:
     """
     构造 chat/completions 请求体。
@@ -231,6 +346,11 @@ def _build_request_payload(
       1) user_payload 加 evidence_summary 字段 (LLM 改写时参考的事实摘录)
       2) system prompt 末尾追加 EVIDENCE_CONSTRAINT_SUFFIX (激活"只能基于 evidence 改写"约束)
     evidence_summary=None → 老路径字节级一致 (payload schema 不变, system prompt 不变)。
+
+    R5-E Phase 1: prompt_version 非 None 时,从 PROMPT_VERSIONS 选对应 prompt;
+    prompt_version=None / 空 / 未知 → 走默认路径(spec §2.1 字节级一致):
+      _resolve_prompt_version(None) → "v2-baseline" → SYSTEM_PROMPT(同对象),
+      _select_system_prompt(None, None) → 返回 SYSTEM_PROMPT(字节级一致老路径)
     """
     user_payload: dict = {
         "target_role": target_role,
@@ -260,11 +380,10 @@ def _build_request_payload(
         "content": json.dumps(user_payload, ensure_ascii=False),
     }
 
-    # R5-A Phase 3: system prompt 在 evidence_summary 非空时追加约束后缀
-    if evidence_summary is not None:
-        system_content = SYSTEM_PROMPT + EVIDENCE_CONSTRAINT_SUFFIX
-    else:
-        system_content = SYSTEM_PROMPT
+    # R5-E Phase 1: system prompt 选基 prompt + 拼 evidence 后缀。
+    # 默认路径(prompt_version=None, evidence_summary=None)→ _select_system_prompt
+    # 返回 SYSTEM_PROMPT(同对象引用)→ 与旧代码 "system_content = SYSTEM_PROMPT" 字节级一致
+    system_content = _select_system_prompt(prompt_version, evidence_summary)
 
     # R4-M: 拼装 messages — history_messages 非空时插在 system 和 current user 之间
     if history_messages:
@@ -461,6 +580,7 @@ def rewrite_highlights(
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
     evidence: Optional[list] = None,  # R5-A Phase 3: list[EvidenceSnippet], None 字节级一致
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 显式选 prompt 版本 (None 字节级一致)
 ) -> list[str]:
     """
     把 highlights 按 target_role 视角改写。
@@ -492,6 +612,13 @@ def rewrite_highlights(
     把 evidence 转成 summary 文本, 注入 user_payload + 激活 SYSTEM_PROMPT 第 8 条约束
     ("只能基于 evidence 中存在的事实改写")。
     evidence=None → 老路径字节级一致 (不注入 summary, 不改 system prompt)。
+
+    R5-E Phase 1: prompt_version(可选)显式选 prompt 版本:
+      - None / 空字符串 → 解析为 "v2-baseline" → 字节级一致老路径(SYSTEM_PROMPT)
+      - "v3-priority" / "v4-counterexample" / "v5-minimal" → 候选版本实验
+      - 未知版本 → ValueError (错误信息只含版本 key, 不含 prompt 正文)
+    透传给 _call_with_retry / _call_with_agent_loop → _build_request_payload →
+    _select_system_prompt。
     """
     if not highlights:
         return highlights
@@ -560,6 +687,7 @@ def rewrite_highlights(
                 url, api_key, model, chunk, target_role, jd_text, jd_focus,
                 history_messages=history_messages,
                 evidence_summary=evidence_summary,  # R5-A Phase 3
+                prompt_version=prompt_version,  # R5-E Phase 1
             )
         else:
             # 老路径: 走 _call_with_retry (保留 R3-P retry)
@@ -568,6 +696,7 @@ def rewrite_highlights(
                 enable_function_calling=enable_function_calling,
                 history_messages=history_messages,
                 evidence_summary=evidence_summary,  # R5-A Phase 3
+                prompt_version=prompt_version,  # R5-E Phase 1
             )
 
         if got is not None:
@@ -590,6 +719,7 @@ def _call_with_retry(
     enable_function_calling: bool = False,
     history_messages: Optional[list[dict]] = None,
     evidence_summary: Optional[str] = None,  # R5-A Phase 3: 透传到 _build_request_payload
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 透传到 _build_request_payload
 ) -> Optional[list[str]]:
     """
     R3-P: 单次 chunk 调用 + 失败 retry 一次。
@@ -607,6 +737,9 @@ def _call_with_retry(
 
     R5-A Phase 3: evidence_summary 非 None 时透传给 _build_request_payload,
     注入 user_payload + 激活 system prompt 第 8 条约束。None → 字节级一致老路径。
+
+    R5-E Phase 1: prompt_version 非 None 时透传给 _build_request_payload,
+    选 PROMPT_VERSIONS 里对应 prompt。None → 字节级一致老路径(SYSTEM_PROMPT)。
     """
     # R4-F: 决定是否挂载 tools
     tools: Optional[list[dict]] = None
@@ -617,6 +750,7 @@ def _call_with_retry(
         chunk, target_role, jd_text, model, jd_focus=jd_focus, tools=tools,
         history_messages=history_messages,
         evidence_summary=evidence_summary,  # R5-A Phase 3
+        prompt_version=prompt_version,  # R5-E Phase 1
     )
     try:
         resp = _http_post_json(url, payload, api_key, REQUEST_TIMEOUT_SEC)
@@ -636,6 +770,7 @@ def _call_with_retry(
         chunk, target_role, jd_text, model, jd_focus=jd_focus,
         strict_retry=True, tools=tools,
         evidence_summary=evidence_summary,  # R5-A Phase 3: retry 时也保留 evidence
+        prompt_version=prompt_version,  # R5-E Phase 1: retry 时也保留 prompt 版本
     )
     try:
         resp2 = _http_post_json(url, strict_payload, api_key, REQUEST_TIMEOUT_SEC)
@@ -729,6 +864,7 @@ def _call_with_agent_loop(
     *,
     history_messages: Optional[list[dict]] = None,
     evidence_summary: Optional[str] = None,  # R5-A Phase 3: 透传到 initial_payload
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 透传到 initial_payload
 ) -> Optional[list[str]]:
     """
     R4-A: Agent Loop — 包装 _call_with_retry 的能力, 加循环让 LLM 可多轮调工具。
@@ -759,6 +895,10 @@ def _call_with_agent_loop(
     R5-A Phase 3: evidence_summary 非 None 时透传给 _build_request_payload,
     initial system+user 已含 evidence 约束;后续 step 的 payload 复用 messages
     (含 system+history+initial_user), evidence 不重新注入(避免 prompt 重复)。
+
+    R5-E Phase 1: prompt_version 非 None 时透传给 _build_request_payload,
+    选 PROMPT_VERSIONS 里对应 prompt;initial system 已含。后续 step 复用 messages
+    (不再注入 prompt_version,因为初始 system 已经是选定版本)。None → 字节级一致老路径。
     """
     # 局部 import — logger 是稳定依赖, 这里 import 仅为避免循环(lazy 安全)
     import time
@@ -772,6 +912,7 @@ def _call_with_agent_loop(
         jd_focus=jd_focus, tools=TOOL_EVALUATE_SCHEMA,
         history_messages=history_messages,
         evidence_summary=evidence_summary,  # R5-A Phase 3
+        prompt_version=prompt_version,  # R5-E Phase 1
     )
     messages: list[dict] = list(initial_payload["messages"])
 

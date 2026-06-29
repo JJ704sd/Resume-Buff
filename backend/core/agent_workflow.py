@@ -370,9 +370,10 @@ def run_agent_workflow(
     evidence: Optional[list] = None,  # R5-A Phase 3: 显式传入 evidence 时跳过 retrieve_evidence 工具
     enable_external_resume: bool = False,  # R5-A closeout: 外部简历透传,默认 False 字节级一致
     external_resume_text: Optional[str] = None,  # R5-C Phase 2: 外部简历文本
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 显式选 prompt 版本, None 字节级一致
 ) -> Any:
     """
-    R5-A Phase 1 + Phase 2 + Phase 3 + R5-C Phase 2: 执行 Agent workflow,
+    R5-A Phase 1 + Phase 2 + Phase 3 + R5-C Phase 2 + R5-E Phase 1: 执行 Agent workflow,
     失败 fallback 到旧路径, 每个 step 写一条结构化 JSONL trace 到 backend/logs/agent_trace.jsonl。
 
     Returns:
@@ -406,6 +407,10 @@ def run_agent_workflow(
         但本轮 compare 不依赖 parse_external_resume 输出, 直接传 external_resume_text)
       - 隐私: trace 不写 external resume 原文;ToolResult 不存原文;
         external_resume_perspective schema 是压缩 4 维摘要 + counts + suggestions
+
+    R5-E Phase 1 增量(round5-e-prompt-optimization-spec.md §3):
+      - prompt_version 透传给内部 build_sections 调用, 改写链路走 PROMPT_VERSIONS 对应 prompt
+      - prompt_version=None 时走 v2-baseline 默认路径(SYSTEM_PROMPT 字节级一致)
 
     关键约束:
       - 失败时返 generator 旧 API 的输出(走 build_sections + render_docx)
@@ -675,6 +680,7 @@ def run_agent_workflow(
             enable_function_calling=enable_function_calling,
             session_id=session_id,
             evidence=evidence_collected,  # R5-A Phase 3: None 时字节级一致
+            prompt_version=prompt_version,  # R5-E Phase 1: 透传, None 字节级一致
         )
     except Exception as e:
         # build_sections 失败 — 这是真正的"全失败",必须让上层知道

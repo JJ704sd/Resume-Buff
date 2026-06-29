@@ -70,6 +70,12 @@ class PreviewRequest(BaseModel):
     #     返 external_resume_perspective 字段
     #   - 隐私: API 不落盘 external resume 文本
     external_resume_text: str | None = None
+    # R5-E Phase 1: 显式选 prompt 版本(默认 None = 走 v2-baseline,字节级一致老路径)
+    #   - None / 空字符串 → 解析为 v2-baseline(当前生产 prompt, 不替换默认)
+    #   - 已知 key (v3-priority / v4-counterexample / v5-minimal) → 实验性候选版本
+    #   - 未知 key → ValueError (API 层转 400, 错误信息只含版本 key)
+    #   - Phase 1 不 rollout winner: 前端不要默认传非 None 值
+    prompt_version: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -92,6 +98,8 @@ class GenerateRequest(BaseModel):
     #   - 不强制消费(generate 链路主要走 render_docx, 外部简历仅作诊断)
     #   - 字段保留为了前端统一传参, 老路径完全忽略
     external_resume_text: str | None = None
+    # R5-E Phase 1: 显式选 prompt 版本(默认 None = 走 v2-baseline,字节级一致老路径)
+    prompt_version: str | None = None
 
 
 # 每个 role 的展示名 + 风格描述(前端 listRoles 用)
@@ -168,6 +176,7 @@ def preview(req: PreviewRequest):
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
             enable_external_resume=req.enable_external_resume,  # R5-A closeout
             external_resume_text=req.external_resume_text,  # R5-C Phase 2
+            prompt_version=req.prompt_version,  # R5-E Phase 1
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -195,6 +204,7 @@ def generate(req: GenerateRequest):
             enable_agent_workflow=req.enable_agent_workflow,  # R5-A Phase 1
             enable_external_resume=req.enable_external_resume,  # R5-A closeout
             external_resume_text=req.external_resume_text,  # R5-C Phase 2
+            prompt_version=req.prompt_version,  # R5-E Phase 1
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

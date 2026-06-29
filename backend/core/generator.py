@@ -350,6 +350,7 @@ def build_sections(
     enable_function_calling: bool = False,
     session_id: Optional[str] = None,
     evidence: Optional[list] = None,  # R5-A Phase 3: 透传给 rewrite_highlights
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 透传给 rewrite_highlights (None 字节级一致)
 ) -> list[Section]:
     """
     构造完整的简历 sections 列表(可序列化为 JSON 预览,也可喂给 docx 渲染)。
@@ -371,6 +372,9 @@ def build_sections(
     R5-A Phase 3 新增:evidence(可选, list[EvidenceSnippet])透传给 rewrite_highlights,
     LLM 改写时只能引用 evidence 中存在的事实。evidence=None → 老路径字节级一致,
     LLM 不接收 evidence summary 也不受"基于 evidence 改写"约束。
+
+    R5-E Phase 1 新增:prompt_version(可选, str)透传给 rewrite_highlights,
+    选 PROMPT_VERSIONS 里对应的 prompt 版本。None → 字节级一致老路径(v2-baseline)。
     """
     if target_role not in ROLE_CONFIG:
         raise ValueError(f"不支持的岗位: {target_role},可选: {list(ROLE_CONFIG.keys())}")
@@ -452,6 +456,7 @@ def build_sections(
                     enable_function_calling=enable_function_calling,  # R4-F
                     session_id=session_id,  # R4-M
                     evidence=evidence,  # R5-A Phase 3: None 字节级一致
+                    prompt_version=prompt_version,  # R5-E Phase 1: 显式选 prompt 版本, None 字节级一致
                 )
             except Exception:
                 pass  # 静默降级 — 高层 build_sections 仍返回原文
@@ -1086,6 +1091,7 @@ def preview_resume(
     evidence: Optional[list] = None,  # R5-A Phase 3: evidence 透传, None 字节级一致
     enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
     external_resume_text: Optional[str] = None,  # R5-C Phase 2: 老路径忽略, workflow 路径消费
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 显式选 prompt 版本, None 字节级一致
 ) -> dict:
     """
     返回结构化预览(JSON 友好)。template 仅用于校验 / 透传到 docx 阶段(preview 不渲染 docx)。
@@ -1119,6 +1125,11 @@ def preview_resume(
       - 老路径 (enable_agent_workflow=False): 完全忽略, 字节级一致
       - workflow 路径: 透传到 run_agent_workflow, 任务图加 2 步外部简历工具
                        返 external_resume_perspective 字段
+
+    R5-E Phase 1: prompt_version(默认 None)
+      - 老路径 (enable_agent_workflow=False): 透传到 build_sections → rewrite_highlights,
+        None 时字节级一致老路径(SYSTEM_PROMPT);显式选版本时切换 prompt
+      - workflow 路径: 透传到 run_agent_workflow, 内部 build_sections 调用带上 prompt_version
     """
     if template not in LAYOUT_CONFIG:
         raise ValueError(f"不支持的模板: {template},可选: {list(LAYOUT_CONFIG.keys())}")
@@ -1141,6 +1152,7 @@ def preview_resume(
                 evidence=evidence,  # R5-A Phase 3
                 enable_external_resume=enable_external_resume,  # R5-A closeout
                 external_resume_text=external_resume_text,  # R5-C Phase 2
+                prompt_version=prompt_version,  # R5-E Phase 1
             )
             # workflow 内部失败已 fallback 到旧路径, 这里无需再 try/except
             return result
@@ -1156,6 +1168,7 @@ def preview_resume(
         enable_function_calling=enable_function_calling,  # R4-F
         session_id=session_id,  # R4-M
         evidence=evidence,  # R5-A Phase 3
+        prompt_version=prompt_version,  # R5-E Phase 1
     )
 
     out: dict = {
@@ -1185,6 +1198,7 @@ def generate_resume_docx(
     evidence: Optional[list] = None,  # R5-A Phase 3: 透传, None 字节级一致
     enable_external_resume: bool = False,  # R5-A closeout: 默认 False, P2 占位未消费
     external_resume_text: Optional[str] = None,  # R5-C Phase 2: 老路径忽略, workflow 路径消费
+    prompt_version: Optional[str] = None,  # R5-E Phase 1: 显式选 prompt 版本, None 字节级一致
 ) -> Path:
     """
     生成定制版简历 .docx(供 preview 确认后调用)。
@@ -1200,6 +1214,8 @@ def generate_resume_docx(
     R5-A Phase 3: evidence(默认 None) 透传 build_sections → rewrite_highlights。
     R5-C Phase 2: external_resume_text(默认 None) 透传到 run_agent_workflow (workflow 路径消费;
       老路径忽略, 字节级一致)。
+    R5-E Phase 1: prompt_version(默认 None) 透传 build_sections → rewrite_highlights;
+      老路径(enable_agent_workflow=False)仅作透传,workflow 路径也透传给内部 build_sections。
     """
     # R5-A Phase 1: enable_agent_workflow=True 走 workflow
     if enable_agent_workflow:
@@ -1218,6 +1234,7 @@ def generate_resume_docx(
                 evidence=evidence,  # R5-A Phase 3
                 enable_external_resume=enable_external_resume,  # R5-A closeout
                 external_resume_text=external_resume_text,  # R5-C Phase 2
+                prompt_version=prompt_version,  # R5-E Phase 1
             )
             return result
         except Exception:
@@ -1231,6 +1248,7 @@ def generate_resume_docx(
         enable_function_calling=enable_function_calling,  # R4-F
         session_id=session_id,  # R4-M
         evidence=evidence,  # R5-A Phase 3
+        prompt_version=prompt_version,  # R5-E Phase 1
     )
     return render_docx(
         sections, target_role, output_dir,

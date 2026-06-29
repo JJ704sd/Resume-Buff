@@ -8,7 +8,7 @@
 
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
-- 当前功能基线:**R6-A Phase 1+2+3+5 脚手架全部完成**(后端 `interview_agent` 状态机 + save-card 写库闭环 + 前端右侧 chat panel / 移动端 drawer + eval 脚本 9 样本 offline 跑通;Phase 4 LLM 抽取未启动);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
+- 当前功能基线:**R6-A Phase 1+2+3+5 脚手架全部完成**(后端 `interview_agent` 状态机 + save-card 写库闭环 + 前端右侧 chat panel / 移动端 drawer + eval 脚本 offline 实测 `total=10` 跑通;Phase 4 LLM 抽取未启动);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
 - **默认 prompt 仍为 `v2-baseline`**:R5-E 新增 3 个候选 prompt (v3-priority / v4-counterexample / v5-minimal) 属实验,本轮**不 rollout winner**,后续基于 live A/B 报告决定
 - 后端测试基线:**729 passed + 0 skipped**
 - 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程;`scripts/evaluate_interview_agent.py --mode live` 脚本内显式拒绝(Phase 4 未启)

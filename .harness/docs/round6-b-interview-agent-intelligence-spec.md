@@ -3,10 +3,10 @@
 > 适用项目: 简历帮 / Resume-Buff  
 > 参考项目: [JJ704sd/Resume-Buff](https://github.com/JJ704sd/Resume-Buff) (`main`)  
 > 本地日期: 2026-06-30  
-> 状态: 下一轮候选 spec, 未实施  
-> 本地基线: `119575c docs(round6-a): sync active baseline 739 after phase 4`  
-> 当前能力基线: R6-A Phase 1+2+3+4+5 已完成,后端活跃基线 **739 tests collected**。`/api/interview/draft` 状态 bug 已由 `37ad00c fix(round6-a): set draft endpoint state to draft ready` 修复;LLM slot extraction 已由 `074b364 feat(round6-a): add llm slot extraction to interview agent` 落地。  
-> 公开 README/ROADMAP 可能仍停留在 R6-A Phase 4 未启、729 baseline 的描述;R6-B 以本地 AGENTS.md 与代码现状为准。
+> 状态: ✅ 已完成并收尾  
+> 完成提交: `717e47c docs(round6-b): sync active baseline 863 after phase 5`  
+> 当前能力基线: R6-B Phase 0+1+2+3+4+5+6 已完成;R6-A Phase 1+2+3+4+5 已完成;后端活跃基线 **863 passed + 0 skipped**。`/api/interview/draft` 状态 bug 已由 `37ad00c fix(round6-a): set draft endpoint state to draft ready` 修复;LLM slot extraction 已由 `074b364 feat(round6-a): add llm slot extraction to interview agent` 落地;R6-B 在此基础上补齐 slot_meta provenance / API mode 开关 / confidence-aware policy / draft verifier / eval compare / frontend 最小呈现。  
+> 下一轮候选: R6-C live eval 收益验证;若验证后需要维护性重构,再考虑机械拆分 `core/interview_llm.py`。
 
 ---
 

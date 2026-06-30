@@ -47,6 +47,15 @@ Round 6-B Phase 2: API mode 开关(spec §5.3):
   - _build_extraction_summary: 构造 spec §5.3 schema(extractor / fallback_used / captured_slots / low_confidence_slots)
   - _build_question_plan: Phase 2 占位实现(返回 slot + reason_code="phase2_placeholder" + low_confidence_slots 聚合)
   - ReplyResponse 走 spec §5.3 字段名; 不存 user_message / source_span / API key / prompt
+
+Round 6-B Phase 4: draft verifier 接入(spec §7):
+  - _do_draft_now 在 build_draft_card 之后调 verify_draft_card(card, session)
+    把 verification (5 字段) + confidence_notes (list[str]) 注入到 sess.draft_card
+    同时缓存到 sess.verification_summary 供 save_card 写 _interview_meta
+  - save_card 从 session.verification_summary 读摘要写入 _interview_meta.verification
+    (只存 4 个计数 + warnings list[str] + extraction_mode 字面量, 不存原文)
+  - 老路径(verification_summary=None)字节级一致 — save_card 跳过 verification meta
+  - verifier 默认不调 LLM(pure stdlib), unsupported_claims 不阻止保存
 """
 from __future__ import annotations
 
@@ -667,6 +676,37 @@ def save_card(
     bullets = list(edited_card["draft_bullets"])
     skills = list(edited_card.get("skills") or [])
     tags = ["interview_agent"] + skills
+    interview_meta: dict[str, Any] = {
+        "source_gap_id": session.selected_gap.gap_id if session.selected_gap else "",
+        "source_session_id": session.session_id,
+        "created_at": datetime.now().astimezone().isoformat(),
+        "warnings": list(edited_card.get("warnings") or []),
+    }
+
+    # R6-B Phase 4(spec §7): 把 verification 摘要写入 _interview_meta
+    # 老路径(verification_summary=None, 比如保存未走 /draft)—— 字节级一致, 跳过
+    # 摘要字段: 4 数字 + extraction_mode + warnings list[str] (不含 draft_card 原文)
+    verification_summary = getattr(session, "verification_summary", None)
+    if isinstance(verification_summary, dict):
+        interview_meta["extraction_mode"] = str(
+            getattr(session, "interview_mode", "rules") or "rules"
+        )
+        # 4 个数字 + warnings 摘要(spec §5.3 schema 限定)
+        # 故意只写 spec 限定的字段, 防止把 confidence 数字 / source_span / jd_text 副作用间接写进
+        interview_meta["verification"] = {
+            "claims_total": int(verification_summary.get("claims_total", 0) or 0),
+            "claims_supported": int(
+                verification_summary.get("claims_supported", 0) or 0
+            ),
+            "low_confidence_claims": int(
+                verification_summary.get("low_confidence_claims", 0) or 0
+            ),
+            "unsupported_claims": int(
+                verification_summary.get("unsupported_claims", 0) or 0
+            ),
+            "warnings": list(verification_summary.get("warnings") or []),
+        }
+
     new_project = {
         "id": new_id,
         "name": str(edited_card.get("title", ""))[:200],
@@ -681,12 +721,7 @@ def save_card(
         },
         "tags": tags,
         # 审计字段(不进 build_sections, 仅留档)
-        "_interview_meta": {
-            "source_gap_id": session.selected_gap.gap_id if session.selected_gap else "",
-            "source_session_id": session.session_id,
-            "created_at": datetime.now().astimezone().isoformat(),
-            "warnings": list(edited_card.get("warnings") or []),
-        },
+        "_interview_meta": interview_meta,
     }
 
     # 7. 追加 + 更新 _meta.last_updated(不动 version / source_files)
@@ -1915,11 +1950,39 @@ def _do_switch_gap(session: InterviewSession) -> tuple[InterviewSession, dict]:
 
 
 def _do_draft_now(session: InterviewSession) -> tuple[InterviewSession, dict]:
-    """强制 draft_now — can_draft=False 时抛 ValueError (api 层捕获 → 400)。"""
+    """强制 draft_now — can_draft=False 时抛 ValueError (api 层捕获 → 400)。
+
+    R6-B Phase 4(spec §7): build_draft_card 之后调 verify_draft_card
+    把 verification + confidence_notes 注入到 sess.draft_card(供 DraftResponse 返回),
+    同时缓存到 sess.verification_summary 供后续 save_card 写 _interview_meta.verification。
+
+    边界:
+      - verifier 默认不调 LLM(stdlib + regex), 失败不阻断(spec §6.3)
+      - 注入的 verification / confidence_notes 不含 draft_card 原文 / user_message /
+        source_span 明文 / API key
+      - 老路径不会触发 _do_draft_now 时与 Phase 1 一致(verifier 只挂在 _do_draft_now + /draft)
+    """
     sess = session
     if not can_draft(sess):
         raise ValueError("can_draft=False, 不允许 draft_now")
     sess.draft_card = build_draft_card(sess)
+
+    # R6-B Phase 4(spec §7): 注入 verification + confidence_notes 到 draft_card
+    # 延迟 import 防 circular: interview_verifier 未来若反向 import interview_agent 会安全
+    from core.interview_verifier import (
+        compute_confidence_notes,
+        verify_draft_card,
+    )
+
+    verification = verify_draft_card(sess.draft_card, sess)
+    confidence_notes = compute_confidence_notes(sess)
+    # 缓存到 session(供 save_card 写 _interview_meta.verification 摘要)
+    sess.verification_summary = verification
+    # 注入到 card dict(DraftResponse.draft_card 直接挂在 card 里)
+    if isinstance(sess.draft_card, dict):
+        sess.draft_card["verification"] = verification
+        sess.draft_card["confidence_notes"] = confidence_notes
+
     sess.state = InterviewState.DRAFT_READY
 
     output_size = len(

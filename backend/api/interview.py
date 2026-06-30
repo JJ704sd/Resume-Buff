@@ -1,5 +1,5 @@
 """
-Round 6-A Phase 1+2 + R6-B Phase 2: interview agent API
+Round 6-A Phase 1+2 + R6-B Phase 2+4: interview agent API
 
 端点:
   - POST /api/interview/start      创建 session + 选缺口 + 返第一问
@@ -14,6 +14,15 @@ R6-B Phase 2 增量(spec §5.3):
   - ReplyResponse 增加 extraction_summary + question_plan optional 字段
   - ReplyRequest **不重复**传开关, reply 沿用 session.interview_mode
   - 隐私边界: API response 不含 API key / prompt / source_span / user_message 明文
+
+R6-B Phase 4 增量(spec §7):
+  - /draft endpoint 在 build_draft_card 之后调 interview_verifier, 把
+    verification(5 数字) + confidence_notes(list[str]) 注入到 card dict
+    → DraftResponse.draft_card 含 verification + confidence_notes(前端显示 / 风险提示用)
+  - /save-card 端点不重复做 verification, 走 interview_agent.save_card
+    把 session.verification_summary 写入 _interview_meta.verification 摘要
+    (4 数字 + warnings + extraction_mode, **不**含 draft_card / user_message / source_span 明文)
+  - 老前端不消费新字段也不报错(Pydantic 接受任意 dict)
 
 约束(plan §1.3 / §2.3 + spec §5.3):
   - 不 import core.llm_rewriter / core.agent_workflow
@@ -319,6 +328,13 @@ def interview_draft(req: DraftRequest):
     """
     强制生成 draft_card。
     can_draft=False → 400。
+
+    R6-B Phase 4(spec §7): build_draft_card 之后调 verify_draft_card,
+    把 verification(5 字段) + confidence_notes(list[str]) 注入到 card dict,
+    并缓存到 sess.verification_summary 供 /save-card 写 _interview_meta.verification。
+
+    隐私边界: API response 不含 user_message / source_span / API key / draft_card 原文;
+    verification.warnings 只列 slot 名 + bullet 索引 + 前 30 字摘要(spec §7 锁)。
     """
     sess = get_session(req.session_id)
     if sess is None:
@@ -335,6 +351,20 @@ def interview_draft(req: DraftRequest):
 
     card = build_draft_card(sess)
     sess.draft_card = card
+
+    # R6-B Phase 4(spec §7): 挂 verifier 摘要
+    from core.interview_verifier import (
+        compute_confidence_notes,
+        verify_draft_card,
+    )
+
+    verification = verify_draft_card(card, sess)
+    confidence_notes = compute_confidence_notes(sess)
+    sess.verification_summary = verification
+    if isinstance(card, dict):
+        card["verification"] = verification
+        card["confidence_notes"] = confidence_notes
+
     # /draft 成功后系统已进入"待确认素材卡"状态, 跟响应语义保持一致。
     # 之前 `sess.state = sess.state` 是 no-op, ASKING 状态下调 /draft 会
     # 返回 state="ASKING", 与"已生成 draft_card"语义不一致 — 前端素材卡

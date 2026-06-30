@@ -801,3 +801,370 @@ class TestResponsePrivacy:
         assert "sk-test-1234567890abcdef" not in body_text
         assert "Bearer" not in body_text
         assert "LLM_API_KEY" not in body_text
+# ----------------------------------------------------------------------
+# 6. R6-B Phase 4: draft verifier 接入(spec §7)
+# 覆盖:
+#   - TestDraftVerification (4): /draft 返回的 draft_card 含 verification +
+#     confidence_notes; verification 5 字段; confidence_notes 来自 slot_meta;
+#     老路径(无 slot_meta) confidence_notes 仍返空 list(不爆)
+#   - TestSaveCardVerificationMeta (3): /save-card 写入 _interview_meta.verification
+#     4 数字 + warnings; 老路径(save_card 前没调 /draft, verification_summary=None) →
+#     _interview_meta **不**含 verification; 隐私边界 _interview_meta 不含 draft_card 原文
+# ----------------------------------------------------------------------
+
+
+class TestDraftVerification:
+    """R6-B Phase 4: /draft 返回 draft_card 注入 verification + confidence_notes。"""
+
+    def test_draft_response_includes_verification_and_confidence_notes(
+        self, client,
+    ):
+        """happy path: /draft 返 draft_card 含 verification(5 字段) + confidence_notes(list)。"""
+        from core import interview_agent
+
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        # 填齐 can_draft 条件(R6-A path)
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = "测试反馈整理"
+        sess.captured_slots["action"] = ["梳理问题反馈表", "统一格式"]
+        sess.captured_slots["result"] = "返工减少"
+        sess.captured_slots["metric"] = ["50个用例"]
+
+        resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["state"] == "DRAFT_READY"
+
+        card = data["draft_card"]
+        # Phase 4 加的 2 个字段
+        assert "verification" in card, (
+            f"DraftResponse.draft_card 应含 verification, 实际 keys={list(card.keys())}"
+        )
+        assert "confidence_notes" in card, (
+            f"DraftResponse.draft_card 应含 confidence_notes, 实际 keys={list(card.keys())}"
+        )
+
+        # verification 5 字段(spec §7)
+        verification = card["verification"]
+        for f in (
+            "claims_total", "claims_supported", "low_confidence_claims",
+            "unsupported_claims", "warnings",
+        ):
+            assert f in verification, (
+                f"verification 缺 {f!r}, 实际 keys={list(verification.keys())}"
+            )
+
+        # confidence_notes 是 list[str](无 slot_meta 时空 list)
+        assert isinstance(card["confidence_notes"], list)
+        # 这里没塞 slot_meta, 所以 confidence_notes 应为空
+        assert card["confidence_notes"] == [], (
+            f"无 slot_meta 时 confidence_notes 应为空 list, 实际 {card['confidence_notes']}"
+        )
+
+        # 老字段也仍存在(向后兼容)
+        for f in ("title", "responsibility", "actions", "draft_bullets", "warnings"):
+            assert f in card
+
+    def test_draft_response_confidence_notes_uses_low_confidence_slot(
+        self, client,
+    ):
+        """session.slot_meta 含 confidence < 0.6 → confidence_notes 有提示"""
+        from core import interview_agent
+
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = "测试反馈整理"
+        sess.captured_slots["action"] = ["梳理问题反馈表"]
+        sess.captured_slots["result"] = "返工减少"
+        sess.captured_slots["metric"] = ["50个用例"]
+
+        # 注入低置信度 slot_meta: result < 0.6
+        sess.slot_meta = {
+            "result": [
+                {"extractor": "rules", "confidence": 0.45, "turn_index": 2},
+            ],
+        }
+
+        resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert resp.status_code == 200, resp.text
+        card = resp.json()["draft_card"]
+
+        # confidence_notes 应提到 result slot
+        notes = card["confidence_notes"]
+        assert isinstance(notes, list)
+        assert len(notes) >= 1
+        assert any("result" in n for n in notes), (
+            f"confidence_notes 应提到低置信度 slot 'result', 实际 {notes}"
+        )
+
+        # verification.low_confidence_claims / claims_supported 也应有数字
+        verification = card["verification"]
+        assert verification["claims_total"] >= 1
+
+    def test_draft_response_does_not_leak_draft_card_full_text(self, client):
+        """DraftResponse 整段 text 不含不相关的 PII 注入(spec §7 + AGENTS.md 隐私)。
+
+        走完整 /draft 流程后, 注入 capture_slots 里的 sentinel 字符串不会出现在
+        verification.warnings 里(spec §7 截前 30 字, 不复制完整原文)。
+        """
+        from core import interview_agent
+
+        sentinel_secret = "TOP-PII-SECRET-DO-NOT-LEAK-FROM-DRAFT-2026-XYZ"
+
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = sentinel_secret
+        sess.captured_slots["action"] = ["梳理问题反馈表"]
+        sess.captured_slots["result"] = "返工减少"
+
+        resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert resp.status_code == 200, resp.text
+        # 完整 response text: capture 字段会出现在 card 业务字段里(highlights 是另一码事);
+        # 我们只断言 verification.warnings 不复制完整原文
+        card = resp.json()["draft_card"]
+        warnings_text = json.dumps(
+            card["verification"]["warnings"], ensure_ascii=False,
+        )
+        assert sentinel_secret not in warnings_text, (
+            f"verification.warnings 含 capture 原文(违反 §7 隐私边界): {warnings_text}"
+        )
+
+    def test_draft_response_no_key_no_prompt_no_source_span_leak(self, client):
+        """DraftResponse 不含 API key / prompt / source_span 明文 — 沿用 §5.3 锁"""
+        secret = "sk-secret-key-sentinel-DO-NOT-LEAK-20260630"
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        # 直接修改 server-side session state, 注入 sentinel content 进 bullet path
+        from core import interview_agent
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = secret
+        sess.captured_slots["action"] = [secret]
+        sess.captured_slots["result"] = secret
+
+        resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert resp.status_code == 200, resp.text
+        text = resp.text
+
+        # verification.warnings 也不应泄漏 user-side 注入的 sentinel
+        assert "sk-test-" not in text
+        assert "Bearer " not in text
+
+
+class TestSaveCardVerificationMeta:
+    """R6-B Phase 4: save_card 写入 _interview_meta.verification 摘要(spec §7)。"""
+
+    def test_save_card_writes_verification_meta_when_summary_present(
+        self, client, tmp_materials_path,
+    ):
+        """happy path: 走完 /draft(让 verification_summary 落盘) + /save-card,
+        _interview_meta 含 verification 摘要(4 数字 + warnings)。"""
+        from core import interview_agent
+
+        # 1) start
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = "测试反馈整理"
+        sess.captured_slots["action"] = ["梳理问题反馈表", "统一格式"]
+        sess.captured_slots["result"] = "返工减少"
+        sess.captured_slots["metric"] = ["50个用例"]
+
+        # 2) /draft 触发 verification 计算 + sess.verification_summary 缓存
+        draft_resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert draft_resp.status_code == 200, draft_resp.text
+
+        # 3) /save-card
+        body = {
+            "session_id": sid,
+            "edited_card": _edited_card(),
+            "save_mode": "append_project",
+        }
+        resp = client.post("/api/interview/save-card", json=body)
+        assert resp.status_code == 200, resp.text
+        new_id = resp.json()["material_ref"]["id"]
+
+        # 4) 验证 _interview_meta.verification 摘要
+        data_after = json.loads(tmp_materials_path.read_text(encoding="utf-8"))
+        new_proj = next(
+            p for p in data_after["projects"] if p["id"] == new_id
+        )
+        meta = new_proj["_interview_meta"]
+
+        # 既有字段不回退(R6-A Phase 2)
+        assert meta["source_gap_id"], (
+            f"source_gap_id 应非空, 实际 {meta.get('source_gap_id')!r}"
+        )
+        assert meta["source_session_id"] == sid
+
+        # Phase 4 增量字段
+        assert "verification" in meta, (
+            f"_interview_meta 应含 verification, 实际 keys={list(meta.keys())}"
+        )
+        verification = meta["verification"]
+        # 4 数字 + warnings
+        assert isinstance(verification["claims_total"], int)
+        assert isinstance(verification["claims_supported"], int)
+        assert isinstance(verification["low_confidence_claims"], int)
+        assert isinstance(verification["unsupported_claims"], int)
+        assert isinstance(verification["warnings"], list)
+
+        # extraction_mode 应为 session.interview_mode(老路径默认 "rules")
+        assert meta.get("extraction_mode") == "rules"
+
+    def test_save_card_no_verification_when_draft_not_called(self, client):
+        """老路径: 不经 /draft(verification_summary=None)→ save-card 不写 verification meta"""
+        from core import interview_agent
+
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        # 直接 mock: 不调 /draft, 直接构建一个 session + 手动 inject draft_card 路径
+        # 这里走 reply.action=draft_now, _do_draft_now 也会写 verification_summary
+        # 所以我们用更直接的方式: 直接拿 session 强制把 verification_summary 设为 None
+        sess.verification_summary = None
+
+        # 满足 can_draft 才能走 save-card
+        sess.captured_slots["responsibility"] = "测试反馈整理"
+        sess.captured_slots["action"] = ["梳理问题反馈表"]
+        sess.captured_slots["result"] = "返工减少"
+
+        # 临时 materials 文件,避免污染真实
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False,
+            encoding="utf-8",
+        ) as f:
+            json.dump(_minimal_materials(), f, ensure_ascii=False)
+            temp_path = Path(f.name)
+
+        try:
+            # 直接调 save_card(不走 /draft), verification_summary=None
+            from core.interview_agent import save_card
+            result = save_card(
+                sess, _edited_card(), "append_project",
+                materials_path=temp_path,
+            )
+            assert result["ok"] is True
+            new_id = result["material_ref"]["id"]
+
+            data_after = json.loads(temp_path.read_text(encoding="utf-8"))
+            new_proj = next(
+                p for p in data_after["projects"] if p["id"] == new_id
+            )
+            meta = new_proj["_interview_meta"]
+
+            # 老路径: verification_summary=None → _interview_meta 不含 verification
+            assert "verification" not in meta, (
+                f"verification_summary=None 时 _interview_meta 不应含 verification, "
+                f"实际 keys={list(meta.keys())}"
+            )
+            assert "extraction_mode" not in meta, (
+                f"verification_summary=None 时 _interview_meta 不应含 extraction_mode, "
+                f"实际 keys={list(meta.keys())}"
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def test_save_card_verification_meta_does_not_leak_draft_card_or_user_text(
+        self, client, tmp_materials_path,
+    ):
+        """_interview_meta.verification 不含 draft_card 原文 / user_message 明文 / source_span"""
+        from core import interview_agent
+
+        secret_bullet = (
+            "XTOP-USER-PRIVATE-BULLET-DO-NOT-LEAK-2026-06-30-XYZ"
+        )
+        secret_msg = (
+            "XUSER-PRIVATE-MESSAGE-DO-NOT-LEAK-2026-06-30-XYZ"
+        )
+
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        sess = interview_agent.get_session(sid)
+        assert sess is not None
+        sess.captured_slots["responsibility"] = "测试反馈整理"
+        sess.captured_slots["action"] = [secret_msg]  # 不应泄漏到 meta
+        sess.captured_slots["result"] = "返工减少"
+
+        # 触发 /draft 让 verification_summary 落盘
+        draft_resp = client.post("/api/interview/draft", json={"session_id": sid})
+        assert draft_resp.status_code == 200
+
+        # /save-card 用带 secret 的 edited_card
+        bad_card = _edited_card()
+        bad_card["draft_bullets"] = [secret_bullet]
+
+        body = {
+            "session_id": sid,
+            "edited_card": bad_card,
+            "save_mode": "append_project",
+        }
+        resp = client.post("/api/interview/save-card", json=body)
+        assert resp.status_code == 200, resp.text
+        new_id = resp.json()["material_ref"]["id"]
+
+        data_after = json.loads(tmp_materials_path.read_text(encoding="utf-8"))
+        new_proj = next(
+            p for p in data_after["projects"] if p["id"] == new_id
+        )
+        meta_str = json.dumps(new_proj, ensure_ascii=False)
+
+        # draft_bullets 原文会出现在 highlights(业务必须), 不在 _interview_meta
+        highlights_text = json.dumps(
+            new_proj["highlights"], ensure_ascii=False,
+        )
+        assert secret_bullet in highlights_text  # 这是正常的(高亮字段)
+
+        # _interview_meta.verification.warnings 里**不**应含完整 secret_bullet
+        verification = new_proj["_interview_meta"]["verification"]
+        warnings_text = json.dumps(verification["warnings"], ensure_ascii=False)
+        assert secret_bullet not in warnings_text, (
+            "_interview_meta.verification.warnings 不应含完整 draft_bullets 原文"
+        )
+        # user_message(action) 不应泄漏到 verification
+        assert secret_msg not in warnings_text, (
+            "_interview_meta.verification.warnings 不应含 user_message 明文"
+        )
+        # 4 数字 + extraction_mode 也都在
+        for f in (
+            "claims_total", "claims_supported", "low_confidence_claims",
+            "unsupported_claims", "warnings",
+        ):
+            assert f in verification

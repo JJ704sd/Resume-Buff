@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from core.generator import ENABLED_ROLES, load_materials
 from core.interview_agent import (
     ActionType,
+    InterviewState,
     apply_action,
     build_draft_card,
     can_draft,
@@ -273,7 +274,11 @@ def interview_draft(req: DraftRequest):
 
     card = build_draft_card(sess)
     sess.draft_card = card
-    sess.state = sess.state  # 保持当前 state(已是 DRAFT_READY 或 ASKING)
+    # /draft 成功后系统已进入"待确认素材卡"状态, 跟响应语义保持一致。
+    # 之前 `sess.state = sess.state` 是 no-op, ASKING 状态下调 /draft 会
+    # 返回 state="ASKING", 与"已生成 draft_card"语义不一致 — 前端素材卡
+    # 视图依赖 state==DRAFT_READY, 会拿不到卡片。
+    sess.state = InterviewState.DRAFT_READY
     return DraftResponse(
         state=sess.state.value,
         draft_card=card,

@@ -260,10 +260,20 @@ class TestDraftEndpoint:
         resp = client.post(f"/api/interview/draft", json={"session_id": sid})
         assert resp.status_code == 200, resp.text
         data = resp.json()
+        # Round 6-A follow-up: /draft 成功后 state 必须切到 DRAFT_READY
+        # 之前 `sess.state = sess.state` 是 no-op, ASKING 状态下注入 slots
+        # 调 /draft 会返 state="ASKING", 与"已生成 draft_card"语义不一致。
+        assert data["state"] == "DRAFT_READY", (
+            f"draft 成功后 state 应为 DRAFT_READY, 实际 {data['state']!r}"
+        )
         assert "draft_card" in data
         card = data["draft_card"]
         for f in ("title", "responsibility", "actions", "draft_bullets", "warnings"):
             assert f in card, f"draft_card 缺 {f!r}"
+        # 进程内 session 也应同步切到 DRAFT_READY
+        assert sess.state.value == "DRAFT_READY", (
+            f"session.state 应为 DRAFT_READY, 实际 {sess.state.value!r}"
+        )
 
     def test_draft_returns_400_when_cannot_draft_yet(self, client):
         start = client.post(

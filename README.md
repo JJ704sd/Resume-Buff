@@ -8,10 +8,11 @@
 
 - GitHub 仓库:`JJ704sd/Resume-Buff`
 - 默认分支:`main`
-- 当前功能基线:**R6-A Phase 1+2+3+5 脚手架全部完成**(后端 `interview_agent` 状态机 + save-card 写库闭环 + 前端右侧 chat panel / 移动端 drawer + eval 脚本 offline 实测 `total=10` 跑通;Phase 4 LLM 抽取未启动);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
+- 当前功能基线:**R6-B Phase 0+1+2+3+4+5+6 全部完成**(可信增强层 — slot_meta provenance / API mode 开关 / deterministic confidence-aware policy / draft verifier / eval compare 三模式 / 前端最小呈现);**R6-A Phase 1+2+3+4+5 已完成**(LLM slot extraction 已上线,phase 4 启动 1/3);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
 - **默认 prompt 仍为 `v2-baseline`**:R5-E 新增 3 个候选 prompt (v3-priority / v4-counterexample / v5-minimal) 属实验,本轮**不 rollout winner**,后续基于 live A/B 报告决定
-- 后端测试基线:**729 passed + 0 skipped**
-- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live`) 是手动脚本,不进入默认启动流程;`scripts/evaluate_interview_agent.py --mode live` 脚本内显式拒绝(Phase 4 未启)
+- **interview agent 默认仍走 rules 路径**:`enable_interview_llm=False` 时 R6-A 行为字节级一致;前端"智能抽取"toggle 默认关闭;有 key 时回退规则模式显示 warning
+- 后端测试基线:**863 passed + 0 skipped**(2026-06-30 R6-B Phase 5 实测;R5-E Phase 3 收尾 683 → R6-A Phase 1+2+3+5 → 729 → R6-A Phase 4 → 739 → R6-B Phase 0+1+2 → 768 → Phase 3 → 809 → Phase 4 → 840 → Phase 5 → **863**)
+- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live` / `scripts/evaluate_interview_agent.py --mode live`) 是手动脚本,不进入默认启动流程
 - 详细开发锁点:见 [AGENTS.md](AGENTS.md)
 - 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
 
@@ -24,7 +25,7 @@
 - 模板选择:内置 classic、single_column、two_column、minimal、technical、academic、internet、bilingual 等排版。
 - 外部简历视角:可解析外部简历文本,对比 JD 与素材库覆盖情况。
 - 可选 LLM 改写:有 key 时改写项目亮点,无 key 时静默降级为原文。
-- **JD 驱动简历面试官 (R6-A Phase 1+2+3)**:粘贴 JD → 系统选一个最值得补的缺口 → 一问一答 → 生成 draft_card → 用户编辑 → 写回素材库(`save_card` 原子写闭环)→ 触发预览与评分刷新;桌面右侧 380px 聊天栏 / 移动端全屏 drawer;规则版槽位抽取(不调 LLM)。
+- **JD 驱动简历面试官 (R6-A Phase 1+2+3+4 + R6-B 全栈)**:粘贴 JD → 系统选一个最值得补的缺口 → 一问一答 → 生成 draft_card → 事实核验 + 低置信度提示 → 用户编辑 → 写回素材库(`save_card` 原子写闭环)→ 触发预览与评分刷新;桌面右侧 380px 聊天栏 / 移动端全屏 drawer;**R6-A Phase 4 LLM slot extraction 已上线(默认关闭,有 key 时回退规则模式 warning)** + **R6-B 可信增强层(slot_meta provenance / API mode 开关 / confidence-aware deterministic policy / draft verifier / eval compare / 前端最小呈现)**。
 - **Prompt 版本化 + A/B 评测 harness (R5-E)**:默认 prompt 仍是 `v2-baseline`;新增 3 个候选 prompt 版本 (`v3-priority` / `v4-counterexample` / `v5-minimal`) 属实验,`scripts/evaluate_prompt_versions.py --mode offline` 跑 12 JD × 4 version 对比,**手动脚本不进入默认启动流程**;可选 `--judge on` 启用 LLM-as-Judge 评分。
 - Agent workflow 诊断:默认关闭;开启后可查看 evidence、工具摘要、bullet 评估、trace replay 等诊断信息。
 
@@ -129,7 +130,7 @@ scripts/
   replay_agent_trace.py   Agent trace 回放
   evaluate_agent_workflow.py  R5-D 离线评测报告 (FC × AW 4 开关对照)
   evaluate_prompt_versions.py  R5-E Prompt A/B 评测 (4 prompt version 对比 + 可选 judge)
-  evaluate_interview_agent.py  R6-A Phase 5 interview agent 评测 (脚手架; live mode 脚本内拒绝,Phase 4 未启)
+  evaluate_interview_agent.py  R6-A Phase 5 + R6-B Phase 5 interview agent 评测 (--extractor {rules,llm,compare}; offline compare 双组同跑; live mode 脚本内拒绝)
   verify.ps1             本地验证脚本
 
 .harness/

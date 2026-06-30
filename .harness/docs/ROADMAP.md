@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-06-29 R6-A Phase 1+2+3+5 脚手架全部完成,Phase 4 未启;R5-E Prompt 版本化 + A/B Eval 闭环 + 文档收尾 全部完成,**不 rollout winner**)
+## 0. 当前项目快照(2026-06-30 R6-B Phase 0+1+2+3+4+5+6 可信增强层 全部完成;R6-A Phase 1+2+3+4+5 全部完成,LLM slot extraction 已上线;R5-E Prompt 版本化 + A/B Eval 闭环 + 文档收尾 全部完成,**不 rollout winner**)
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -35,18 +35,18 @@
   - **R5-C Phase 4** — 前端高级 Agent 面板契约(`AgentSummary` / `EvidenceSummary` / `ExternalResumePerspective` / `BulletEvaluation` 类型 + `preview/generate` 透传 enable_agent_workflow / session_id / external_resume_text);前端 App.vue 默认收起诊断面板
   - **R5-C Phase 5** — 文档与回放闭环(`scripts/replay_agent_trace.py` 加 `## Fallback Summary` 段 + `--tools-used` 参数触发 `## Tools Cross-Validation (R5-C Phase 5)` 段 + 5 个常量分类 `none` / `tool_error_fallback` / `unknown`;ROADMAP / README / AGENTS 三方同步 baseline 530→544 测试数)
   - **R5-D Phase 0-5 真实 LLM eval 闭环**(`scripts/evaluate_agent_workflow.py` 加 `--mode` {offline, live, auto} 默认 offline + `--output` 自定义报告路径;`_get_llm_eval_config()` helper 抽 LLM 元信息,只输出 host 不含 path/query/secret;`_extract_project_highlights` + `_summarize_rewrite_impact` 5 数字字段不含 bullet 原文;`_percentile` 纯函数 + `p95/max latency` + 5 类 fallback_category_breakdown;live 模式只做手动验收不进 pre-push);ROADMAP / README / AGENTS 三方同步 baseline 547→596 测试数;6 个 commit 顺序落地:`8a4a799` spec / `522d911` baseline / `89717a9` mode / `1fef8dc` llm metadata / `8838e7a` rewrite impact / `2052b1f` latency & fallback;Phase 5 文档收尾落在 `docs(round5-d): document live eval workflow`,spec 状态从"📝 待实施 spec"改为"✅ 完成"
-  - **R6-A Phase 1+2+3+5 全部完成(Phase 4 未启)** — `R6-A Phase 1+2 JD-driven interview agent + save-card 写库闭环`(`backend/core/interview_agent.py` 状态机 + 4 固定 gap 规则打分 `_score_gap()` + 槽位抽取纯规则 + draft_card + save_card 原子写闭环 `tmp + os.replace`;`backend/core/interview_prompts.py` 问题模板/快捷回复/收束组合;`backend/api/interview.py` start/reply/draft/save-card 4 个端点,SaveRequest/SaveResponse model,400/422/404 错误码翻译;`backend/main.py` 1 line 注册 `interview_router`;新 project schema `{category: "interview_captured", highlights: {role_key: [...], general: [...]}(双写入), tags: ["interview_agent"], _interview_meta: {source_gap_id, source_session_id, created_at, warnings}}`);核心边界:`core/interview_agent.py` 不 import `core.llm_rewriter` / `core.agent_workflow` / `core.agent_tools` / `core.evidence` / `core.tool_schema` / `core.session`(R5-E 字节级稳定);`_INTERVIEW_SESSIONS` 进程内独立 dict;trace `workflow="interview"` + 数字 step + tool enum `gap_select` / `slot_extract` / `draft_card` / `save_card`;save-card 不 import `api.materials._load/_save` + 原子写 + 测试/冒烟必传临时 `materials_path`(`monkeypatch DEFAULT_MATERIALS_PATH` 指向 tmp_path),生产默认 `backend/data/materials.json` 不入库修改;**Phase 3 前端 chat panel**(`frontend/src/components/InterviewAgentPanel.vue` 主聊天栏 + `InterviewDraftCard.vue` 素材卡编辑 + `InterviewProgressPills.vue` 进度条;`App.vue` 加 `.app-shell` flex 布局 + 380px sticky sidecar 桌面 + 右下 FAB + `el-drawer` 全屏聊天移动端 ≤768px;`api/index.ts` 加 5 个 `InterviewXxx` 类型 + 4 个 API 函数;桌面 1280x800 + 移动 375x812 UX smoke 截图存 `.planning/round6-a-ux/`);**Phase 5 eval 脚手架(deferred work)**(`scripts/evaluate_interview_agent.py` offline eval set 实测 `total=10` + 复用 R5-D 6 个 helper + 7 章节 markdown 报告到 `backend/logs/interview_eval_report.md`(.gitignore);live mode 在脚本内显式拒绝(Phase 4 LLM 抽取未上线),offline 模式跑通实测 `schema_pass_rate=0.30 / avg_completeness=0.53 / fabrication_violations=0`;`backend/tests/test_interview_eval.py` +6 case 锁 helpers + 报告隐私);**Phase 4 LLM 抽取增强未启动**(plan §4.1 启动条件 ① Phase 3 上线 ≥1-2 周 + ② 用户跑过 5+ 轮真实面试 + ③ 确认规则抽取问题,**3 条均未满足**);**不挂 pre-push** / 不引入新 LLM 调用(Phase 5 仅 offline) / 不引入新依赖 / 不修改既有 3 个 eval 脚本 / 不修改 R5-E 不触碰清单
+  - **R6-A Phase 1+2+3+4+5 全部完成** — `R6-A Phase 1+2 JD-driven interview agent + save-card 写库闭环`(`backend/core/interview_agent.py` 状态机 + 4 固定 gap 规则打分 `_score_gap()` + 槽位抽取纯规则 + draft_card + save_card 原子写闭环 `tmp + os.replace`;`backend/core/interview_prompts.py` 问题模板/快捷回复/收束组合;`backend/api/interview.py` start/reply/draft/save-card 4 个端点,SaveRequest/SaveResponse model,400/422/404 错误码翻译;`backend/main.py` 1 line 注册 `interview_router`;新 project schema `{category: "interview_captured", highlights: {role_key: [...], general: [...]}(双写入), tags: ["interview_agent"], _interview_meta: {source_gap_id, source_session_id, created_at, warnings}}`);核心边界:`core/interview_agent.py` 不 import `core.llm_rewriter` / `core.agent_workflow` / `core.agent_tools` / `core.evidence` / `core.tool_schema` / `core.session`(R5-E 字节级稳定);`_INTERVIEW_SESSIONS` 进程内独立 dict;trace `workflow="interview"` + 数字 step + tool enum `gap_select` / `slot_extract` / `draft_card` / `save_card`;save-card 不 import `api.materials._load/_save` + 原子写 + 测试/冒烟必传临时 `materials_path`(`monkeypatch DEFAULT_MATERIALS_PATH` 指向 tmp_path),生产默认 `backend/data/materials.json` 不入库修改;**Phase 3 前端 chat panel**(`frontend/src/components/InterviewAgentPanel.vue` 主聊天栏 + `InterviewDraftCard.vue` 素材卡编辑 + `InterviewProgressPills.vue` 进度条;`App.vue` 加 `.app-shell` flex 布局 + 380px sticky sidecar 桌面 + 右下 FAB + `el-drawer` 全屏聊天移动端 ≤768px;`api/index.ts` 加 5 个 `InterviewXxx` 类型 + 4 个 API 函数;桌面 1280x800 + 移动 375x812 UX smoke 截图存 `.planning/round6-a-ux/`);**Phase 5 eval 脚手架 → R6-B Phase 5 升级**(原本 7 章节 rules-only,升级后 `--extractor {rules,llm,compare}` 三模式 + offline compare 双组同跑 + fallback_category 5 类分类 + Rules vs LLM-assisted 对照表 8 指标 + Delta 块;offline 仍不调 urlopen,live mode 脚本内 `return 2` 拒绝);**Phase 4 LLM slot extraction 已上线**(`extract_slots(..., llm_enabled=False)` keyword-only 入参;LLM 路径走 stdlib `urllib` POST `/chat/completions`(跟 R5-E Phase 3 `_call_judge` 同源);fallback 规则版 — 网络错不 retry / JSON 失败 retry 1 次 / schema 失败 fallback;prompt 独立放 `core.interview_prompts.SLOT_EXTRACTION_SYSTEM_PROMPT` / `SLOT_EXTRACTION_USER_TEMPLATE`,**不**进 `PROMPT_VERSIONS`,user template **不**含 `{jd_text}` 隐私边界);**不挂 pre-push** / 不引入新 LLM 调用(Phase 5 仅 offline) / 不引入新依赖 / 不修改既有 3 个 eval 脚本 / 不修改 R5-E 不触碰清单
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
-- **729 个 pytest 全绿 + 0 skipped**(2026-06-29 `D:\python3.11\python.exe -m pytest tests/ --collect-only` 实测;R6-A Phase 5 收尾时点;R5-D 收尾时为 596,R5-E Phase 1 baseline 修正为 627,R5-E Phase 2 +28 = 655,R5-E Phase 3 +28 = 683,R6-A Phase 1+2 +40 = 723,R6-A Phase 5 +6 = 729;活跃基线以本行为准,历史快照 544/547/596/683/723 见各 round entry);计算口径沿用 R6-A Phase 2 +5: R5-E 683 baseline + **33 R6-A Phase 1** NEW FILE `test_interview_agent.py`: 23 case (TestSessionLifecycle 3 + TestGapSelection 6 + TestSlotExtractionRules 5 + TestDraftCard 4 + TestStateMachine 3 + TestTracePrivacy 2) + NEW FILE `test_interview_api.py` 10 case (TestStartEndpoint 4 + TestReplyEndpoint 4 + TestDraftEndpoint 2) + **7 R6-A Phase 2** (TestSaveCard 3: writes-to-temp / unique-id / preview-round-trip; TestSaveCardEndpoint 4: happy / invalid save_mode / missing field / empty bullets) + **6 R6-A Phase 5** NEW FILE `test_interview_eval.py`: 4 TestEvalHelpers (extract_slots_iteratively / schema_pass_rate / completeness / fabrication_guard) + 2 TestEvalReport (report_contains_no_user_message_text / offline 模式不调 urlopen)
+- **863 个 pytest 全绿 + 0 skipped**(2026-06-30 R6-B Phase 5 收尾时点 `D:\python3.11\python.exe -m pytest tests/ -q` 实测;活跃基线以本行为准,历史快照 596/627/655/683/723/729/739/768/809/840 见各 round entry);计算口径沿用 R6-B Phase 5: R5-E 683 baseline + **33 R6-A Phase 1** NEW FILE `test_interview_agent.py` (23 case) + NEW FILE `test_interview_api.py` (10 case) + **7 R6-A Phase 2** (TestSaveCard 3 / TestSaveCardEndpoint 4) + **6 R6-A Phase 5** NEW FILE `test_interview_eval.py` (TestEvalHelpers 4 / TestEvalReport 2) + **10 R6-A Phase 4** NEW FILE `test_interview_agent.py::TestLLMSlotExtraction` 6 + `TestInterviewPromptRegistry` 4 + 0 (Phase 4 文档同步改活跃基线 729→739,代码层无新增独立 test_interview 文件) + **29 R6-B Phase 1** NEW FILE `test_interview_agent.py::TestPhase1SlotMeta*` 29 case (rules meta / llm source_span hash / invalid source_span 降级 / 隐私边界 / 默认字段兼容) + **11 R6-B Phase 2** in `test_interview_api.py` (TestStartModeSwitch 4 / TestReplyUsesSessionMode 3 / TestResponsePrivacy 4) + **41 R6-B Phase 3** NEW FILE `test_interview_policy.py` 29 case (TestPlanPriorityChain 12 / TestPlanOutputSchema 3 / TestPlanPrivacyGuarantee 5 / TestPlanPurity 3 / TestPlanConstants 4 / TestPlanApplyActionIntegration 2) + 12 in `test_interview_agent.py::TestPhase3PolicyIntegration` + **31 R6-B Phase 4** NEW FILE `test_interview_verifier.py` 24 case + 7 in `test_interview_api.py::TestDraftVerification / TestSaveCardVerificationMeta` + **23 R6-B Phase 5** NEW FILE `test_interview_eval.py::TestPhase5*` 23 case (Helpers 4 / ExtractorModes 5 / Metrics 5 / Report 6 / Cli 3)
 
 **最近 7 个 commit** (`main` / `origin/main` 当前基线):
-- (R6-A closeout) docs(round6-a): closeout audit + sync baseline 729
-- `573ebe5` feat(round6-a): add interview agent eval scaffold (phase 5 deferred work)
-- `145d5c5` docs(round6-a): sync baseline after phase 3 chat panel
-- `56257f7` feat(round6-a): add interview agent chat panel
-- `f186a7e` feat(round6-a): interview agent backend mvp + save card round-trip
-- `3f106e3` docs(round6-a): add jd interview agent spec
-- `c110a51` docs(round5-e): close prompt ab harness round
+- `be250e3` feat(round6-b): add frontend minimal presentation (Phase 6)
+- `b1635fc` feat(round6-b): add eval compare for interview agent (Phase 5)
+- `7b756fc` docs(round6-b): sync active baseline 840 after phase 4 (Phase 4 doc 同步)
+- `51f6450` feat(round6-b): add draft verifier for interview agent (Phase 4)
+- `d1622bb` feat(round6-b): confidence-aware policy for interview agent (Phase 3)
+- `f665c35` feat(round6-b): api mode switch for interview agent (Phase 2)
+- `119575c` docs(round6-a): sync active baseline 739 after phase 4 (R6-A Phase 4 doc 同步)
 
 ---
 
@@ -207,6 +207,49 @@
 - **spec 文档**: `.harness/docs/round5-e-prompt-optimization-spec.md` (4 phase 全部 ✅; §11 Phase 4 收尾记录含 5 commit hash + 最终 683 baseline + 新增报告路径 + 5 个未做的事)
 - **新增报告**:`AI岗位JD库_prompt_ab报告.md` (offline, 自动入库, PII 自检 pass); `AI岗位JD库_prompt_ab报告_live.md` (可选 live 模式, **入库前必须人工隐私检查**)
 - **下一步 (P1 候选)**:基于 live A/B 报告选择 winner 并 rollout — R5-E closeout / R5-F prompt rollout (默认 prompt 从 v2-baseline 切到 winner, 保留 v2-baseline 显式回退路径);若 live 报告显示 hallucination 仍高, 优先 R5-F embedding RAG 升级 evidence retrieval 不切 prompt
+
+### R6-B — 面试官智能体可信增强层 6 phase 全部落地 ✅ 完成 (2026-06-30, 7 个 commit 顺序落地)
+- **背景**:R6-A Phase 4 已在 `backend/core/interview_agent.py` 内落地可选 LLM slot extraction,但抽取结果不可追溯 / 用户不能控制智能模式 / 下一问偏模板化 / draft 缺核验 / eval 没有对照组;R6-B 不重做抽取,只补"可信增强层" 6 phase
+- **设计**: `.harness/docs/round6-b-interview-agent-intelligence-spec.md` (R6-B Phase 0-6 + Phase 7 收尾;spec 状态 ✅;824 行 spec 含 §0-§15)
+- **实施路径** (7 个 commit 顺序落地):
+  1. `119575c` Phase 0 (基线校准) — `scripts/evaluate_interview_agent.py` 修旧"Phase 4 LLM 未上线"注释/live mode 错误信息/报告 §二 §四 标题口径,脚本行为零变化;baseline 维持 739
+  2. `f665c35` Phase 2 (API mode 开关) — `StartRequest.enable_interview_llm: bool = False` + `StartResponse.interview_mode` / `mode_warning` + `ReplyResponse.extraction_summary` / `question_plan`;`_decide_interview_mode(enable_interview_llm)` 决策表 (enable=F / enable=T+有 key / enable=T+无 key);`create_session(..., *, enable_interview_llm=False)` keyword-only 入参;reply 沿用 session mode;739 → 768 +11 pytest (`tests/test_interview_api.py`)
+  3. `d1622bb` Phase 3 (confidence-aware policy) — `backend/core/interview_policy.py` 新建,`plan_next_question(session)` deterministic 纯函数 8 步优先级链 (no_gap → skip 强制 → turn 强制 → missing required → low_confidence_recheck → near_limit_priority → next_suggested → anti_repeat_switch → all_covered);AST 静态扫描 import 不含 urllib/requests/httpx/openai/anthropic/llm_rewriter;不读 os.environ;768 → 809 +41 pytest (NEW FILE `tests/test_interview_policy.py` 29 + `tests/test_interview_agent.py::TestPhase3PolicyIntegration` 12)
+  4. `51f6450` Phase 4 (draft verifier) — `backend/core/interview_verifier.py` 新建,`verify_draft_card(card, session) -> dict` 5 字段 summary + `compute_confidence_notes(session) -> list[str]`;双源命中规则:量化数字 regex `(人|%|倍|小时|天|次|万|个|条|例)` 命中 OR bullet 是 SOURCE_SLOT_KEYS 子串;warning 截前 30 字 + bullet 索引;809 → 840 +31 pytest (NEW FILE `tests/test_interview_verifier.py` 24 + `tests/test_interview_api.py` 7)
+  5. `7b756fc` Phase 4 文档同步 — baseline 840 锁
+  6. `b1635fc` Phase 5 (eval compare) — `scripts/evaluate_interview_agent.py` 加 `--extractor {rules, llm, compare}` CLI;5 类 fallback_category;EvalRow +4 字段 (extractor_mode / fallback_category / low_confidence_slot_count / total_slot_meta_count);compute_metrics +low_confidence_slot_rate + p95_latency_ms + by_extractor + fallback_category_breakdown;write_report +对照表 8 指标 + Delta 块;复用 R5-D `_resolve_eval_mode` / `_get_llm_eval_config` / `_check_pii_safe` / `_percentile` 4 helper;840 → 863 +23 pytest (NEW FILE `tests/test_interview_eval.py::TestPhase5*`)
+  7. `be250e3` Phase 6 (frontend 最小呈现) — `frontend/src/api/index.ts` 加 InterviewMode / ExtractionMode 类型 + ExtractionSummary / QuestionPlan / VerificationSummary 3 interface + 各 optional 字段;`InterviewAgentPanel.vue` 加 enableInterviewLlm toggle (默认关) + interviewMode / modeWarning state + modeTagInfo 三态 header 标签;`InterviewDraftCard.vue` 加 confidenceNotes / verification / needsSaveConfirm + 紫边框置信度 + 事实核验摘要 2 个面板 + ElMessageBox 保存前确认提示;0 新 pytest,前端靠 `vue-tsc --noEmit` + `npm run build` 验收
+  8. (本 round 收尾) `docs(round6-b): sync active baseline 863 after phase 5` — README / ROADMAP / AGENTS / spec 四方同步
+- **离线 eval 实测** (`D:\python3.11\python.exe scripts/evaluate_interview_agent.py --mode offline --extractor compare --output backend/logs/interview_eval_report.md`):
+  - 报告生成成功,total=20 (rules=10 + llm 意图=10)
+  - rules schema_pass=0.30 / avg_completeness=0.53 / fabric_violations=0 / fallback_rate=0.00 / low_confidence_slot_rate=0.23
+  - llm 意图(offline → 强制规则 fallback):schema_pass=0.30 / avg_completeness=0.53 / fabric_violations=0 / fallback_rate=1.00 / low_confidence_slot_rate=0.23
+  - 报告隐私自检通过 (`Select-String -Pattern "用户原文哨兵|LLM_API_KEY|BEGIN PROMPT|source_span" -SimpleMatch` 无匹配)
+- **核心边界** (6 phase 一致,不改):
+  - 不重做 LLM slot extraction / 不把面试官改成自由聊天 Agent
+  - `enable_interview_llm=False` 字节级一致(老路径 768 老测试零回退)
+  - 不改 `core.llm_rewriter.py` / `core.agent_workflow.py` / `core.agent_tools.py` / `core.tool_schema.py` / `PROMPT_VERSIONS` / 默认 resume rewrite prompt
+  - 不 rollout R5-E prompt winner / 不把 live eval report 自动入库
+  - 不挂 pre-push hook / 不引入新依赖(纯 stdlib + dataclass)
+- **隐私边界** (6 phase 一致):
+  - `ToolResult` / `agent_summary` / `JSONL trace` / `interview_eval report` / `_interview_meta.verification` 5 层链路**绝不**含 user_message / source_span / draft_bullets / API key / env var 名 / key 前缀 / Bearer / prompt 正文
+  - `extraction_summary` schema 限定只 4 字段(无 source_span / user_message / confidence / source_span_hash)
+  - verifier warning 截前 30 字 + bullet 索引,不复制完整 bullet 文本
+  - report 边界说明用 "API key 类凭据" / "LLM 抽取源 span 明文" 通用描述,避免 spec §14 `Select-String` 假阳性
+- **实施坑** (已写进 spec §15 Prompt 7 收尾 + 各 phase commit message):
+  1. Phase 3 `_make_empty_plan(NO_MORE)` hardcode `can_draft=False` → step 8 时前端误以为不能 draft;改为 `_already_can_draft(session)` 算
+  2. Phase 3 lazy import 防止 policy / agent 循环 (`from core.interview_policy import (...)` 不 import 函数本身)
+  3. Phase 4 verifier warning 截前 30 字 `_WARNING_BULLET_PREVIEW_LEN = 30`,不复制完整 bullet
+  4. Phase 5 offline mode 强制 judge disabled 防误触 HTTP,沿用 R5-D Phase 1 `TestEvalModeNoKeyLeak` 模式
+  5. Phase 5 EvalRow `confidence` 必须是 0.0-1.0 number,bool 不接受(防 `True` / `False` 误入)
+  6. Phase 6 移动端 toggle 行用普通 `div + flex` + `el-tooltip`,**不**用 el-popover / drawer 嵌套,避免挤压 EMPTY 卡
+  7. Phase 6 confidence_notes / verification 区域用普通 `div + 浅紫边框`,**不**产生 portal / overlay,移动端可随 drawer 滚动
+- **效果**: **863 passed + 0 skipped**(2026-06-30 `D:\python3.11\python.exe -m pytest tests/ -q` 实测);**前端 `vue-tsc --noEmit` 0 error + `npm run build` 成功**(dist/index.html 0.48kB / css 369kB / js 1104kB);**offline compare 报告通过隐私自检**;6 phase + 文档收尾均零 P0/P1 安全阻塞;**默认 disable 全部新能力**(`enable_interview_llm=False` / 老路径字节级一致 / 老 prompt `v2-baseline` / 老 route `enable_agent_workflow=False`),**零行为变更**
+- **spec 文档**: `.harness/docs/round6-b-interview-agent-intelligence-spec.md` (7 phase 全部 ✅;§15 Prompt 7 收尾记录含 8 commit hash + 最终 863 baseline + 新增报告路径 + 5 个未做的事 + 下一轮建议)
+- **下一步 (P1 候选)**:
+  - (a) **R6-C live eval 收益验证** — 等用户在 chat panel 跑 10+ 轮真实对话 + 已配置 LLM key 后,跑 `scripts/evaluate_interview_agent.py --mode live --extractor compare --output backend/logs/interview_eval_report_live.md`,作为 Phase 4 启动的 ground truth(spec §8 product gate);**入库前必人工隐私检查**(公开脱敏 materials.json / 公开 JD 库 / eval set 内置 / `LLM_BASE_URL` 不含内部路径)
+  - (b) **R6-C 拆 `core/interview_llm.py`** — 若 `interview_agent.py` 继续膨胀到难以测试时再做"机械拆分,行为不变"重构 round(spec §3 方案 B 备选)
+  - (c) **R5-F prompt rollout** — 若 live A/B 报告显示 v3-priority / v4-counterexample / v5-minimal 中有稳定 winner,切默认 prompt(保留 v2-baseline 显式回退)
 
 ---
 

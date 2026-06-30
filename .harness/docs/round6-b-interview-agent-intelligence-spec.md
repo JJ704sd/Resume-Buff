@@ -822,3 +822,117 @@ npm run build
 - 移动 375x812:drawer 内 toggle/warning 不与输入区冲突。
 - 无 key:开启智能抽取后显示已回退规则模式。
 ```
+
+---
+
+## 16. R6-B 收尾记录 (Phase 7 — Prompt 7 落地, 2026-06-30)
+
+> 本节为 R6-B 收尾记录,由 orchestrator 在所有 phase 落地后追加。涵盖完成阶段、关键指标、测试结果、遗留风险、下一轮建议。
+
+### 16.1 完成阶段
+
+| Phase | 范围 | Commit | pytest 增量 | 累计 |
+|---|---|---|---|---|
+| Phase 0 | 基线校准 (`scripts/evaluate_interview_agent.py` 口径修正) | 与 R6-A Phase 4 doc 同步合并 (`119575c`) | +0 | 739 |
+| Phase 1 | slot_meta provenance (默认字段 + hash + confidence) | 在 Phase 2 同一 commit (`f665c35`) | +29 | 768 |
+| Phase 2 | API mode 开关 (`enable_interview_llm` / `interview_mode` / `extraction_summary` / `question_plan`) | `f665c35` | +11 | 768 |
+| Phase 3 | confidence-aware policy (`backend/core/interview_policy.py` deterministic 8 步链) | `d1622bb` | +41 | 809 |
+| Phase 4 | draft verifier (`backend/core/interview_verifier.py` 双源命中 + confidence_notes) | `51f6450` | +31 | 840 |
+| Phase 4 doc 同步 | baseline 840 锁 | `7b756fc` | +0 | 840 |
+| Phase 5 | eval compare (`--extractor {rules, llm, compare}` + fallback_category + 对照表) | `b1635fc` | +23 | **863** |
+| Phase 6 | frontend 最小呈现 (toggle + 三态标签 + 置信度 + 事实核验) | `be250e3` | +0 (前端) | 863 |
+| Phase 7 | 收尾 (README / ROADMAP / AGENTS / spec 四方同步) | (待用户授权 push) | +0 | 863 |
+
+> **注**:Phase 1 +29 是 `tests/test_interview_agent.py::TestPhase1SlotMeta*` 系列,Phase 2 收尾时一起算入;Phase 0 文档口径修正确实 +0 新 pytest(纯脚本文案)。
+
+### 16.2 关键指标 (offline compare 实测, 2026-06-30)
+
+**跑测命令**:`D:\python3.11\python.exe scripts/evaluate_interview_agent.py --mode offline --extractor compare --output backend/logs/interview_eval_report.md`
+
+| 指标 | 全局 | rules | llm 意图 (offline → 强制规则 fallback) | Delta |
+|---|---|---|---|---|
+| 样本数 | 20 | 10 | 10 | — |
+| `schema_pass_rate` | 0.30 | 0.30 | 0.30 | +0.00 |
+| `avg_completeness` | 0.53 | 0.53 | 0.53 | +0.00 |
+| `fallback_rate` | 0.50 | 0.00 | 1.00 | +1.00 (offline 预期) |
+| `fabrication_violations` | 0 | 0 | 0 | 0 (✅ 目标达成) |
+| `avg_latency_ms` | 1 | 1 | 1 | 0 |
+| `p95_latency_ms` | 2 | 2 | 2 | 0 |
+| `low_confidence_slot_rate` | 0.23 | 0.23 | 0.23 | 0 |
+
+**按 source 分组**:
+
+| source | total | schema_pass_rate | avg_completeness | fabric_viol | low_conf_rate |
+|---|---|---|---|---|---|
+| `plan_baseline` | 6 | 0.33 | 0.56 | 0 | 0.22 |
+| `simulated_user_v1` | 14 | 0.29 | 0.52 | 0 | 0.24 |
+
+**fallback_category 分布**:
+
+| 类别 | 数量 | 占比 |
+|---|---|---|
+| `none` | 10 | 0.50 |
+| `llm_disabled_fallback` | 10 | 0.50 |
+| `tool_error_fallback` | 0 | 0.00 |
+| `schema_retry_fallback` | 0 | 0.00 |
+| `workflow_abort_fallback` | 0 | 0.00 |
+
+> offline compare 双组 delta = 0,因为 llm 意图路径在 offline 模式强制走规则版 + 标 `llm_disabled_fallback`。**live mode + 已配置 LLM 凭据**才会真发网络,那时 delta 才反映 LLM 抽取质量(spec §8 product gate)。
+
+### 16.3 测试结果
+
+- **后端全量**:`D:\python3.11\python.exe -m pytest tests/ -q` → **863 passed in 82.86s**
+- **前端类型检查**:`cd frontend && npx vue-tsc --noEmit` → **0 error**
+- **前端构建**:`cd frontend && npm run build` → 成功 (`dist/index.html 0.48 kB / assets/index-*.css 369.43 kB / assets/index-*.js 1104.35 kB`)
+- **offline compare**:`scripts/evaluate_interview_agent.py --mode offline --extractor compare` → 报告生成 `backend/logs/interview_eval_report.md` (132 行, 8 章节)
+- **隐私自检**:`Select-String -LiteralPath backend\logs\interview_eval_report.md -Pattern "用户原文哨兵|LLM_API_KEY|BEGIN PROMPT|source_span" -SimpleMatch` → **无匹配**(报告不含 user_message / prompt / raw response / source_span / API key / env var 名 / Bearer / key 前缀)
+- **git status**:`?? .planning/面试题解/` 唯一未跟踪项(用户自己的面试题解草稿,跟 R6-B 无关,未入库)
+
+### 16.4 收尾验证清单 (Phase 7 完成标准)
+
+- [x] AGENTS.md R6-B Phase 0-6 锁点全部到位 (7 段,R6-B 起点 baseline 739 → 终点 863)
+- [x] README.md "当前状态" + "核心能力" + scripts 列表 同步 R6-B 落地 (基线 863 / R6-B 6 phase 全完成 / interview agent 默认 rules 路径)
+- [x] ROADMAP.md 顶部快照 + "最近 7 个 commit" + 新增 R6-B section 同步 (活跃基线 863)
+- [x] round6-b spec §16 收尾记录 (本节) append 完毕
+- [x] 后端全量 863 passed + 0 skipped
+- [x] 前端 vue-tsc 0 error + npm run build 成功
+- [x] offline compare 报告生成 + 隐私自检通过
+- [x] git status 无真实 materials.json 污染 + logs/dist/output 等运行产物正确 gitignore
+- [x] 无真实个人素材 / LLM 凭据入库
+
+### 16.5 遗留风险
+
+1. **LLM 抽取真实收益待验证** — offline compare 双组 delta = 0(预期内),需用户在 chat panel 跑 10+ 轮真实对话 + 配置 LLM key 后跑 live compare,才能判断 `schema_pass_rate` / `avg_completeness` 相对 rules baseline 是否真正提升(spec §12 产品指标:`schema_pass_rate ≥ 0.60` / `avg_completeness ≥ 0.70`)
+2. **`schema_pass_rate = 0.30` 全局仍偏低** — 跟 R6-A Phase 5 baseline 持平,LLM 路径未启动;待 live eval 验证后,若仍 < 0.60,需排查 `extract_slots` rules 路径是否漏关键 slot 或 prompt 是否需要重写
+3. **`interview_agent.py` 文件继续膨胀** — 当前含 orchestrator + slot_meta + policy 接入 + verifier 接入 + LLM call + save-card,文件 ~800 行;若 R6-C 拆 `core/interview_llm.py`,需做"机械拆分,行为不变"重构 round(spec §3 方案 B 备选)
+4. **R6-B Phase 1 的 29 个 slot_meta 测试散落** — `tests/test_interview_agent.py::TestPhase1SlotMeta*` 跟 R6-A Phase 1 旧 case 同文件,粒度尚可但可读性边际下降;若未来 phase 加新功能,建议单独建 `tests/test_interview_slot_meta.py`
+5. **offline compare 报告** 含 `samples / descriptions` 字段未来可能扩展(如 per-gap metrics),需在 R6-C 时同步更新 `tests/test_interview_eval.py` 锁
+
+### 16.6 下一轮建议 (P1 候选)
+
+| 选项 | 描述 | 触发条件 | 工作量估算 |
+|---|---|---|---|
+| **(a) R6-C live eval 收益验证** | 用户跑 10+ 轮真实对话 + 配置 LLM key 后,跑 `scripts/evaluate_interview_agent.py --mode live --extractor compare`,验证 schema_pass_rate 是否 ≥ 0.60 / avg_completeness 是否 ≥ 0.70 | R6-B spec §8 product gate | 0 代码 + 1 报告 + 文档同步(~1 小时) |
+| **(b) R6-C 拆 `core/interview_llm.py`** | 把 `interview_agent.py` 里的 LLM call / slot extraction / fallback 抽到独立模块,行为不变,纯机械拆分 | `interview_agent.py` > 1000 行 或 用户明确要求 | ~300 行(模块 + 测试),机械拆分 1-2 小时 |
+| **(c) R5-F prompt rollout** | 若 R5-E live A/B 报告显示 v3-priority / v4-counterexample / v5-minimal 中有稳定 winner,切默认 prompt(保留 v2-baseline 显式回退路径) | R5-E live 报告有明确 winner 数据 | ~50 行(改 baseline 常量 + 测试),10 分钟 |
+
+> **推荐顺序**:先做 (a) 验证 R6-B 是否真正提升产品价值,再决定走 (b) 重构还是 (c) 切 prompt。
+
+### 16.7 R6-B 不做 (再次重申)
+
+- 不做自由聊天助手 / 模拟面试训练 / 自动投递
+- 不做账号 / 云端 / 多用户
+- 不引入向量数据库 / Redis / 后台队列
+- 不把完整对话持久化
+- 不让 LLM 自动保存素材
+- 不重构已落地的 LLM slot extraction 到新模块(R6-C 候选,不在本 round)
+- 不改默认 resume rewrite prompt
+- 不 rollout R5-E prompt winner
+- 不把 live eval report 自动入库(spec §13 非目标清单)
+
+### 16.8 收尾 commit (待用户授权后 push)
+
+- (本 round) `docs(round6-b): sync active baseline 863 after phase 5`
+  - 文件: `README.md` / `.harness/docs/ROADMAP.md` / `.harness/docs/round6-b-interview-agent-intelligence-spec.md`
+  - 范围: 仅文档同步,不改业务逻辑 / 后端代码 / 前端代码 / 测试
+  - 验证: 后端 863 passed + 前端 build 成功 + offline compare 通过 + 隐私自检通过 + git status 无污染

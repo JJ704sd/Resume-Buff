@@ -410,3 +410,381 @@ class TestSaveCardEndpoint:
         }
         resp = client.post("/api/interview/save-card", json=body)
         assert resp.status_code == 422, resp.text
+
+
+# ----------------------------------------------------------------------
+# 5. R6-B Phase 2: API mode 开关(spec §5.3)
+# ----------------------------------------------------------------------
+# 覆盖:
+#   - TestStartModeSwitch (4): 默认 rules / enable=False 字节级一致 /
+#     enable=True + 无 key 走 rules + mode_warning / enable=True + 有 key 走 llm_assisted
+#   - TestReplyUsesSessionMode (3): rules session → extraction_summary.extractor="rules" /
+#     llm_assisted session → extraction_summary.extractor="llm" /
+#     ReplyRequest 不重复传 enable 开关
+#   - TestResponsePrivacy (4): 响应不含 API key / 不含 source_span 明文 /
+#     不含 user_message 明文 / 不含 prompt 正文
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def client_with_env_key(monkeypatch):
+    """
+    同 client fixture, 但 monkeypatch LLM_API_KEY 进 env 模拟"用户有 key"场景。
+    用于验证 enable_interview_llm=True + 有 key → llm_assisted 模式。
+    """
+    from main import app
+
+    from core import interview_agent
+
+    monkeypatch.setattr(interview_agent, "load_materials", lambda: _minimal_materials())
+    monkeypatch.setattr(interview_agent, "_INTERVIEW_SESSIONS", {})
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        interview_agent,
+        "log_agent_trace_jsonl",
+        lambda ev: captured.append(ev),
+    )
+
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-1234567890abcdef")
+    return TestClient(app)
+
+
+@pytest.fixture
+def client_without_env_key(monkeypatch):
+    """
+    同 client fixture, 但确保 env **没有** LLM_API_KEY。
+    用于验证 enable=True 但无 key 时的 fallback 行为。
+    """
+    from main import app
+
+    from core import interview_agent
+
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setattr(interview_agent, "load_materials", lambda: _minimal_materials())
+    monkeypatch.setattr(interview_agent, "_INTERVIEW_SESSIONS", {})
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        interview_agent,
+        "log_agent_trace_jsonl",
+        lambda ev: captured.append(ev),
+    )
+
+    return TestClient(app)
+
+
+class TestStartModeSwitch:
+    """R6-B Phase 2: StartRequest.enable_interview_llm 控制 session.interview_mode。"""
+
+    def test_start_default_uses_rules_mode_without_warning(self, client):
+        """不传 enable_interview_llm(默认 False)→ rules 模式, 无 warning(老路径字节级一致)。"""
+        body = {"target_role": "test_qa", "jd_text": _minimal_jd_text()}
+        resp = client.post("/api/interview/start", json=body)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["interview_mode"] == "rules", (
+            f"默认应返 rules, 实际 {data.get('interview_mode')!r}"
+        )
+        assert data.get("mode_warning") is None, (
+            f"默认应无 mode_warning, 实际 {data.get('mode_warning')!r}"
+        )
+
+    def test_start_explicit_false_uses_rules_mode(self, client):
+        """显式传 enable_interview_llm=False → 仍 rules 模式, 无 warning。"""
+        body = {
+            "target_role": "test_qa",
+            "jd_text": _minimal_jd_text(),
+            "enable_interview_llm": False,
+        }
+        resp = client.post("/api/interview/start", json=body)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["interview_mode"] == "rules"
+        assert data.get("mode_warning") is None
+
+    def test_start_enable_true_without_key_falls_back_to_rules_with_warning(
+        self, client_without_env_key,
+    ):
+        """enable=True + env 无 LLM_API_KEY → rules + mode_warning(spec §5.1, start 不失败)。"""
+        body = {
+            "target_role": "test_qa",
+            "jd_text": _minimal_jd_text(),
+            "enable_interview_llm": True,
+        }
+        resp = client_without_env_key.post("/api/interview/start", json=body)
+        assert resp.status_code == 200, (
+            f"无 key 时 start 仍应 200, 实际 {resp.status_code} {resp.text}"
+        )
+        data = resp.json()
+        assert data["interview_mode"] == "rules", (
+            f"无 key 应 fallback rules, 实际 {data.get('interview_mode')!r}"
+        )
+        assert data.get("mode_warning") is not None, (
+            "无 key 模式 fallback 应有 mode_warning 提示用户"
+        )
+        # warning 必须是用户可读摘要, 不含 key 字符 / env var 名(spec §5.1)
+        warning_text = data["mode_warning"]
+        assert "智能抽取不可用" in warning_text or "已使用规则" in warning_text
+        assert "sk-test" not in warning_text
+        assert "LLM_API_KEY" not in warning_text
+        assert "sk-" not in warning_text  # 防 key 字符串泄漏
+
+    def test_start_enable_true_with_key_uses_llm_assisted(self, client_with_env_key):
+        """enable=True + env 有 LLM_API_KEY → llm_assisted 模式, 无 warning。"""
+        body = {
+            "target_role": "test_qa",
+            "jd_text": _minimal_jd_text(),
+            "enable_interview_llm": True,
+        }
+        resp = client_with_env_key.post("/api/interview/start", json=body)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["interview_mode"] == "llm_assisted", (
+            f"有 key 应 llm_assisted, 实际 {data.get('interview_mode')!r}"
+        )
+        assert data.get("mode_warning") is None, (
+            f"有 key 不应有 mode_warning, 实际 {data.get('mode_warning')!r}"
+        )
+
+
+class TestReplyUsesSessionMode:
+    """R6-B Phase 2: ReplyRequest 不传 enable 开关, reply 沿用 session.interview_mode。"""
+
+    def test_reply_in_rules_session_uses_rules_extractor(self, client):
+        """rules session → reply 走 rules extraction, extraction_summary.extractor='rules'。"""
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+        assert start["interview_mode"] == "rules"
+
+        # answer 走一轮 answer(responsibility slot)
+        reply = client.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "message": "我负责测试反馈整理", "action": "answer"},
+        )
+        assert reply.status_code == 200, reply.text
+        data = reply.json()
+        # Phase 2 必有 extraction_summary 字段(answer 路径)
+        assert "extraction_summary" in data, "reply response 应含 extraction_summary 字段"
+        es = data["extraction_summary"]
+        assert es is not None, "answer 路径 extraction_summary 不应为 None"
+        assert es["extractor"] == "rules", (
+            f"rules session 走 rules, 实际 {es.get('extractor')!r}"
+        )
+        assert es["fallback_used"] is False
+        assert isinstance(es["captured_slots"], list)
+        # 至少填了 responsibility 或 background
+        assert any(
+            slot in es["captured_slots"]
+            for slot in ("responsibility", "background")
+        ), f"captured_slots 应含 responsibility 或 background, 实际 {es['captured_slots']}"
+        # question_plan 必有
+        assert "question_plan" in data
+        assert data["question_plan"] is not None
+        # Phase 2 placeholder schema
+        qp = data["question_plan"]
+        assert "slot" in qp
+        assert qp["reason_code"] == "phase2_placeholder"
+        assert isinstance(qp["low_confidence_slots"], list)
+
+    def test_reply_in_llm_assisted_session_uses_llm_extractor(
+        self, client_with_env_key, monkeypatch,
+    ):
+        """llm_assisted session + 有 key → reply 走 LLM, extraction_summary.extractor='llm'。
+
+        mock _call_llm_for_slot_extraction 返合法 JSON content,
+        验证 reply 走 LLM 路径而不是 rules 路径。
+        """
+        from core import interview_agent
+
+        def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
+            slot = user_payload.get("slot", "")
+            # 模拟 LLM 返 responsibility 字符串
+            return json.dumps({slot: "我负责 AI 测试数据质量", "_warnings": []})
+
+        monkeypatch.setattr(
+            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+        )
+
+        # start with enable=True + 有 key
+        start = client_with_env_key.post(
+            "/api/interview/start",
+            json={
+                "target_role": "test_qa",
+                "jd_text": _minimal_jd_text(),
+                "enable_interview_llm": True,
+            },
+        ).json()
+        sid = start["session_id"]
+        assert start["interview_mode"] == "llm_assisted"
+
+        reply = client_with_env_key.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "message": "我负责 AI 测试数据质量", "action": "answer"},
+        )
+        assert reply.status_code == 200, reply.text
+        data = reply.json()
+        es = data["extraction_summary"]
+        assert es is not None
+        assert es["extractor"] == "llm", (
+            f"llm_assisted session + mock LLM 成功 → 应走 llm, 实际 {es.get('extractor')!r}"
+        )
+        assert es["fallback_used"] is False
+
+    def test_reply_request_does_not_accept_enable_interview_llm(self, client):
+        """ReplyRequest **不**接受 enable_interview_llm 字段(多传应被 Pydantic 忽略或 422)。"""
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": _minimal_jd_text()},
+        ).json()
+        sid = start["session_id"]
+
+        # 故意多传 enable_interview_llm — Pydantic 默认会忽略 extra 字段(因为 model 未声明)
+        # 或因为声明了 enable_interview_llm=False 也不会被 start 那条 request 影响
+        reply = client.post(
+            "/api/interview/reply",
+            json={
+                "session_id": sid,
+                "message": "我负责测试反馈整理",
+                "action": "answer",
+                "enable_interview_llm": True,  # 多传, 应被 Pydantic 忽略
+            },
+        )
+        # reply 端点不应因为这个额外字段拒绝请求
+        assert reply.status_code == 200, (
+            f"reply 多传 enable_interview_llm 不应 422, 实际 {reply.status_code} {reply.text}"
+        )
+        data = reply.json()
+        # reply 沿用 start 时决定的 mode(rules)— 不被多传的字段影响
+        es = data["extraction_summary"]
+        assert es["extractor"] == "rules", (
+            f"start 时没开 llm, reply 多传 enable 不应改变 mode, 实际 extractor={es.get('extractor')!r}"
+        )
+
+
+class TestResponsePrivacy:
+    """R6-B Phase 2: API response 不含 API key / prompt / source_span / user_message 明文。"""
+
+    def test_start_response_does_not_leak_api_key(self, client_with_env_key):
+        """StartResponse 不含 LLM_API_KEY 值 / env var 名 / key 字符串前缀。"""
+        body = {
+            "target_role": "test_qa",
+            "jd_text": _minimal_jd_text(),
+            "enable_interview_llm": True,
+        }
+        resp = client_with_env_key.post("/api/interview/start", json=body)
+        assert resp.status_code == 200
+        text = resp.text
+        # 完整 key 值不应泄漏
+        assert "sk-test-1234567890abcdef" not in text
+        # env var 名不应泄漏
+        assert "LLM_API_KEY" not in text
+        # key 前缀不应泄漏
+        assert "sk-test" not in text
+        # Bearer 字样不应泄漏(说明没把 Authorization header 暴露)
+        assert "Bearer" not in text
+
+    def test_start_response_does_not_leak_prompt(self, client_with_env_key):
+        """StartResponse 不含 LLM prompt 正文(SLOT_EXTRACTION_SYSTEM_PROMPT 任何子串)。"""
+        from core.interview_prompts import SLOT_EXTRACTION_SYSTEM_PROMPT
+
+        body = {
+            "target_role": "test_qa",
+            "jd_text": _minimal_jd_text(),
+            "enable_interview_llm": True,
+        }
+        resp = client_with_env_key.post("/api/interview/start", json=body)
+        assert resp.status_code == 200
+        text = resp.text
+        # prompt 正文(前 50 字符)不应泄漏到 response
+        prompt_prefix = SLOT_EXTRACTION_SYSTEM_PROMPT[:50]
+        assert prompt_prefix not in text, (
+            "LLM prompt 字符串前缀不应出现在 response 中"
+        )
+
+    def test_reply_response_does_not_leak_source_span_or_user_message(
+        self, client_with_env_key, monkeypatch,
+    ):
+        """ReplyResponse 不含 user_message / source_span 明文(就算 LLM 抽取成功)。"""
+        from core import interview_agent
+
+        def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
+            slot = user_payload.get("slot", "")
+            # mock LLM 返带 source_span 的 payload
+            return json.dumps({
+                slot: "测试反馈整理",
+                "source_span": "我负责测试反馈整理并跟进了完整流程",
+                "_warnings": [],
+            })
+
+        monkeypatch.setattr(
+            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+        )
+
+        start = client_with_env_key.post(
+            "/api/interview/start",
+            json={
+                "target_role": "test_qa",
+                "jd_text": _minimal_jd_text(),
+                "enable_interview_llm": True,
+            },
+        ).json()
+        sid = start["session_id"]
+
+        user_msg = "我负责测试反馈整理并跟进了完整流程"
+        reply = client_with_env_key.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "message": user_msg, "action": "answer"},
+        )
+        assert reply.status_code == 200
+        body_text = reply.text
+
+        # source_span 明文不应出现在 response(只能以 hash 形式存在)
+        assert user_msg not in body_text
+        # key 字符串也不应泄漏
+        assert "sk-test-1234567890abcdef" not in body_text
+        assert "Bearer" not in body_text
+
+        # extraction_summary 字段不包含 source_span / user_message / confidence
+        data = reply.json()
+        es = data["extraction_summary"]
+        # schema 限定: 只有 extractor / fallback_used / captured_slots / low_confidence_slots
+        for forbidden_key in ("source_span", "user_message", "confidence", "source_span_hash"):
+            assert forbidden_key not in es, (
+                f"extraction_summary 不应含 {forbidden_key!r}, 实际 keys={list(es.keys())}"
+            )
+
+    def test_reply_response_does_not_leak_api_key(self, client_with_env_key, monkeypatch):
+        """ReplyResponse 不含 API key 值 / Bearer / env var 名。"""
+        from core import interview_agent
+
+        def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
+            slot = user_payload.get("slot", "")
+            return json.dumps({slot: "测试反馈整理", "_warnings": []})
+
+        monkeypatch.setattr(
+            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+        )
+
+        start = client_with_env_key.post(
+            "/api/interview/start",
+            json={
+                "target_role": "test_qa",
+                "jd_text": _minimal_jd_text(),
+                "enable_interview_llm": True,
+            },
+        ).json()
+        sid = start["session_id"]
+
+        reply = client_with_env_key.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "message": "我负责测试反馈整理", "action": "answer"},
+        )
+        assert reply.status_code == 200
+        body_text = reply.text
+        assert "sk-test-1234567890abcdef" not in body_text
+        assert "Bearer" not in body_text
+        assert "LLM_API_KEY" not in body_text

@@ -1,5 +1,5 @@
 """
-Round 6-A Phase 1+2: interview agent API
+Round 6-A Phase 1+2 + R6-B Phase 2: interview agent API
 
 端点:
   - POST /api/interview/start      创建 session + 选缺口 + 返第一问
@@ -7,7 +7,15 @@ Round 6-A Phase 1+2: interview agent API
   - POST /api/interview/draft      强制生成 draft_card(can_draft=True 才返)
   - POST /api/interview/save-card  把编辑过的 draft_card 追加为新 project(Phase 2)
 
-约束(plan §1.3 / §2.3):
+R6-B Phase 2 增量(spec §5.3):
+  - StartRequest 增加 enable_interview_llm: bool = False
+  - StartResponse 增加 interview_mode + mode_warning optional 字段
+  - create_session 接受 enable_interview_llm, 决定 session.interview_mode + mode_warning
+  - ReplyResponse 增加 extraction_summary + question_plan optional 字段
+  - ReplyRequest **不重复**传开关, reply 沿用 session.interview_mode
+  - 隐私边界: API response 不含 API key / prompt / source_span / user_message 明文
+
+约束(plan §1.3 / §2.3 + spec §5.3):
   - 不 import core.llm_rewriter / core.agent_workflow
   - 不挂到 resume_router,独立 router
   - 错误码对齐 plan:
@@ -51,6 +59,14 @@ router = APIRouter()
 class StartRequest(BaseModel):
     target_role: str = Field(..., description="6 个 role id 之一")
     jd_text: str = Field(..., description="JD 全文, 50k 字符上限")
+    # R6-B Phase 2(spec §5.3): 智能抽取开关
+    # False(默认)→ 老路径字节级一致, rules 模式
+    # True + LLM_API_KEY 在 env → llm_assisted 模式
+    # True + 无 key → 仍返 rules 模式 + mode_warning(spec §5.1)
+    enable_interview_llm: bool = Field(
+        default=False,
+        description="是否启用智能抽取; 失败自动回退 rules 模式, 不抛错",
+    )
 
 
 class _GapDict(BaseModel):
@@ -81,6 +97,16 @@ class StartResponse(BaseModel):
     selected_gap: dict[str, Any]
     message: dict[str, Any] | None
     progress: dict[str, Any]
+    # R6-B Phase 2(spec §5.3): 暴露 mode 给前端显示
+    # 旧前端不消费也不报错(spec §5.3 "所有新增字段均为 optional 或有默认值")
+    interview_mode: str = Field(
+        default="rules",
+        description='抽取模式: "rules" | "llm_assisted"',
+    )
+    mode_warning: str | None = Field(
+        default=None,
+        description="用户可见模式说明(智能抽取不可用时给出原因摘要)",
+    )
 
 
 class ReplyRequest(BaseModel):
@@ -98,6 +124,22 @@ class ReplyResponse(BaseModel):
     progress: dict[str, Any]
     can_draft: bool
     force_draft: bool
+    # R6-B Phase 2(spec §5.3): 本轮抽取摘要 + 下一问策略占位
+    # 老前端不消费也不报错; 旧路径(extraction_summary=None)字节级一致
+    extraction_summary: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "本轮抽取摘要: extractor / fallback_used / captured_slots / "
+            "low_confidence_slots. 非 answer 动作为 None."
+        ),
+    )
+    question_plan: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "下一问策略占位(Phase 2: slot + reason_code + low_confidence_slots; "
+            "Phase 3 由 interview_policy 填充)"
+        ),
+    )
 
 
 class DraftRequest(BaseModel):
@@ -190,10 +232,18 @@ def interview_start(req: StartRequest):
       - 校验 jd_text + target_role
       - create_session: parse_jd + match_score + 选缺口
       - 返 session_id + selected_gap + 第一问
+
+    R6-B Phase 2(spec §5.3):
+      - 接受 enable_interview_llm 开关
+      - 返 interview_mode + mode_warning(给前端显示)
+      - 不传 enable=False 时与 R6-A Phase 1 字节级一致
     """
     _validate_start_input(req.target_role, req.jd_text)
     mats = load_materials()
-    sess = create_session(req.target_role, req.jd_text, mats)
+    sess = create_session(
+        req.target_role, req.jd_text, mats,
+        enable_interview_llm=req.enable_interview_llm,
+    )
     first_q = next_question(sess)
     return StartResponse(
         session_id=sess.session_id,
@@ -208,6 +258,9 @@ def interview_start(req: StartRequest):
             "turn_count": sess.turn_count,
             "can_draft": can_draft(sess),
         },
+        # R6-B Phase 2(spec §5.3): 把 session mode / warning 暴露给前端
+        interview_mode=sess.interview_mode,
+        mode_warning=sess.mode_warning,
     )
 
 
@@ -223,6 +276,10 @@ def interview_reply(req: ReplyRequest):
       - rephrase_question: 同一 slot 换 prompt
       - switch_gap: 重置 slots / turn / skip, 选新 gap
       - draft_now: 强制 draft(can_draft=False → 400)
+
+    R6-B Phase 2(spec §5.3):
+      - ReplyRequest **不**重复传 enable_interview_llm, 沿用 session.interview_mode
+      - ReplyResponse 增加 extraction_summary / question_plan optional 字段
     """
     sess = get_session(req.session_id)
     if sess is None:
@@ -247,6 +304,10 @@ def interview_reply(req: ReplyRequest):
         progress=resp.get("progress", {}),
         can_draft=resp.get("can_draft", False),
         force_draft=resp.get("force_draft", False),
+        # R6-B Phase 2(spec §5.3): 抽取摘要 + 下一问策略
+        # 非 answer 动作为 None; 老前端不消费也不报错
+        extraction_summary=resp.get("extraction_summary"),
+        question_plan=resp.get("question_plan"),
     )
 
 

@@ -23,14 +23,34 @@ Phase 4 LLM slot 抽取(plan §4.4):
   - InterviewState (str Enum)        EMPTY / DIAGNOSING / ASKING / DRAFT_READY / SAVED / ABORTED
   - ActionType   (str Enum)          ANSWER / SKIP_QUESTION / REPHRASE_QUESTION / SWITCH_GAP / DRAFT_NOW
   - GapCandidate (@dataclass frozen)  8 字段
-  - InterviewSession (@dataclass)     11 字段(可 mutate,Phase 1 in-place)
+  - InterviewSession (@dataclass)     16 字段(R6-B Phase 1 加 5 个可信增强字段, 默认值)
   - create_session / select_gap / next_question / extract_slots
   - can_draft / build_draft_card / apply_action
   - get_session / reset_session / save_card
   - _resolve_interview_llm_config     (Phase 4 helper, 测试用)
+
+Round 6-B Phase 1: slot_meta provenance(spec §5.1+§5.2):
+  - InterviewSession.interview_mode 默认 "rules"(R6-B Phase 2 才接 API 开关)
+  - InterviewSession.slot_meta 存放 per-slot provenance, list 形态, 单 slot 最多 5 条
+  - extract_slots 返回 dict 带 _slot_meta(list[dict]), apply_action 把它写入 session
+  - LLM source_span 只在当前函数内验证并 sha256 hash + length + turn_index, 不得存明文
+  - confidence 必须是 0.0-1.0 number(bool 不接受), 拒绝时降级到规则版
+  - rules / llm extraction 各自生成 reason_code(spec §5.2)
+  - 隐私边界: session.slot_meta / trace / API response 均不含 user_message / source_span 明文
+
+Round 6-B Phase 2: API mode 开关(spec §5.3):
+  - create_session 新增 keyword-only 参数 enable_interview_llm: bool = False
+  - _decide_interview_mode: enable=False → rules(老路径字节级一致);
+    enable=True + LLM_API_KEY 在 env → llm_assisted;
+    enable=True + 无 key → rules + mode_warning(用户可见, 不含 key 字符)
+  - _do_answer 根据 session.interview_mode == "llm_assisted" 决定 llm_enabled
+  - _build_extraction_summary: 构造 spec §5.3 schema(extractor / fallback_used / captured_slots / low_confidence_slots)
+  - _build_question_plan: Phase 2 占位实现(返回 slot + reason_code="phase2_placeholder" + low_confidence_slots 聚合)
+  - ReplyResponse 走 spec §5.3 字段名; 不存 user_message / source_span / API key / prompt
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -120,6 +140,23 @@ class InterviewSession:
     # 测试 / Phase 2 用: 允许外部覆盖候选集(默认 None → 走 4 个固定 gap)
     gap_candidates: list[GapCandidate] | None = None
 
+    # R6-B Phase 1: 可信增强层(spec §5.1)— 必须有默认值,保持旧测试构造兼容
+    interview_mode: str = "rules"
+    """抽取模式: 'rules' / 'llm_assisted'。Phase 2 才通过 API 层切换。"""
+    mode_warning: str | None = None
+    """用户可见摘要: 例如 '智能抽取不可用, 已使用规则模式'。"""
+    slot_meta: dict[str, Any] = field(default_factory=dict)
+    """per-slot provenance 字典:
+      {slot: [meta_entry, ...]} 单 slot 最多保留 INTERVIEW_SLOT_META_MAX 条。
+      meta_entry 字段: extractor / confidence / turn_index / reason_code /
+                       source_span_hash(可选) / source_span_len(可选)。
+      不存 user_message / source_span 明文(spec §5.2 隐私边界)。
+    """
+    question_plan: dict[str, Any] | None = None
+    """下一问策略输出(spec §6, Phase 3 才填充)。"""
+    verification_summary: dict[str, Any] | None = None
+    """draft_card 核验摘要(spec §7, Phase 4 才填充)。"""
+
 
 # ----------------------------------------------------------------------
 # 进程内 session 存储(独立命名空间,与 core.session._SESSIONS 隔离)
@@ -148,6 +185,144 @@ INTERVIEW_REQUIRED_EDITED_KEYS: tuple[str, ...] = (
 
 
 # ----------------------------------------------------------------------
+# R6-B Phase 1: slot_meta provenance 常量 + helpers(spec §5.2)
+# ----------------------------------------------------------------------
+INTERVIEW_SLOT_META_MAX: int = 5
+"""per slot 最多保留的 meta 条数(spec §5.2 "list slot 最多保留 5 条 meta")。"""
+
+INTERVIEW_SLOT_META_MIN_CONFIDENCE: float = 0.0
+INTERVIEW_SLOT_META_MAX_CONFIDENCE: float = 1.0
+"""confidence 合法范围 [0.0, 1.0]。bool 被拒绝(spec §5.2)。"""
+
+INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT: float = 0.80
+"""规则抽取命中关键词 / regex 时的 confidence 默认值。"""
+
+INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK: float = 0.40
+"""规则抽取 fallback(没命中关键词, 走原文 fallback)时的 confidence 默认值。"""
+
+INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE: float = 0.60
+"""LLM 未提供 confidence 时的默认值。"""
+
+
+def _validate_confidence(value: Any) -> float | None:
+    """
+    校验 confidence 是否合法(spec §5.2):
+      - 必须是 0.0-1.0 的 number
+      - bool 是 int 子类, 必须**显式拒绝**(防止 True/False 被当成 1.0/0.0)
+
+    返回:
+      - 合法 → float(value)
+      - 非法 → None(caller 决定 fallback 默认值)
+    """
+    # bool 先排除(防止 True/False 走 int 分支)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        if INTERVIEW_SLOT_META_MIN_CONFIDENCE <= f <= INTERVIEW_SLOT_META_MAX_CONFIDENCE:
+            return f
+        return None
+    return None
+
+
+def _compute_source_span_hash(span: str | None) -> tuple[str | None, int | None]:
+    """
+    把 source_span 字符串转成 sha256 hash + length(spec §5.2)。
+
+    隐私边界:
+      - 输入 span 仅在本函数内访问, 函数返回后丢弃
+      - 返回值只含 hash 字符串前缀 + 整数 length
+      - 永不入 caller 的 session / trace / API response
+
+    返回:
+      - 合法 string → ("sha256:" + 16 字符 hex, len(span))
+      - 空 / 非 string → (None, None)
+    """
+    if not isinstance(span, str) or not span:
+        return (None, None)
+    digest = hashlib.sha256(span.encode("utf-8")).hexdigest()[:16]
+    return (f"sha256:{digest}", len(span))
+
+
+def _make_slot_meta(
+    *,
+    extractor: str,
+    confidence: Any,
+    turn_index: int,
+    reason_code: str,
+    source_span_hash: str | None = None,
+    source_span_len: int | None = None,
+) -> dict[str, Any]:
+    """
+    构造一条 slot_meta entry(spec §5.2):
+      {
+        "extractor": "rules" | "llm",
+        "confidence": 0.0-1.0 float (永远不是 bool),
+        "turn_index": int,
+        "reason_code": str,
+        "source_span_hash": "sha256:..." | None,
+        "source_span_len": int | None,
+      }
+
+    confidence 非法 → 用 fallback: llm → INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE
+    rules → INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK。
+    source_span_hash / source_span_len 只要一个为 None, 另一个也归 None(防止半残 meta)。
+    """
+    if extractor not in ("rules", "llm"):
+        extractor = "rules"
+
+    conf = _validate_confidence(confidence)
+    if conf is None:
+        conf = (
+            INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE
+            if extractor == "llm"
+            else INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK
+        )
+
+    # source_span_hash / len 同步: 任一为 None → 都为 None(防半残)
+    if source_span_hash is None or source_span_len is None:
+        source_span_hash = None
+        source_span_len = None
+
+    return {
+        "extractor": extractor,
+        "confidence": conf,
+        "turn_index": int(turn_index) if isinstance(turn_index, int) else 0,
+        "reason_code": str(reason_code)[:50] if reason_code else "unknown",
+        "source_span_hash": source_span_hash,
+        "source_span_len": source_span_len,
+    }
+
+
+def _append_slot_meta(
+    session: InterviewSession,
+    slot: str,
+    new_entries: list[dict[str, Any]],
+) -> None:
+    """
+    写 session.slot_meta[slot], 保留最近 INTERVIEW_SLOT_META_MAX 条。
+    旧条目在前, 新条目在后(按 turn_index 升序, 同 turn 内新条目在后)。
+
+    隐私边界(spec §5.2 + AGENTS.md):
+      - new_entries 来自 _make_slot_meta, 不含 user_message / source_span 明文
+      - session.slot_meta 是 dataclass 字段, 不写 trace / API response
+    """
+    if not slot or not isinstance(new_entries, list) or not new_entries:
+        return
+    if session.slot_meta is None or not isinstance(session.slot_meta, dict):
+        session.slot_meta = {}
+    existing = list(session.slot_meta.get(slot) or [])
+    # 新条目按 turn_index 排序后追加(防止 caller 顺序乱)
+    ordered = sorted(
+        list(new_entries),
+        key=lambda e: (e.get("turn_index", 0), 0),
+    )
+    combined = existing + ordered
+    # 保留最后 INTERVIEW_SLOT_META_MAX 条(最近 N 条最有诊断价值)
+    session.slot_meta[slot] = combined[-INTERVIEW_SLOT_META_MAX:]
+
+
+# ----------------------------------------------------------------------
 # R6-A Phase 4: LLM slot 抽取本地常量(plan §4.3 配置口径)
 # ----------------------------------------------------------------------
 # 注: 这些常量值必须跟 core.llm_rewriter.DEFAULT_BASE_URL / DEFAULT_MODEL
@@ -161,6 +336,180 @@ _INTERVIEW_LLM_DEFAULT_BASE_URL: str = "https://api.openai.com/v1"
 
 _INTERVIEW_LLM_DEFAULT_MODEL: str = "gpt-4o-mini"
 """LLM slot 抽取默认 model(plan §4.3) — 跟 core.llm_rewriter.DEFAULT_MODEL 同步。"""
+
+
+# ----------------------------------------------------------------------
+# R6-B Phase 2: API mode 开关(spec §5.3 + §2.2)
+# ----------------------------------------------------------------------
+INTERVIEW_LLM_NO_KEY_WARNING: str = "智能抽取不可用, 已使用规则模式"
+"""用户可见摘要: enable_interview_llm=True 但 LLM_API_KEY 不在 env 时(spec §5.1)。"""
+
+INTERVIEW_MODE_RULES: str = "rules"
+INTERVIEW_MODE_LLM_ASSISTED: str = "llm_assisted"
+"""spec §5.1 锁死的两个 mode 值; ReplyResponse / StartResponse 都用这俩。"""
+
+
+def _has_llm_api_key() -> bool:
+    """检查 LLM_API_KEY 是否在 env(spec §5.3)。
+
+    隐私边界:
+      - 只读 env 不读文件 / 不读 LLM_BASE_URL / LLM_MODEL
+      - 不返回 key 本身, 只返 bool
+    """
+    return bool(os.environ.get("LLM_API_KEY", "").strip())
+
+
+def _decide_interview_mode(enable_interview_llm: bool) -> tuple[str, str | None]:
+    """
+    根据 enable_interview_llm + LLM_API_KEY env 决定 session.interview_mode(spec §5.3)。
+
+    决策表:
+      enable=False                   → ("rules", None)         旧路径字节级一致
+      enable=True + env 有 key        → ("llm_assisted", None)  智能抽取模式
+      enable=True + env 没 key        → ("rules", "智能抽取不可用, 已使用规则模式")
+
+    隐私边界:
+      - mode_warning 字面量是固定的, 不含 key 长度 / key 字符 / env var 名
+      - 函数不返回 key 自身
+
+    边界:
+      - 失败不抛 — 老路径(enable=False)字节级一致
+      - env 查 LLM_API_KEY, 不查 LLM_BASE_URL(避免 base_url 字符串泄漏)
+    """
+    if not enable_interview_llm:
+        return (INTERVIEW_MODE_RULES, None)
+    if _has_llm_api_key():
+        return (INTERVIEW_MODE_LLM_ASSISTED, None)
+    return (INTERVIEW_MODE_RULES, INTERVIEW_LLM_NO_KEY_WARNING)
+
+
+# ----------------------------------------------------------------------
+# R6-B Phase 2: extraction_summary / question_plan helpers(spec §5.3)
+# ----------------------------------------------------------------------
+INTERVIEW_LOW_CONFIDENCE_THRESHOLD: float = 0.6
+"""低置信度阈值: confidence < 0.6 视为 low_confidence(供前端 warning / eval 用)。"""
+
+
+def _build_extraction_summary(
+    *,
+    new_meta_entries: list[dict[str, Any]] | None,
+    captured_delta: dict[str, Any] | None,
+    intended_mode: str,
+) -> dict[str, Any] | None:
+    """
+    构造 ReplyResponse.extraction_summary(spec §5.3 schema):
+      {
+        "extractor": "rules" | "llm" | "mixed",
+        "fallback_used": bool,
+        "captured_slots": list[str],
+        "low_confidence_slots": list[str]
+      }
+
+    参数:
+      new_meta_entries:  本轮 _do_answer 写 session.slot_meta 的新条目 list
+      captured_delta:    本轮填进 captured_slots 的字段 dict(去 _warnings/_slot_meta)
+      intended_mode:     session.interview_mode("rules" / "llm_assisted") —
+                         用于判断 fallback_used (LLM 意图 + 实际 rules = fallback)
+
+    返回:
+      None — 当 new_meta_entries 为空 / 不是 list(代表本轮没发生 answer 抽取,
+             例如 skip / rephrase / switch_gap / draft_now)
+
+    隐私边界:
+      - 不存 user_message / source_span 明文
+      - low_confidence_slots 只列 slot 名字符串
+      - confidence 不进 dict(spec §5.3 schema 限定)
+
+    边界:
+      - new_meta_entries 空 → 返 None(API 层把 None 传给 Optional 字段)
+      - 不抛:任何内部异常 → 返 None(spec §6.3 "失败不阻断主流程")
+    """
+    if not isinstance(new_meta_entries, list) or not new_meta_entries:
+        return None
+    try:
+        extractors = sorted({str(m.get("extractor", "rules")) for m in new_meta_entries})
+        # "rules" / "llm" / "mixed" — 用集合基数判断(混合只可能是 rules + llm)
+        if extractors == ["rules"]:
+            extractor_label = "rules"
+        elif extractors == ["llm"]:
+            extractor_label = "llm"
+        else:
+            extractor_label = "mixed"
+
+        # fallback_used: intended_mode == llm_assisted 但实际 extractor 不是 llm
+        fallback_used = (
+            intended_mode == INTERVIEW_MODE_LLM_ASSISTED
+            and extractor_label != "llm"
+        )
+
+        # captured_slots: 从 captured_delta 抽出顶层业务 key(spec §5.3 schema 限定 list[str])
+        captured_slots: list[str] = []
+        if isinstance(captured_delta, dict):
+            for k in captured_delta.keys():
+                if not isinstance(k, str) or k.startswith("_"):
+                    continue
+                if k not in captured_slots:
+                    captured_slots.append(k)
+
+        # low_confidence_slots: meta.confidence < 0.6 的 slot(spec §5.3)
+        low_confidence_slots: list[str] = []
+        for m in new_meta_entries:
+            try:
+                conf_val = m.get("confidence")
+                if not isinstance(conf_val, (int, float)) or isinstance(conf_val, bool):
+                    continue
+                if conf_val < INTERVIEW_LOW_CONFIDENCE_THRESHOLD:
+                    low_confidence_slots.append("low_confidence")
+            except Exception:
+                continue
+
+        return {
+            "extractor": extractor_label,
+            "fallback_used": bool(fallback_used),
+            "captured_slots": captured_slots,
+            "low_confidence_slots": low_confidence_slots,
+        }
+    except Exception:
+        return None
+
+
+def _build_question_plan(session: InterviewSession) -> dict[str, Any] | None:
+    """
+    构造 ReplyResponse.question_plan 的最小占位实现(spec §5.3)。
+
+    Phase 2 不真正实现 deterministic policy(留给 Phase 3),
+    这里只生成一个最小结构让前端 schema 稳定:
+      - slot: 当前 _current_slot 字符串
+      - reason_code: 固定 "phase2_placeholder"
+      - low_confidence_slots: 从 session.slot_meta 聚合 confidence < 0.6 的 slot 列表
+
+    Phase 3 会替换这个函数为 interview_policy.plan_next_question。
+    """
+    try:
+        slot = _current_slot(session) or ""
+        # 聚合 session.slot_meta 中所有 confidence < 0.6 的 slot(去重)
+        low_conf_set: set[str] = set()
+        for slot_name, entries in (session.slot_meta or {}).items():
+            if not isinstance(entries, list):
+                continue
+            for m in entries:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    conf_val = m.get("confidence")
+                    if isinstance(conf_val, (int, float)) and not isinstance(conf_val, bool):
+                        if conf_val < INTERVIEW_LOW_CONFIDENCE_THRESHOLD:
+                            low_conf_set.add(str(slot_name))
+                            break  # 同一 slot 任意一条 low → 整 slot 标 low
+                except Exception:
+                    continue
+        return {
+            "slot": slot,
+            "reason_code": "phase2_placeholder",
+            "low_confidence_slots": sorted(low_conf_set),
+        }
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -518,12 +867,21 @@ def create_session(
     target_role: str,
     jd_text: str,
     materials: dict,
+    *,
+    enable_interview_llm: bool = False,
 ) -> InterviewSession:
     """
     创建 session:
       - parse_jd + match_score 抽取 JD 摘要
       - select_gap 自动选 Top 1 gap
       - 写 trace (tool=gap_select)
+
+    R6-B Phase 2(spec §5.3):
+      - 新增 keyword-only 参数 enable_interview_llm, 默认 False
+      - enable=False → session.interview_mode="rules", mode_warning=None(老路径字节级一致)
+      - enable=True + LLM_API_KEY 在 env → session.interview_mode="llm_assisted"
+      - enable=True + 无 key → session.interview_mode="rules", mode_warning="智能抽取不可用, 已使用规则模式"
+      - 决策走 _decide_interview_mode, 本函数不读 key 原文(spec 隐私边界)
     """
     parsed = parse_jd(jd_text)
     ms = match_score(
@@ -536,6 +894,10 @@ def create_session(
         "tier_info": ms.get("tier_info") or {},
         "score": ms.get("score"),
     }
+
+    # R6-B Phase 2: API mode 开关(spec §5.3)
+    decided_mode, decided_warning = _decide_interview_mode(enable_interview_llm)
+
     session = InterviewSession(
         session_id="ia" + uuid.uuid4().hex[:8],
         target_role=target_role,
@@ -548,6 +910,13 @@ def create_session(
         draft_card=None,
         message_log=[],
         gap_candidates=None,
+        # R6-B Phase 1: 可信增强层默认值
+        # R6-B Phase 2: enable_interview_llm + env 决定 mode/warning
+        interview_mode=decided_mode,
+        mode_warning=decided_warning,
+        slot_meta={},
+        question_plan=None,
+        verification_summary=None,
     )
     # 选缺口
     candidates = session.gap_candidates or _default_candidates()
@@ -627,6 +996,7 @@ def extract_slots(
     llm_api_key: str | None = None,
     llm_base_url: str | None = None,
     llm_model: str | None = None,
+    turn_index: int = 0,
 ) -> dict[str, Any]:
     """
     按 current_slot 抽取 user_message,返回要写入 captured_slots 的 dict。
@@ -635,6 +1005,11 @@ def extract_slots(
     Phase 1 行为(llm_enabled=False / 默认):规则抽取,字节级一致。
     Phase 4 行为(llm_enabled=True + 有 key):调 LLM,schema retry 1 次,
       失败 fallback 规则抽取,不抛(spec §4.4 "失败不阻断主流程")。
+
+    R6-B Phase 1 增强(spec §5.2):
+      - 返回 dict 新增 `_slot_meta` 字段, list[dict], 单元素 schema 见 _make_slot_meta
+      - turn_index: 当前轮数, 默认 0;  写入 slot_meta 供 audit
+      - 旧 key (background / responsibility / action / method / difficulty / result / metric / _warnings) 字节级一致
 
     规则版 schema(plan §1.3):
       - background / responsibility / difficulty / result: 单 string
@@ -649,33 +1024,69 @@ def extract_slots(
         llm_model=llm_model,
     )
     if not config["enabled_for_call"]:
-        return _extract_slots_by_rules(user_message, current_slot)
+        return _extract_slots_by_rules(user_message, current_slot, turn_index=turn_index)
 
     # Phase 4 LLM 路径: 失败 fallback 规则版
     parsed = _extract_slots_via_llm(
         user_message=user_message,
         current_slot=current_slot,
         config=config,
+        turn_index=turn_index,
     )
     if parsed is None:
-        return _extract_slots_by_rules(user_message, current_slot)
+        return _extract_slots_by_rules(user_message, current_slot, turn_index=turn_index)
     return parsed
 
 
 def _extract_slots_by_rules(
     user_message: str,
     current_slot: str,
+    *,
+    turn_index: int = 0,
 ) -> dict[str, Any]:
-    """Phase 1 规则版抽取(plan §1.3)— LLM 关闭 / LLM 失败时走这里。"""
+    """
+    Phase 1 规则版抽取(plan §1.3)— LLM 关闭 / LLM 失败时走这里。
+
+    R6-B Phase 1 增强(spec §5.2):
+      - 命中关键词 / regex 时 confidence = INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT(0.80)
+      - fallback 路径 confidence = INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK(0.40)
+      - 命中证据片段时记 source_span_hash + source_span_len(spec §5.2 "规则抽取没精确 span 时,
+        可使用当前 user_message 中命中的最短证据片段; 找不到时只记 extractor / confidence / turn_index")
+      - 返回 dict 新增 `_slot_meta` 字段(list, 通常 1 条)
+    """
     msg = user_message or ""
     warnings: list[str] = []
+
+    def _hit_meta(reason_code: str, span: str | None) -> dict[str, Any]:
+        """命中关键词 / regex 的 slot_meta — 带 source_span_hash。"""
+        h, ln = _compute_source_span_hash(span)
+        return _make_slot_meta(
+            extractor="rules",
+            confidence=INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT,
+            turn_index=turn_index,
+            reason_code=reason_code,
+            source_span_hash=h,
+            source_span_len=ln,
+        )
+
+    def _fb_meta(reason_code: str) -> dict[str, Any]:
+        """fallback 路径 slot_meta — 无 source_span。"""
+        return _make_slot_meta(
+            extractor="rules",
+            confidence=INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK,
+            turn_index=turn_index,
+            reason_code=reason_code,
+        )
 
     if current_slot == "background":
         val = msg.strip()[:200] if msg.strip() else ""
         if not val:
             warnings.append("未识别槽位内容, 已存原文供用户编辑")
             val = msg.strip()[:200]
-        return {"background": val, "_warnings": warnings}
+            meta = _fb_meta("background_fallback")
+        else:
+            meta = _hit_meta("background_text", val if val else None)
+        return {"background": val, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "responsibility":
         # 找 ["负责" / "主管" / "owner" / "主导"] 后面到下一个标点前的短语
@@ -696,7 +1107,10 @@ def _extract_slots_by_rules(
         if not val:
             val = msg.strip()[:200]
             warnings.append("未识别责任描述关键词, 已存原文供用户编辑")
-        return {"responsibility": val, "_warnings": warnings}
+            meta = _fb_meta("responsibility_fallback")
+        else:
+            meta = _hit_meta("keyword_responsibility", val)
+        return {"responsibility": val, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "action":
         # 按 ; / 。 / , / \n 切
@@ -706,8 +1120,11 @@ def _extract_slots_by_rules(
         if not actions:
             actions = [msg.strip()]
             warnings.append("未识别动作描述, 已存原文供用户编辑")
+            meta = _fb_meta("action_fallback")
+        else:
+            meta = _hit_meta("punctuation_split_action", "; ".join(actions))
         # 单数 key (与 slot_name 一致), captured_slots["action"] = [...]
-        return {"action": actions, "_warnings": warnings}
+        return {"action": actions, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "method":
         # 找 ["用了" / "采用" / "基于" / "通过"] 后面到句末
@@ -729,8 +1146,11 @@ def _extract_slots_by_rules(
         if not methods:
             warnings.append("未识别方法描述, 已存原文供用户编辑")
             methods = [msg.strip()]
+            meta = _fb_meta("method_fallback")
+        else:
+            meta = _hit_meta("keyword_method", " | ".join(methods))
         # 单数 key, captured_slots["method"] = [...]
-        return {"method": methods, "_warnings": warnings}
+        return {"method": methods, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "difficulty":
         # 找 ["难" / "坑" / "卡" / "问题"] 周围 30 字窗口
@@ -745,7 +1165,10 @@ def _extract_slots_by_rules(
         if not val:
             val = msg.strip()[:200]
             warnings.append("未识别难点关键词, 已存原文供用户编辑")
-        return {"difficulty": val, "_warnings": warnings}
+            meta = _fb_meta("difficulty_fallback")
+        else:
+            meta = _hit_meta("keyword_difficulty", val)
+        return {"difficulty": val, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "result":
         # 找 ["结果" / "最后" / "最终" / "产出"] 后面到句末
@@ -764,7 +1187,10 @@ def _extract_slots_by_rules(
         if not val:
             val = msg.strip()[:200]
             warnings.append("未识别结果关键词, 已存原文供用户编辑")
-        return {"result": val, "_warnings": warnings}
+            meta = _fb_meta("result_fallback")
+        else:
+            meta = _hit_meta("keyword_result", val)
+        return {"result": val, "_warnings": warnings, "_slot_meta": [meta]}
 
     if current_slot == "metric":
         # regex 数字 + 单位
@@ -777,10 +1203,13 @@ def _extract_slots_by_rules(
         if not metrics:
             warnings.append("未识别量化数据, 已存原文供用户编辑")
             metrics = [msg.strip()] if msg.strip() else []
+            meta = _fb_meta("metric_fallback")
+        else:
+            meta = _hit_meta("regex_metric", " ".join(metrics))
         # 单数 key, captured_slots["metric"] = [...]
-        return {"metric": metrics, "_warnings": warnings}
+        return {"metric": metrics, "_warnings": warnings, "_slot_meta": [meta]}
 
-    # 未知 slot:返空
+    # 未知 slot:返空 + 无 meta(spec §5.2 不强记)
     return {}
 
 
@@ -975,15 +1404,22 @@ def _extract_slots_via_llm(
     user_message: str,
     current_slot: str,
     config: dict[str, Any],
+    turn_index: int = 0,
 ) -> dict[str, Any] | None:
     """
-    Phase 4 LLM 抽取主路径(plan §4.4):
+    Phase 4 LLM 抽取主路径(plan §4.4 + R6-B Phase 1 spec §5.2):
       1. 构造 user payload (含 slot + user_message,**不**含 jd_text)
       2. 调 _call_llm_for_slot_extraction
       3. 解析 response.content JSON
       4. _validate_llm_extraction_payload 校验
       5. schema retry 1 次 (strict_retry=True — 沿用 _call_with_retry 模式)
       6. 失败 → None(caller fallback 到 _extract_slots_by_rules)
+
+    R6-B Phase 1 spec §5.2 隐私边界:
+      - LLM 返回的 source_span 字符串**只在本函数内**访问, 立刻 _compute_source_span_hash
+        转成 hash + length + turn_index
+      - 函数返回后 source_span 明文不留在任何局部变量(走 dict 走 hash 后即丢)
+      - 返回 dict 含 `_slot_meta` 字段, 携带 hash + len, **不**含 source_span 明文
 
     隐私边界(plan §4.3 + AGENTS.md):
       - payload 只含 slot + user_message,**不**含 jd_text / session / materials
@@ -1027,10 +1463,18 @@ def _extract_slots_via_llm(
         return None
 
     parsed = _try_parse_llm_content(raw_content)
-    validated = _validate_llm_extraction_payload(parsed, current_slot) if isinstance(parsed, dict) else None
+    validated = (
+        _validate_llm_extraction_payload(parsed, current_slot)
+        if isinstance(parsed, dict)
+        else None
+    )
 
     if validated is not None:
-        return validated
+        return _attach_llm_slot_meta(
+            parsed=parsed,
+            current_slot=current_slot,
+            turn_index=turn_index,
+        )
 
     # JSON / schema 都失败 → retry 1 次, 加强约束(strict_retry=True, 沿用 _call_with_retry)
     retry_payload = dict(user_payload)
@@ -1051,7 +1495,87 @@ def _extract_slots_via_llm(
     parsed = _try_parse_llm_content(raw_content)
     if not isinstance(parsed, dict):
         return None
-    return _validate_llm_extraction_payload(parsed, current_slot)
+    validated = _validate_llm_extraction_payload(parsed, current_slot)
+    if validated is None:
+        return None
+    return _attach_llm_slot_meta(
+        parsed=parsed,
+        current_slot=current_slot,
+        turn_index=turn_index,
+    )
+
+
+def _attach_llm_slot_meta(
+    *,
+    parsed: dict[str, Any],
+    current_slot: str,
+    turn_index: int,
+) -> dict[str, Any] | None:
+    """
+    R6-B Phase 1(spec §5.2): 给 LLM 抽取结果附加 _slot_meta。
+
+    LLM 返回的 source_span(若存在)只在本函数内 hash 化:
+      - 校验 parsed.source_span 必须是 string(不是 → 丢弃, 不写 meta.source_span_*)
+      - 用 _compute_source_span_hash 转成 ("sha256:..." / len) 元组
+      - 函数返回后原始 source_span 字符串不再保留(走 _make_slot_meta 后即丢)
+
+    隐私边界:
+      - 校验非法(source_span 不是 string / confidence 是 bool / 不在 [0,1])→ 走默认 meta,
+        该条 source_span_* 字段为 None(spec §5.2 invalid source_span 降级)
+      - _slot_meta 不入 trace(由 caller 写 session.slot_meta 时自己控制)
+    """
+    # 校验 source_span(只接受 string, 其他 → 降级)
+    raw_span = parsed.get("source_span")
+    h, ln = _compute_source_span_hash(raw_span if isinstance(raw_span, str) else None)
+
+    # 校验 confidence(必须 0.0-1.0 number, bool 拒绝 — spec §5.2)
+    raw_conf = parsed.get("confidence")
+    conf = _validate_confidence(raw_conf)
+    if conf is None:
+        # 非法(包含 bool) → 走 _make_slot_meta 内置 fallback 到 LLM default 0.60
+        conf_arg: Any = raw_conf  # 故意传入非法值让 _make_slot_meta 兜底
+    else:
+        conf_arg = conf
+
+    # reason_code: LLM 给则用(截 50 字), 否则用通用 llm_extracted
+    raw_reason = parsed.get("reason_code")
+    if isinstance(raw_reason, str) and raw_reason.strip():
+        reason_code = f"llm_{raw_reason.strip()[:45]}"
+    else:
+        reason_code = "llm_extracted"
+
+    meta = _make_slot_meta(
+        extractor="llm",
+        confidence=conf_arg,
+        turn_index=turn_index,
+        reason_code=reason_code,
+        source_span_hash=h,
+        source_span_len=ln,
+    )
+
+    # 重新构造 validated 风格的 dict + _slot_meta
+    val = parsed.get(current_slot)
+    if current_slot in SLOT_STRING_KEYS:
+        if not isinstance(val, str):
+            return None
+        if len(val) > 200:
+            val = val[:200]
+    else:  # list slot
+        if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+            return None
+        val = [str(x)[:200] for x in val]
+
+    warnings_raw = parsed.get("_warnings")
+    if isinstance(warnings_raw, list):
+        warnings = [str(x)[:200] for x in warnings_raw if isinstance(x, str)]
+    else:
+        warnings = []
+
+    return {
+        current_slot: val,
+        "_warnings": warnings,
+        "_slot_meta": [meta],
+    }
 
 
 # ----------------------------------------------------------------------
@@ -1142,9 +1666,24 @@ def build_draft_card(session: InterviewSession) -> dict[str, Any]:
 def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewSession, dict]:
     sess = session
     slot = _current_slot(sess)
-    delta = extract_slots(user_message, slot or "")
+    # turn_index 用当前 turn_count + 1(spec §5.2 turn_index 反映这一轮是第几轮)
+    # 注意: extract_slots 返回之后 turn_count 还没自增, 所以 turn_index = turn_count + 1
+    next_turn_index = (sess.turn_count or 0) + 1
+    # R6-B Phase 2(spec §5.3): reply 沿用 session.interview_mode 决定 llm_enabled
+    # 老路径(sess.interview_mode == "rules") 字节级一致: llm_enabled=False 走 _extract_slots_by_rules
+    use_llm = (sess.interview_mode == INTERVIEW_MODE_LLM_ASSISTED)
+    delta = extract_slots(
+        user_message, slot or "",
+        turn_index=next_turn_index,
+        llm_enabled=use_llm,
+    )
     # 清掉 _warnings(它不属于 captured_slots 业务字段)
     delta.pop("_warnings", None)
+    # R6-B Phase 1(spec §5.2): 把 _slot_meta 写入 session.slot_meta[slot],
+    # 然后从 delta 删掉,避免污染 captured_slots(spec §5.2 + AGENTS.md 隐私边界)
+    new_meta_entries = delta.pop("_slot_meta", None)
+    if isinstance(new_meta_entries, list) and new_meta_entries and slot:
+        _append_slot_meta(sess, slot, new_meta_entries)
     sess.captured_slots.update(delta)
     sess.turn_count += 1
 
@@ -1157,6 +1696,14 @@ def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewS
         input_size=len((user_message or "").encode("utf-8")),
         output_size=len(json.dumps(delta, ensure_ascii=False).encode("utf-8")),
     )
+
+    # R6-B Phase 2(spec §5.3): 构造 extraction_summary + question_plan
+    extraction_summary = _build_extraction_summary(
+        new_meta_entries=new_meta_entries if isinstance(new_meta_entries, list) else None,
+        captured_delta=delta,
+        intended_mode=sess.interview_mode,
+    )
+    question_plan = _build_question_plan(sess)
 
     # 决定下一步
     force = (
@@ -1174,6 +1721,8 @@ def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewS
             "progress": _progress(sess),
             "can_draft": can_draft(sess),
             "force_draft": True,
+            "extraction_summary": extraction_summary,
+            "question_plan": question_plan,
         }
     nxt = next_question(sess)
     return sess, {
@@ -1183,6 +1732,8 @@ def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewS
         "progress": _progress(sess),
         "can_draft": can_draft(sess),
         "force_draft": False,
+        "extraction_summary": extraction_summary,
+        "question_plan": question_plan,
     }
 
 
@@ -1215,6 +1766,9 @@ def _do_skip(session: InterviewSession) -> tuple[InterviewSession, dict]:
         "progress": _progress(sess),
         "can_draft": can_draft(sess),
         "force_draft": force,
+        # R6-B Phase 2: skip 不发生抽取, extraction_summary=None
+        "extraction_summary": None,
+        "question_plan": _build_question_plan(sess),
     }
 
 
@@ -1231,6 +1785,9 @@ def _do_rephrase(session: InterviewSession) -> tuple[InterviewSession, dict]:
         "progress": _progress(sess),
         "can_draft": can_draft(sess),
         "force_draft": False,
+        # R6-B Phase 2: rephrase 不发生抽取
+        "extraction_summary": None,
+        "question_plan": _build_question_plan(sess),
     }
 
 
@@ -1250,6 +1807,10 @@ def _do_switch_gap(session: InterviewSession) -> tuple[InterviewSession, dict]:
     sess.turn_count = 0
     sess.state = InterviewState.ASKING
     sess.draft_card = None
+    # R6-B Phase 1: switch_gap 隔离旧 gap 的 question_plan / slot_meta
+    # (避免跨 gap 混用, spec §6 防重复)
+    sess.slot_meta = {}
+    sess.question_plan = None
     nxt = next_question(sess)
     return sess, {
         "state": sess.state.value,
@@ -1258,6 +1819,8 @@ def _do_switch_gap(session: InterviewSession) -> tuple[InterviewSession, dict]:
         "progress": _progress(sess),
         "can_draft": False,
         "force_draft": False,
+        "extraction_summary": None,
+        "question_plan": _build_question_plan(sess),
     }
 
 
@@ -1288,6 +1851,8 @@ def _do_draft_now(session: InterviewSession) -> tuple[InterviewSession, dict]:
         "progress": _progress(sess),
         "can_draft": True,
         "force_draft": True,
+        "extraction_summary": None,
+        "question_plan": None,
     }
 
 
@@ -1329,6 +1894,25 @@ __all__ = [
     "_call_llm_for_slot_extraction",
     "_try_parse_llm_content",
     "_validate_llm_extraction_payload",
+    # R6-B Phase 1: slot_meta provenance(spec §5.2)
+    "INTERVIEW_SLOT_META_MAX",
+    "INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT",
+    "INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK",
+    "INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE",
+    "_validate_confidence",
+    "_compute_source_span_hash",
+    "_make_slot_meta",
+    "_append_slot_meta",
+    "_attach_llm_slot_meta",
+    # R6-B Phase 2: API mode 开关(spec §5.3)
+    "INTERVIEW_LLM_NO_KEY_WARNING",
+    "INTERVIEW_MODE_RULES",
+    "INTERVIEW_MODE_LLM_ASSISTED",
+    "INTERVIEW_LOW_CONFIDENCE_THRESHOLD",
+    "_has_llm_api_key",
+    "_decide_interview_mode",
+    "_build_extraction_summary",
+    "_build_question_plan",
     # 测试用内部 helper
     "_score_gap", "_select_gap_from_candidates",
     "_default_candidates", "_INTERVIEW_SESSIONS",

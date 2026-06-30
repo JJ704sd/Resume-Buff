@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
  * Round 6-A Phase 3 — 简历面试官主聊天栏
+ * + Round 6-B Phase 6 — frontend 最小呈现 (spec §9)
  *
  * Props:
  *   - targetRole        当前选中的 6 role id 之一(从 App.vue 透传)
@@ -11,7 +12,12 @@
  *   - refresh-preview   保存素材后,通知 App.vue 重跑 resumeApi.preview
  *
  * R5-E 保护(spec §3.3): 不 import AgentSummary / EvidenceSummary 等 workflow 诊断类型,
- * 仅消费自己新增的 5 个 InterviewXxx 类型。
+ * 仅消费自己新增的 5 个 InterviewXxx 类型 + R6-B 模式字段。
+ *
+ * R6-B Phase 6 边界(spec §9):
+ *   - 不显示 Agent Workflow / trace / schema / ToolResult
+ *   - 不显示 prompt / raw response / source_span 明文
+ *   - 移动端 drawer 不被 toggle/warning 挤坏(都用普通 div + el-tag,无 portal)
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -20,6 +26,7 @@ import {
   type InterviewDraftCard as DraftCardData,
   type InterviewGap,
   type InterviewMessage,
+  type InterviewMode,
   type InterviewProgress,
   type InterviewState,
 } from '../api'
@@ -54,10 +61,36 @@ const loading = ref(false)
 const drawerVisible = ref(false)  // 移动端控制
 const chatScrollRef = ref<HTMLElement | null>(null)
 
+// ----- R6-B Phase 6(spec §9): 智能抽取 toggle + 抽取模式状态 -----
+// EMPTY 状态下切换;start 后即固定(模式由 session.interview_mode 决定,
+// 老路径/无 key 时 mode_warning 非 null → 显示"已回退规则模式")
+const enableInterviewLlm = ref(false)
+const interviewMode = ref<InterviewMode>('rules')
+const modeWarning = ref<string | null>(null)
+
 const canStart = computed(() => Boolean(props.targetRole && props.jdText.trim()))
 const canSubmitAnswer = computed(
   () => state.value === 'ASKING' && userInput.value.trim().length > 0 && !loading.value,
 )
+// header 三态标签颜色 + 文案(spec §9):
+//   1. modeWarning 非空(无论 mode 如何) → "已回退规则模式" warning
+//   2. 无 warning + llm_assisted → "智能抽取" success
+//   3. 无 warning + rules       → "规则模式" info
+const modeTagInfo = computed<{
+  show: boolean
+  label: string
+  type: 'info' | 'success' | 'warning'
+}>(() => {
+  const show = state.value !== 'EMPTY' && state.value !== 'DIAGNOSING'
+  if (!show) return { show: false, label: '', type: 'info' }
+  if (modeWarning.value) {
+    return { show: true, label: '已回退规则模式', type: 'warning' }
+  }
+  if (interviewMode.value === 'llm_assisted') {
+    return { show: true, label: '智能抽取', type: 'success' }
+  }
+  return { show: true, label: '规则模式', type: 'info' }
+})
 
 // 滚动消息到底部
 async function scrollToBottom() {
@@ -76,14 +109,20 @@ async function onStart() {
   loading.value = true
   state.value = 'DIAGNOSING'
   try {
+    // R6-B Phase 2(spec §5.3): 透传 enable_interview_llm 开关;
+    // 老路径不传=False 字节级一致
     const res = await interviewApi.start({
       target_role: props.targetRole,
       jd_text: props.jdText.trim(),
+      enable_interview_llm: enableInterviewLlm.value,
     })
     sessionId.value = res.session_id
     state.value = res.state as InterviewState
     selectedGap.value = res.selected_gap ?? null
     progress.value = res.progress
+    // R6-B Phase 2(spec §5.3): 抽取模式从响应里读,展示在 header
+    interviewMode.value = res.interview_mode ?? 'rules'
+    modeWarning.value = res.mode_warning ?? null
     messages.value = []
     if (res.message) {
       messages.value.push({
@@ -223,6 +262,9 @@ function onDiscard() {
   progress.value = { captured: {}, turn_count: 0, can_draft: false }
   draftCard.value = null
   userInput.value = ''
+  // R6-B Phase 6: 丢弃后回到默认状态;mode 不保留(下一次 start 重新选)
+  interviewMode.value = 'rules'
+  modeWarning.value = null
   ElMessage.info('已丢弃本次对话')
 }
 
@@ -239,6 +281,9 @@ watch(
       selectedGap.value = null
       draftCard.value = null
       progress.value = { captured: {}, turn_count: 0, can_draft: false }
+      // R6-B Phase 6: 父层变更时同步重置 mode 标签
+      interviewMode.value = 'rules'
+      modeWarning.value = null
     }
   },
 )
@@ -249,7 +294,15 @@ watch(
   <div class="interview-panel">
     <div class="ip-header">
       <span class="ip-title">简历面试官</span>
-      <el-tag size="small" type="info" effect="plain">Round 6-A · β</el-tag>
+      <!-- R6-B Phase 6(spec §9): header 显示当前抽取模式(三态);会话未开始时显示静态 β 标签 -->
+      <el-tag
+        v-if="modeTagInfo.show"
+        :type="modeTagInfo.type"
+        size="small"
+        effect="plain"
+        :title="modeWarning ?? ''"
+      >{{ modeTagInfo.label }}</el-tag>
+      <el-tag v-else size="small" type="info" effect="plain">Round 6-A · β</el-tag>
     </div>
 
     <!-- EMPTY -->
@@ -266,6 +319,24 @@ watch(
       >让面试官帮我补经历</el-button>
       <div v-if="!canStart" class="ip-empty-hint">
         请先在上方选择目标岗位并粘贴 JD 文本
+      </div>
+
+      <!-- R6-B Phase 6(spec §9): 智能抽取 toggle,默认关闭;
+           tooltip 解释 fallback 行为;不影响移动 drawer 布局(普通 div + flex,不 portal) -->
+      <div class="ip-toggle-row">
+        <el-switch
+          v-model="enableInterviewLlm"
+          size="small"
+          inline-prompt
+          active-text="智能抽取"
+          inactive-text="规则模式"
+        />
+        <el-tooltip
+          content="实验功能:有 key 时帮助识别你回答中的多个事实;失败会自动回到规则模式。"
+          placement="top"
+        >
+          <span class="ip-toggle-hint">?</span>
+        </el-tooltip>
       </div>
     </div>
 
@@ -406,6 +477,29 @@ watch(
   margin-top: 8px;
   font-size: 12px;
   color: #909399;
+}
+/* R6-B Phase 6(spec §9): 智能抽取 toggle 行 — flex 横排,小尺寸,不撑高 EMPTY 卡片 */
+.ip-toggle-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #606266;
+}
+.ip-toggle-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #909399;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+  user-select: none;
 }
 .ip-loading {
   flex: 1;

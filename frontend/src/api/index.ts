@@ -327,11 +327,31 @@ export interface InterviewDraftCard {
   draft_bullets: string[]
   warnings: string[]
   summary?: string
+  /** R6-B Phase 4: draft 核验 5 字段(spec §7)。老后端不返 → undefined;前端 save 前
+   *  用来弹"低置信度/无来源"确认提示(spec §9) */
+  verification?: VerificationSummary
+  /** R6-B Phase 4: 低置信度 slot 提示(list[str],spec §7)。draft_card 区域展示 */
+  confidence_notes?: string[]
 }
 
+// ----- R6-B Phase 2: API mode 开关类型 -----
+// 前端只暴露这几个用户可见字段;不直接消费 slot_meta / source_span / API key(spec §5.3 + §9)。
+
+/** InterviewSession 的抽取模式(spec §5.1) */
+export type InterviewMode = 'rules' | 'llm_assisted'
+
+/** extraction_summary.extractor 字段(spec §5.3): */
+export type ExtractionMode = 'rules' | 'llm' | 'mixed'
+
+/** StartResponse.mode_warning / ReplyResponse.extraction_summary / question_plan 都是 optional,
+ *  老路径下后端不传也不报错(spec §5.3 "所有新增字段均为 optional 或有默认值") */
 export interface InterviewStartRequest {
   target_role: string
   jd_text: string
+  /** R6-B Phase 2: 是否启用智能抽取(spec §5.3)。默认 false → 老路径字节级一致;
+   *  true + LLM_API_KEY 在 env → llm_assisted 模式;
+   *  true + 无 key → 仍返 rules 模式 + mode_warning */
+  enable_interview_llm?: boolean
 }
 
 export interface InterviewStartResponse {
@@ -340,6 +360,28 @@ export interface InterviewStartResponse {
   selected_gap: InterviewGap
   message: InterviewMessage | null
   progress: InterviewProgress
+  /** R6-B Phase 2: 抽取模式(spec §5.3),老路径不传默认 "rules" */
+  interview_mode?: InterviewMode
+  /** R6-B Phase 2: 用户可见模式说明(spec §5.1)。智能抽取不可用时给出原因摘要;
+   *  老路径/正常情况为 null */
+  mode_warning?: string | null
+}
+
+/** R6-B Phase 2: ReplyResponse 本轮抽取摘要(spec §5.3)。仅 answer 动作非 None;
+ *  前端**只**展示聚合标签,不展示 source_span / user_message / confidence 数字(spec §9 隐私边界) */
+export interface ExtractionSummary {
+  extractor: ExtractionMode
+  fallback_used: boolean
+  captured_slots: string[]
+  low_confidence_slots: string[]
+}
+
+/** R6-B Phase 2/3: ReplyResponse 下一问策略(spec §5.3 / §6)。
+ *  字段限定只 3 个,不含 question 全文 / source_span 明文 */
+export interface QuestionPlan {
+  slot: string
+  reason_code: string
+  low_confidence_slots: string[]
 }
 
 export interface InterviewReplyRequest {
@@ -355,6 +397,20 @@ export interface InterviewReplyResponse {
   progress: InterviewProgress
   can_draft: boolean
   force_draft: boolean
+  /** R6-B Phase 2: 本轮抽取摘要(spec §5.3)。非 answer 动作为 null */
+  extraction_summary?: ExtractionSummary | null
+  /** R6-B Phase 2/3: 下一问策略(spec §5.3 / §6)。Phase 2 起就有,Phase 3 policy 填充 */
+  question_plan?: QuestionPlan | null
+}
+
+// ----- R6-B Phase 4: draft verifier 类型 -----
+// 仅暴露 5 字段聚合 + 短 warning,不含 draft_card 原文 / source_span 明文(spec §7 / §9)
+export interface VerificationSummary {
+  claims_total: number
+  claims_supported: number
+  low_confidence_claims: number
+  unsupported_claims: number
+  warnings: string[]
 }
 
 export interface InterviewDraftResponse {
@@ -376,6 +432,7 @@ export interface InterviewSaveResponse {
 }
 
 export const interviewApi = {
+  // R6-B Phase 2: 接受 enable_interview_llm 字段(spec §5.3);老调用方不传 → 默认 false → rules 模式
   start: (req: InterviewStartRequest) =>
     api.post<InterviewStartResponse>('/interview/start', req).then(r => r.data),
   reply: (req: InterviewReplyRequest) =>

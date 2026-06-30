@@ -1,5 +1,5 @@
 """
-Round 6-A Phase 1: interview_agent 提示词 / 槽位 / 缺口配置
+Round 6-A Phase 1+4: interview_agent 提示词 / 槽位 / 缺口配置
 
 设计原则(plan §1.3):
   - **完全无副作用** 纯常量模块, 顶层不允许出现 import 副作用
@@ -24,6 +24,19 @@ Round 6-A Phase 1: interview_agent 提示词 / 槽位 / 缺口配置
   - INTERVIEW_MAX_DRAFT_LEN:   int              draft_card 上限
   - INTERVIEW_MAX_SESSION_ID_LEN: int           session_id 上限
   - INTERVIEW_MAX_JD_TEXT_LEN: int              jd_text 上限(沿用 api/jd.py)
+
+R6-A Phase 4 新增(plan §4):
+  - SLOT_EXTRACTION_SYSTEM_PROMPT: str   LLM 抽取用的独立 system prompt
+  - SLOT_EXTRACTION_USER_TEMPLATE:  str   LLM 抽取用的 user prompt 模板
+  - INTERVIEW_LLM_TIMEOUT_SEC:      int   LLM 抽取调用超时(秒)
+  - SLOT_LIST_KEYS:                 tuple[str, ...]   list 类型槽位
+  - SLOT_STRING_KEYS:               tuple[str, ...]   str 类型槽位
+
+Phase 4 保护:
+  - SLOT_EXTRACTION_SYSTEM_PROMPT 是**新常量**,不进 PROMPT_VERSIONS,
+    不挂 evaluate_prompt_versions.py
+  - 模板只含 {slot} 和 {user_message} 两个变量,**不**含 {jd_text},
+    防止 LLM 调用意外拿到 JD 全文(spec §4.4 隐私边界)
 """
 # ----------------------------------------------------------------------
 # 槽位名(全部合法槽位)
@@ -244,4 +257,51 @@ INTERVIEW_TRACE_TOOLS: tuple[str, ...] = (
     "gap_select",
     "slot_extract",
     "draft_card",
+    "save_card",
 )
+
+
+# ----------------------------------------------------------------------
+# R6-A Phase 4: LLM slot 抽取 prompt(独立常量, 不进 PROMPT_VERSIONS)
+# ----------------------------------------------------------------------
+SLOT_STRING_KEYS: tuple[str, ...] = ("background", "responsibility", "difficulty", "result")
+SLOT_LIST_KEYS: tuple[str, ...] = ("action", "method", "metric")
+"""槽位类型分组 — LLM 抽取 schema 校验时用。"""
+
+SLOT_EXTRACTION_SYSTEM_PROMPT: str = (
+    "你是面试槽位抽取助手。\n"
+    "严格只输出 JSON, 不要 markdown / 不要解释 / 不要多余文本。\n"
+    "输入: 当前 slot 名 + 用户自由回答。\n"
+    "输出 schema:\n"
+    "{\n"
+    '  "<slot>": <value>,\n'
+    '  "_warnings": [<string>, ...]\n'
+    "}\n"
+    "约束:\n"
+    "- background / responsibility / difficulty / result: <value> 是单 string(≤200 字)\n"
+    "- action / method / metric: <value> 是 list of str(每个元素 ≤200 字)\n"
+    "- 用户没明确提: value 留空 (str→\"\" / list→[]) 并加 warning \"未识别槽位内容, 已存原文供用户编辑\"\n"
+    "- 不要编造信息, 只抽取用户原文能对应的事实\n"
+    "- 不要展示 reasoning / chain-of-thought\n"
+)
+"""LLM slot 抽取的 system prompt(plan §4.4)。
+
+R5-E 保护:
+  - 这是**新常量**,**不**进 PROMPT_VERSIONS, 不挂 evaluate_prompt_versions.py
+  - 验证: `from core.llm_rewriter import PROMPT_VERSIONS; assert "v6-interview-slot" not in PROMPT_VERSIONS`
+"""
+
+SLOT_EXTRACTION_USER_TEMPLATE: str = (
+    "当前 slot: {slot}\n"
+    "用户回答: {user_message}\n"
+    "\n"
+    "请只输出 JSON, schema 严格匹配 system prompt 描述。"
+)
+"""LLM slot 抽取的 user prompt 模板(plan §4.4)。
+
+只含 {slot} 和 {user_message} 两个变量,**不**含 {jd_text},
+防止 LLM 调用意外拿到 JD 全文(spec §4.4 隐私边界)。
+"""
+
+INTERVIEW_LLM_TIMEOUT_SEC: int = 15
+"""LLM slot 抽取调用超时(秒)。跟 evaluate_prompt_versions._JUDGE_TIMEOUT_SEC 同源。"""

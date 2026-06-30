@@ -1,7 +1,7 @@
 """
-Round 6-A Phase 1: JD-driven interview agent 状态机
+Round 6-A Phase 1+4: JD-driven interview agent 状态机 + LLM slot 抽取
 
-设计原则(plan §1.3):
+设计原则(plan §1.3 + §4.4):
   - 不 import core.llm_rewriter / core.agent_workflow / core.agent_tools / core.evidence
     / core.tool_schema / core.session (R5-E 字节级稳定边界)
   - 只 import core.jd_parser 公开符号(parse_jd / match_score) + core.generator.load_materials
@@ -11,6 +11,14 @@ Round 6-A Phase 1: JD-driven interview agent 状态机
   - 进程内 _INTERVIEW_SESSIONS 独立命名空间,与 core.session._SESSIONS 隔离
   - trace 走 core.logger.log_agent_trace_jsonl,workflow="interview",只存 size 不存原文
 
+Phase 4 LLM slot 抽取(plan §4.4):
+  - extract_slots 新增 keyword-only 4 参数: llm_enabled / llm_api_key / llm_base_url / llm_model
+  - llm_enabled=False → 走 _extract_slots_by_rules(Phase 1 字节级一致)
+  - llm_enabled=True + key 有效 → 调 stdlib urllib POST /chat/completions
+  - 失败 fallback 到规则版,不抛(spec §4.4 "失败不阻断主流程")
+  - LLM prompt 走 core.interview_prompts.SLOT_EXTRACTION_SYSTEM_PROMPT(独立常量,**不进** PROMPT_VERSIONS)
+  - 模板只含 {slot} + {user_message},**不**含 {jd_text}(隐私边界)
+
 公开 API:
   - InterviewState (str Enum)        EMPTY / DIAGNOSING / ASKING / DRAFT_READY / SAVED / ABORTED
   - ActionType   (str Enum)          ANSWER / SKIP_QUESTION / REPHRASE_QUESTION / SWITCH_GAP / DRAFT_NOW
@@ -18,12 +26,15 @@ Round 6-A Phase 1: JD-driven interview agent 状态机
   - InterviewSession (@dataclass)     11 字段(可 mutate,Phase 1 in-place)
   - create_session / select_gap / next_question / extract_slots
   - can_draft / build_draft_card / apply_action
-  - get_session / reset_session
+  - get_session / reset_session / save_card
+  - _resolve_interview_llm_config     (Phase 4 helper, 测试用)
 """
 from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,13 +55,18 @@ from core.interview_prompts import (
     GAP_REASONS,
     GAP_SUGGESTED_SLOTS,
     INTERVIEWABLE_GAP_IDS,
+    INTERVIEW_LLM_TIMEOUT_SEC,
     INTERVIEW_MAX_MESSAGE_LEN,
     MAX_CONSECUTIVE_SKIPS,
     MAX_TURNS_PER_GAP,
     NON_INTERVIEWABLE_GAP_IDS,
     QUESTION_TEMPLATES,
     QUICK_REPLIES_BY_SLOT,
+    SLOT_EXTRACTION_SYSTEM_PROMPT,
+    SLOT_EXTRACTION_USER_TEMPLATE,
+    SLOT_LIST_KEYS,
     SLOT_NAMES,
+    SLOT_STRING_KEYS,
 )
 
 
@@ -129,6 +145,22 @@ INTERVIEW_REQUIRED_EDITED_KEYS: tuple[str, ...] = (
     "title", "responsibility", "actions", "draft_bullets",
 )
 """edited_card 必填字段集合。"""
+
+
+# ----------------------------------------------------------------------
+# R6-A Phase 4: LLM slot 抽取本地常量(plan §4.3 配置口径)
+# ----------------------------------------------------------------------
+# 注: 这些常量值必须跟 core.llm_rewriter.DEFAULT_BASE_URL / DEFAULT_MODEL
+# 字节级一致(由 tests/test_interview_agent.py::TestInterviewPromptRegistry
+# 里的 test_interview_llm_defaults_match_llm_rewriter 锁死)。在 interview_agent.py
+# **不**直接 import llm_rewriter(R5-E 字节级稳定边界 — 文件任意位置不能出现
+# `from core.llm_rewriter import ...` / `import core.llm_rewriter`)。
+
+_INTERVIEW_LLM_DEFAULT_BASE_URL: str = "https://api.openai.com/v1"
+"""LLM slot 抽取默认 base URL(plan §4.3) — 跟 core.llm_rewriter.DEFAULT_BASE_URL 同步。"""
+
+_INTERVIEW_LLM_DEFAULT_MODEL: str = "gpt-4o-mini"
+"""LLM slot 抽取默认 model(plan §4.3) — 跟 core.llm_rewriter.DEFAULT_MODEL 同步。"""
 
 
 # ----------------------------------------------------------------------
@@ -589,17 +621,52 @@ def next_question(session: InterviewSession) -> dict[str, Any]:
 def extract_slots(
     user_message: str,
     current_slot: str,
-    session: InterviewSession | None = None,  # noqa: ARG001  Phase 1 不使用,保留扩展位
+    session: InterviewSession | None = None,  # noqa: ARG001  Phase 1+4 不使用,保留扩展位
+    *,
+    llm_enabled: bool = False,
+    llm_api_key: str | None = None,
+    llm_base_url: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     """
-    按 current_slot 规则抽取 user_message,返回要写入 captured_slots 的 dict。
+    按 current_slot 抽取 user_message,返回要写入 captured_slots 的 dict。
     不修改 session — 由 apply_action 负责 mutate。
 
-    规则(plan §1.3):
+    Phase 1 行为(llm_enabled=False / 默认):规则抽取,字节级一致。
+    Phase 4 行为(llm_enabled=True + 有 key):调 LLM,schema retry 1 次,
+      失败 fallback 规则抽取,不抛(spec §4.4 "失败不阻断主流程")。
+
+    规则版 schema(plan §1.3):
       - background / responsibility / difficulty / result: 单 string
       - action / method / metric: list
       未命中关键词 → 加 1 条 warning("未识别槽位内容, 已存原文供用户编辑")
     """
+    # Phase 4: 默认 / LLM 关闭 → 走规则版(Phase 1 字节级一致)
+    config = _resolve_interview_llm_config(
+        llm_enabled=llm_enabled,
+        llm_api_key=llm_api_key,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+    )
+    if not config["enabled_for_call"]:
+        return _extract_slots_by_rules(user_message, current_slot)
+
+    # Phase 4 LLM 路径: 失败 fallback 规则版
+    parsed = _extract_slots_via_llm(
+        user_message=user_message,
+        current_slot=current_slot,
+        config=config,
+    )
+    if parsed is None:
+        return _extract_slots_by_rules(user_message, current_slot)
+    return parsed
+
+
+def _extract_slots_by_rules(
+    user_message: str,
+    current_slot: str,
+) -> dict[str, Any]:
+    """Phase 1 规则版抽取(plan §1.3)— LLM 关闭 / LLM 失败时走这里。"""
     msg = user_message or ""
     warnings: list[str] = []
 
@@ -715,6 +782,276 @@ def extract_slots(
 
     # 未知 slot:返空
     return {}
+
+
+# ----------------------------------------------------------------------
+# R6-A Phase 4: LLM slot 抽取 helpers(plan §4.4)
+# ----------------------------------------------------------------------
+def _resolve_interview_llm_config(
+    *,
+    llm_enabled: bool,
+    llm_api_key: str | None,
+    llm_base_url: str | None,
+    llm_model: str | None,
+) -> dict[str, Any]:
+    """
+    解析 LLM slot 抽取配置(plan §4.3 配置口径)。
+
+    返回 dict(4 字段,字段口径对齐 evaluate_agent_workflow._get_llm_eval_config):
+      - enabled_for_call: bool   (满足 llm_enabled + 有 api_key → True, 否则 False)
+      - llm_enabled: bool        (用户意图)
+      - model: str               (优先级: 显式入参 → LLM_MODEL env → DEFAULT_MODEL)
+      - base_url: str            (优先级: 显式入参 → LLM_BASE_URL env → DEFAULT_BASE_URL)
+
+    隐私边界(AGENTS.md):
+      - api_key **绝不**出现在返回值里
+      - 不读 / 不写日志
+
+    默认值 fallback 跟 evaluate_prompt_versions.py 同源:
+      - DEFAULT_BASE_URL = "https://api.openai.com/v1"
+      - DEFAULT_MODEL    = "gpt-4o-mini"
+
+    R5-E 边界保护(plan §1.3 / §4.4):
+      - 不 import core.llm_rewriter(任何位置 — 顶层 / 延迟都不行)
+      - 默认常量本地定义,值跟 llm_rewriter 同步(测试锁)
+    """
+    # 不 import llm_rewriter(R5-E 字节级稳定边界)— 用本地常量 fallback
+    if not llm_enabled:
+        return {
+            "enabled_for_call": False,
+            "llm_enabled": False,
+            "model": "",
+            "base_url": "",
+        }
+
+    api_key = (llm_api_key or os.environ.get("LLM_API_KEY", "")).strip()
+    if not api_key:
+        # llm_enabled=True 但没有 key → 走规则版(spec §4.4 "失败 fallback")
+        return {
+            "enabled_for_call": False,
+            "llm_enabled": True,
+            "model": "",
+            "base_url": "",
+        }
+
+    base_url = (
+        (llm_base_url or os.environ.get("LLM_BASE_URL", "")).strip()
+        or _INTERVIEW_LLM_DEFAULT_BASE_URL
+    )
+    model = (
+        (llm_model or os.environ.get("LLM_MODEL", "")).strip()
+        or _INTERVIEW_LLM_DEFAULT_MODEL
+    )
+
+    return {
+        "enabled_for_call": True,
+        "llm_enabled": True,
+        "model": model,
+        "base_url": base_url,
+    }
+
+
+def _validate_llm_extraction_payload(
+    parsed: object,
+    current_slot: str,
+) -> dict[str, Any] | None:
+    """
+    校验 LLM 返回的 dict 是否符合 slot 抽取 schema:
+      - 必须是 dict
+      - 含 current_slot key + 可选 _warnings (list[str])
+      - 若 current_slot 在 SLOT_STRING_KEYS: value 必须是 str(≤200 字)
+      - 若 current_slot 在 SLOT_LIST_KEYS: value 必须是 list[str](每条 ≤200 字)
+
+    返回:
+      - 校验通过的 dict(含 current_slot + _warnings)
+      - None 校验失败
+    """
+    if not isinstance(parsed, dict):
+        return None
+    if current_slot not in SLOT_STRING_KEYS and current_slot not in SLOT_LIST_KEYS:
+        # 未知 slot — 不交给 LLM 抽取路径
+        return None
+    val = parsed.get(current_slot)
+    if current_slot in SLOT_STRING_KEYS:
+        if not isinstance(val, str):
+            return None
+        if len(val) > 200:
+            val = val[:200]
+    else:  # list slot
+        if not isinstance(val, list):
+            return None
+        if not all(isinstance(x, str) for x in val):
+            return None
+        # 每条 ≤200 字
+        val = [str(x)[:200] for x in val]
+
+    warnings_raw = parsed.get("_warnings")
+    if isinstance(warnings_raw, list):
+        warnings = [str(x)[:200] for x in warnings_raw if isinstance(x, str)]
+    else:
+        warnings = []
+    return {current_slot: val, "_warnings": warnings}
+
+
+def _call_llm_for_slot_extraction(
+    *,
+    user_payload: dict,
+    model: str,
+    base_url: str,
+    api_key: str,
+    timeout_sec: int,
+) -> str | None:
+    """
+    调一次 LLM slot 抽取, 返回 content 字符串或 None(网络失败)。
+
+    失败兜底:
+      - 网络错 / HTTPError / URLError / TimeoutError → None
+      - **不**做 JSON 解析 / schema 校验 / retry — caller 负责
+        (让 caller 能区分"网络失败" vs "返回非 JSON" vs "schema 错" 3 类失败)
+
+    隐私边界(plan §4.3):
+      - api_key 仅作 Authorization header, 不进返回值 / 日志
+      - 失败时不返回响应原文
+    """
+    url = base_url.rstrip("/") + "/chat/completions"
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SLOT_EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        "temperature": 0.0,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read().decode("utf-8")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, Exception):
+        return None
+
+    # 尝试从 OpenAI-style envelope 提取 content; 提取不到也返 raw(让 caller 自己判)
+    try:
+        resp_obj = json.loads(raw)
+        if isinstance(resp_obj, dict):
+            choices = resp_obj.get("choices") or []
+            if isinstance(choices, list) and choices:
+                msg = choices[0].get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, str):
+                    return content
+    except (json.JSONDecodeError, TypeError, Exception):
+        pass
+
+    # envelope 提取失败, 把 raw 文本交给 caller(可能是非 JSON, 让 caller 决定 retry)
+    return raw
+
+
+def _try_parse_llm_content(raw_content: str) -> dict[str, Any] | None:
+    """
+    解析 LLM content 字符串 → dict; 失败返 None。
+    不抛 — caller 决定 retry / fallback。
+    """
+    if not isinstance(raw_content, str) or not raw_content.strip():
+        return None
+    # 尝试直接 parse
+    try:
+        parsed = json.loads(raw_content)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _extract_slots_via_llm(
+    *,
+    user_message: str,
+    current_slot: str,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Phase 4 LLM 抽取主路径(plan §4.4):
+      1. 构造 user payload (含 slot + user_message,**不**含 jd_text)
+      2. 调 _call_llm_for_slot_extraction
+      3. 解析 response.content JSON
+      4. _validate_llm_extraction_payload 校验
+      5. schema retry 1 次 (strict_retry=True — 沿用 _call_with_retry 模式)
+      6. 失败 → None(caller fallback 到 _extract_slots_by_rules)
+
+    隐私边界(plan §4.3 + AGENTS.md):
+      - payload 只含 slot + user_message,**不**含 jd_text / session / materials
+      - api_key 永不入返回值 / trace
+      - 失败不返回响应原文
+
+    R5-E 保护:
+      - 不 import llm_rewriter 的 SYSTEM_PROMPT / PROMPT_VERSIONS
+      - 不挂 evaluate_prompt_versions.py
+    """
+    if current_slot not in SLOT_STRING_KEYS and current_slot not in SLOT_LIST_KEYS:
+        # 未知 slot — 不走 LLM 路径
+        return None
+    if not config.get("enabled_for_call"):
+        return None
+
+    user_payload = {
+        "slot": current_slot,
+        "user_message": user_message,
+        "instructions": "只输出 JSON, schema 严格匹配 system prompt 描述。",
+    }
+
+    # api_key 显式从 env 读, **不入** config 返回值(隐私边界, 见 _resolve_interview_llm_config)。
+    # 测试可通过 monkeypatch os.environ["LLM_API_KEY"] 注入。
+    api_key = os.environ.get("LLM_API_KEY", "").strip()
+    base_url = config.get("base_url", "")
+    model = config.get("model", "")
+    if not base_url or not model or not api_key:
+        return None
+
+    # 第 1 次调用
+    raw_content = _call_llm_for_slot_extraction(
+        user_payload=user_payload,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        timeout_sec=INTERVIEW_LLM_TIMEOUT_SEC,
+    )
+    if raw_content is None:
+        # 网络失败 — 不 retry(spec §4.4 "网络错不 retry"), fallback 规则
+        return None
+
+    parsed = _try_parse_llm_content(raw_content)
+    validated = _validate_llm_extraction_payload(parsed, current_slot) if isinstance(parsed, dict) else None
+
+    if validated is not None:
+        return validated
+
+    # JSON / schema 都失败 → retry 1 次, 加强约束(strict_retry=True, 沿用 _call_with_retry)
+    retry_payload = dict(user_payload)
+    retry_payload["instructions"] = (
+        "上一轮输出不是合法 JSON 或 schema 不符, 请只输出 JSON, "
+        "不要任何其他文本 (markdown / 解释 / chain-of-thought 都不要)。"
+        "schema 严格匹配 system prompt 描述。"
+    )
+    raw_content = _call_llm_for_slot_extraction(
+        user_payload=retry_payload,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        timeout_sec=INTERVIEW_LLM_TIMEOUT_SEC,
+    )
+    if raw_content is None:
+        return None
+    parsed = _try_parse_llm_content(raw_content)
+    if not isinstance(parsed, dict):
+        return None
+    return _validate_llm_extraction_payload(parsed, current_slot)
 
 
 # ----------------------------------------------------------------------
@@ -985,6 +1322,13 @@ __all__ = [
     "DEFAULT_MATERIALS_PATH",
     "INTERVIEW_BULLET_MAX_LEN", "INTERVIEW_REQUIRED_EDITED_KEYS",
     "MAX_TURNS_PER_GAP",
+    # R6-A Phase 4: LLM slot 抽取(plan §4.4)
+    "_resolve_interview_llm_config",
+    "_extract_slots_by_rules",
+    "_extract_slots_via_llm",
+    "_call_llm_for_slot_extraction",
+    "_try_parse_llm_content",
+    "_validate_llm_extraction_payload",
     # 测试用内部 helper
     "_score_gap", "_select_gap_from_candidates",
     "_default_candidates", "_INTERVIEW_SESSIONS",

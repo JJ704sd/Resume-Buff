@@ -881,3 +881,304 @@ class TestSaveCard:
         assert sentinel_count == 0, (
             f"真实 materials.json 被 round-trip 测试污染, 出现 {sentinel_count} 次 sentinel"
         )
+
+
+# ----------------------------------------------------------------------
+# 7. R6-A Phase 4: LLM slot 抽取(plan §4.4)
+# ----------------------------------------------------------------------
+class TestLLMSlotExtraction:
+    """R6-A Phase 4: extract_slots LLM 分支(plan §4.5)。
+
+    覆盖:
+      - llm_enabled=False / 无 key → 走规则版
+      - llm_enabled=True + key → 调 LLM(mock urllib.request.urlopen)
+      - LLM 返非 JSON → retry 1 次(只调 urlopen 2 次)
+      - LLM schema 错 → fallback 规则, 不阻断
+      - LLM 网络错 → fallback 规则, 不抛
+    """
+
+    def test_llm_extraction_disabled_falls_back_to_rules(self):
+        """llm_enabled=False / 缺省: 走 _extract_slots_by_rules, 不调 LLM。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen"
+        ) as mock_urlopen:
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=False,
+            )
+        mock_urlopen.assert_not_called()
+        # 规则版: action 用 ;/。/,\n 切, 至少 1 条
+        assert isinstance(result.get("action"), list)
+        assert len(result["action"]) >= 1
+        assert "_warnings" in result
+
+    def test_llm_extraction_no_key_falls_back_to_rules(self, monkeypatch):
+        """llm_enabled=True 但无 key → 走规则版, 不调 LLM。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen"
+        ) as mock_urlopen:
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=True,
+                llm_api_key="",  # 显式空
+            )
+        mock_urlopen.assert_not_called()
+        assert isinstance(result.get("action"), list)
+
+    def test_llm_extraction_with_key_calls_llm(self, monkeypatch):
+        """llm_enabled=True + 有 key → 调 urlopen 1 次, 解析 LLM 返回的 schema。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-1234")
+
+        # 模拟 OpenAI-compatible /chat/completions 返回
+        fake_content = json.dumps({
+            "action": ["做了一个表格模板", "按问题类型、复现步骤、负责人和状态记录"],
+            "_warnings": [],
+        }, ensure_ascii=False)
+        fake_resp_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_resp_body),
+        ) as mock_urlopen:
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # urlopen 调 1 次(成功路径, 不 retry)
+        assert mock_urlopen.call_count == 1, (
+            f"LLM 调用 urlopen 应调 1 次, 实际 {mock_urlopen.call_count}"
+        )
+        # LLM 输出被透传(不是规则版)
+        assert result["action"] == [
+            "做了一个表格模板",
+            "按问题类型、复现步骤、负责人和状态记录",
+        ]
+
+    def test_llm_extraction_invalid_json_retries_once(self, monkeypatch):
+        """LLM 返非 JSON → retry 1 次(strict_retry=True), 仍失败 → fallback 规则。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-1234")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        # 2 次都返非 JSON
+        bad_body = b"not a json response"
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(bad_body),
+        ) as mock_urlopen:
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # urlopen 应调 2 次(1 次失败 + 1 次 retry)
+        assert mock_urlopen.call_count == 2, (
+            f"schema retry 应调 2 次 urlopen, 实际 {mock_urlopen.call_count}"
+        )
+        # fallback 到规则版(action 仍返回非空 list)
+        assert isinstance(result.get("action"), list)
+        assert len(result["action"]) >= 1
+
+    def test_llm_extraction_schema_error_falls_back_to_rules(self, monkeypatch):
+        """LLM 返合法 JSON 但 schema 不符(缺 action key) → fallback 规则, 不阻断。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-1234")
+
+        # schema 错: 缺 action key
+        bad_schema_content = json.dumps({"_warnings": []}, ensure_ascii=False)
+        bad_schema_body = json.dumps({
+            "choices": [{"message": {"content": bad_schema_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(bad_schema_body),
+        ) as mock_urlopen:
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # schema retry 1 次 → urlopen 调 2 次
+        assert mock_urlopen.call_count == 2, (
+            f"schema 错应 retry 1 次, 实际 urlopen 调 {mock_urlopen.call_count} 次"
+        )
+        # fallback 规则版
+        assert isinstance(result.get("action"), list)
+        assert len(result["action"]) >= 1
+
+    def test_llm_extraction_network_error_falls_back_to_rules(self, monkeypatch):
+        """LLM 网络错(URLError) → fallback 规则版, 不抛。"""
+        import unittest.mock
+        from urllib.error import URLError
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-1234")
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            side_effect=URLError("conn refused"),
+        ) as mock_urlopen:
+            # 不应抛
+            result = interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # 网络错不 retry(沿用 _call_with_retry 风格) → urlopen 调 1 次
+        assert mock_urlopen.call_count == 1, (
+            f"网络错不应 retry, 实际 urlopen 调 {mock_urlopen.call_count} 次"
+        )
+        # fallback 规则版
+        assert isinstance(result.get("action"), list)
+
+
+# ----------------------------------------------------------------------
+# 8. R6-A Phase 4: prompt registry / 边界保护(plan §4.5)
+# ----------------------------------------------------------------------
+class TestInterviewPromptRegistry:
+    """R6-A Phase 4: prompt 注册表 / R5-E 边界保护(plan §4.5)。
+
+    覆盖:
+      - SLOT_EXTRACTION_SYSTEM_PROMPT 是非空 str
+      - SLOT_EXTRACTION_USER_TEMPLATE 不含 {jd_text} 防泄漏
+      - PROMPT_VERSIONS 不含 interview prompt key (R5-E 保护)
+      - 本地默认常量跟 core.llm_rewriter.DEFAULT_* 同步
+    """
+
+    def test_slot_extraction_prompt_registered(self):
+        """SLOT_EXTRACTION_SYSTEM_PROMPT 是非空 str。"""
+        from core.interview_prompts import SLOT_EXTRACTION_SYSTEM_PROMPT
+
+        assert isinstance(SLOT_EXTRACTION_SYSTEM_PROMPT, str)
+        assert len(SLOT_EXTRACTION_SYSTEM_PROMPT.strip()) > 0
+
+    def test_slot_extraction_prompt_excludes_jd_full_text(self):
+        """模板不含 {jd_text}, 防止 LLM 调用意外拿到 JD 全文(spec §4.4 隐私)。"""
+        from core.interview_prompts import SLOT_EXTRACTION_USER_TEMPLATE
+
+        assert isinstance(SLOT_EXTRACTION_USER_TEMPLATE, str)
+        assert "{jd_text}" not in SLOT_EXTRACTION_USER_TEMPLATE, (
+            "USER_TEMPLATE 含 {jd_text} 会让 LLM 调用意外拿到 JD 全文, "
+            "违反 plan §4.4 隐私边界"
+        )
+        # 验证可正常 format
+        rendered = SLOT_EXTRACTION_USER_TEMPLATE.format(
+            slot="action", user_message="做了一件事",
+        )
+        assert "action" in rendered
+        assert "做了一件事" in rendered
+
+    def test_interview_prompts_not_in_llm_rewriter_registry(self):
+        """PROMPT_VERSIONS 不含 interview prompt key (R5-E 保护, 决策点 D5)。"""
+        from core.llm_rewriter import PROMPT_VERSIONS
+
+        for forbidden_key in (
+            "v6-interview-slot",
+            "v6-interview-draft",
+            "interview-slot",
+            "interview-slot-extract",
+        ):
+            assert forbidden_key not in PROMPT_VERSIONS, (
+                f"R5-E 边界保护违反: PROMPT_VERSIONS 不应含 {forbidden_key!r}"
+                f"(决策点 D5: interview LLM prompt 独立常量, 不进 PROMPT_VERSIONS)"
+            )
+
+    def test_interview_llm_defaults_match_llm_rewriter(self):
+        """interview_agent 本地默认常量跟 llm_rewriter 同步(防漂移)。
+
+        R5-E 边界: interview_agent.py 文件任意位置不能出现
+        `from core.llm_rewriter import ...` — 所以常量本地定义,
+        测试锁防两边漂移。
+        """
+        from core import interview_agent
+        from core.llm_rewriter import DEFAULT_BASE_URL, DEFAULT_MODEL
+
+        assert (
+            interview_agent._INTERVIEW_LLM_DEFAULT_BASE_URL == DEFAULT_BASE_URL
+        ), (
+            f"_INTERVIEW_LLM_DEFAULT_BASE_URL={interview_agent._INTERVIEW_LLM_DEFAULT_BASE_URL!r} "
+            f"与 llm_rewriter.DEFAULT_BASE_URL={DEFAULT_BASE_URL!r} 不一致"
+        )
+        assert (
+            interview_agent._INTERVIEW_LLM_DEFAULT_MODEL == DEFAULT_MODEL
+        ), (
+            f"_INTERVIEW_LLM_DEFAULT_MODEL={interview_agent._INTERVIEW_LLM_DEFAULT_MODEL!r} "
+            f"与 llm_rewriter.DEFAULT_MODEL={DEFAULT_MODEL!r} 不一致"
+        )

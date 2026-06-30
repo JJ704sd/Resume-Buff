@@ -1182,3 +1182,969 @@ class TestInterviewPromptRegistry:
             f"_INTERVIEW_LLM_DEFAULT_MODEL={interview_agent._INTERVIEW_LLM_DEFAULT_MODEL!r} "
             f"与 llm_rewriter.DEFAULT_MODEL={DEFAULT_MODEL!r} 不一致"
         )
+
+
+# ----------------------------------------------------------------------
+# 9. R6-B Phase 1: slot_meta provenance(spec §5.1+§5.2)
+# ----------------------------------------------------------------------
+class TestSessionDefaultFieldsR6B:
+    """R6-B Phase 1 spec §5.1: InterviewSession 新增 5 个可信增强字段,
+    必须有默认值以保持旧测试构造兼容(关键字传参缺省即可)。
+
+    覆盖:
+      - create_session 默认值正确
+      - 直接构造 dataclass 时默认值正确(关键字缺省)
+    """
+
+    def test_create_session_default_interview_mode_is_rules(self):
+        """create_session 默认 interview_mode='rules', Phase 2 才切。"""
+        from core.interview_agent import create_session
+
+        sess = create_session("test_qa", _minimal_jd_text(), _minimal_materials())
+        assert sess.interview_mode == "rules", (
+            f"create_session 默认 interview_mode 应为 'rules', 实际 {sess.interview_mode!r}"
+        )
+        assert sess.mode_warning is None
+        assert sess.slot_meta == {}
+        assert sess.question_plan is None
+        assert sess.verification_summary is None
+
+    def test_interview_session_dataclass_defaults(self):
+        """直接构造 dataclass 时 5 个新字段默认值正确(关键字缺省)。
+        关键:旧测试用关键字传参 11 个字段,R6-B 加 5 个字段后不传仍能跑。
+        """
+        from core.interview_agent import InterviewSession, InterviewState
+
+        sess = InterviewSession(
+            session_id="ia_r6b_default",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        # 不传 5 个新字段, 应有默认值
+        assert sess.interview_mode == "rules"
+        assert sess.mode_warning is None
+        assert sess.slot_meta == {}
+        assert sess.question_plan is None
+        assert sess.verification_summary is None
+
+
+class TestSlotMetaRulesR6B:
+    """R6-B Phase 1 spec §5.2: 规则抽取会写基本 slot_meta。
+
+    覆盖:
+      - rules 命中证据 → confidence=HIT(0.80), reason_code 含 slot 前缀
+      - rules fallback → confidence=FALLBACK(0.40), 无 source_span_*
+      - apply_action 后 session.slot_meta[slot] 列表里有 1 条 meta
+      - 5 个 slot (action / method / metric / result / responsibility) 都覆盖
+    """
+
+    def test_rules_meta_hit_for_action_slot(self):
+        """action 命中标点切 → reason_code='punctuation_split_action',
+        confidence=0.80, source_span_hash 非空。
+        """
+        from core.interview_agent import (
+            INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT,
+            extract_slots,
+        )
+
+        out = extract_slots(
+            "我做了表格模板;按类型分类,统一格式;每天同步进度",
+            "action",
+            turn_index=2,
+        )
+        meta_list = out.get("_slot_meta")
+        assert isinstance(meta_list, list)
+        assert len(meta_list) == 1
+        meta = meta_list[0]
+        assert meta["extractor"] == "rules"
+        assert meta["confidence"] == INTERVIEW_SLOT_META_RULES_CONFIDENCE_HIT
+        assert meta["turn_index"] == 2
+        assert meta["reason_code"] == "punctuation_split_action"
+        assert meta["source_span_hash"] is not None
+        assert meta["source_span_hash"].startswith("sha256:")
+        assert isinstance(meta["source_span_len"], int)
+        assert meta["source_span_len"] > 0
+
+    def test_rules_meta_fallback_for_metric_slot(self):
+        """metric slot 无数字 → fallback path, confidence=FALLBACK, 无 source_span_*。
+        """
+        from core.interview_agent import (
+            INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK,
+            extract_slots,
+        )
+
+        out = extract_slots("没有量化数据, 就是感觉效率高了", "metric", turn_index=1)
+        meta_list = out.get("_slot_meta")
+        assert isinstance(meta_list, list)
+        meta = meta_list[0]
+        assert meta["extractor"] == "rules"
+        assert meta["confidence"] == INTERVIEW_SLOT_META_RULES_CONFIDENCE_FALLBACK
+        assert meta["reason_code"] == "metric_fallback"
+        assert meta["source_span_hash"] is None
+        assert meta["source_span_len"] is None
+
+    def test_rules_meta_for_other_slots(self):
+        """responsibility / method / result 命中关键词 → confidence=HIT, reason_code 各自。"""
+        from core.interview_agent import extract_slots
+
+        # responsibility 命中 "负责"
+        out_resp = extract_slots("我负责测试反馈整理, 跟同学协作", "responsibility", turn_index=3)
+        meta = out_resp["_slot_meta"][0]
+        assert meta["reason_code"] == "keyword_responsibility"
+        assert meta["extractor"] == "rules"
+        assert meta["turn_index"] == 3
+
+        # method 命中 "用了 / 基于"
+        out_method = extract_slots("我用了共享文档同步, 基于问题类型分类", "method", turn_index=4)
+        meta = out_method["_slot_meta"][0]
+        assert meta["reason_code"] == "keyword_method"
+
+        # result 命中 "结果"
+        out_result = extract_slots("最后结果返工减少了 30%", "result", turn_index=5)
+        meta = out_result["_slot_meta"][0]
+        assert meta["reason_code"] == "keyword_result"
+
+    def test_apply_action_writes_slot_meta_to_session(self):
+        """apply_action(ANSWER) 后 session.slot_meta[current_slot] 含 1 条 meta,
+        且 captured_slots 不含 _slot_meta / _warnings(避免污染业务字段)。
+        """
+        from core.interview_agent import (
+            ActionType, GapCandidate, InterviewSession, InterviewState,
+            apply_action,
+        )
+
+        gap = GapCandidate(
+            gap_id="process_metric", label="流程", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=("action", "method", "result", "metric"),
+        )
+        sess = InterviewSession(
+            session_id="ia_r6b_apply",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        sess2, _ = apply_action(sess, ActionType.ANSWER, "我做了表格;按类型分类")
+        # session.slot_meta["action"] 应有 1 条 rules meta
+        assert "action" in sess2.slot_meta
+        meta_list = sess2.slot_meta["action"]
+        assert len(meta_list) == 1
+        meta = meta_list[0]
+        assert meta["extractor"] == "rules"
+        assert meta["turn_index"] == 1  # turn_count=0 → next_turn_index=1
+        # captured_slots 不含 _slot_meta / _warnings(spec §5.2 防污染)
+        assert "_slot_meta" not in sess2.captured_slots
+        assert "_warnings" not in sess2.captured_slots
+
+
+class TestSlotMetaLlmR6B:
+    """R6-B Phase 1 spec §5.2: LLM source_span 在函数内 hash + len, 永不入 session/trace/API。
+
+    覆盖:
+      - 合法 string source_span → hash + len 写入 meta
+      - confidence 是 0.0-1.0 number → 写入 meta
+      - confidence 是 bool → 拒绝(走 default fallback)
+      - source_span 是 None / 非 string → 降级到无 source_span_*
+      - 多次写入同一 slot → 保留最近 INTERVIEW_SLOT_META_MAX 条
+    """
+
+    def test_llm_source_span_hashed_into_meta(self, monkeypatch):
+        """LLM 返合法 source_span(string) → meta 含 sha256:... + len。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-r6b-001")
+
+        sentinel_span = "PII_SENTINEL_SPAN_xyz123_ABC"
+        fake_content = json.dumps({
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "source_span": sentinel_span,
+            "confidence": 0.92,
+            "reason_code": "explicit_action",
+        }, ensure_ascii=False)
+        fake_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_body),
+        ):
+            out = interview_agent.extract_slots(
+                "我做了一个表格模板",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+                turn_index=7,
+            )
+
+        meta_list = out.get("_slot_meta")
+        assert isinstance(meta_list, list) and len(meta_list) == 1
+        meta = meta_list[0]
+        assert meta["extractor"] == "llm"
+        assert meta["confidence"] == 0.92
+        assert meta["turn_index"] == 7
+        assert meta["reason_code"] == "llm_explicit_action"
+        # 关键: source_span 明文不入 meta
+        assert sentinel_span not in json.dumps(meta, ensure_ascii=False)
+        # hash + len 写入
+        assert meta["source_span_hash"] is not None
+        assert meta["source_span_hash"].startswith("sha256:")
+        assert meta["source_span_len"] == len(sentinel_span)
+
+    def test_llm_invalid_source_span_degrades(self, monkeypatch):
+        """LLM 返非法 source_span(非 string / None) → 降级, 不写 source_span_*, 不抛。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-r6b-002")
+
+        fake_content = json.dumps({
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "source_span": 12345,  # 非 string
+            "confidence": 0.9,
+        }, ensure_ascii=False)
+        fake_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_body),
+        ):
+            out = interview_agent.extract_slots(
+                "我做了一个表格模板",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+                turn_index=3,
+            )
+
+        meta = out["_slot_meta"][0]
+        assert meta["extractor"] == "llm"
+        assert meta["source_span_hash"] is None
+        assert meta["source_span_len"] is None
+        # confidence 合法 → 透传
+        assert meta["confidence"] == 0.9
+
+    def test_llm_confidence_bool_rejected(self, monkeypatch):
+        """LLM 返 confidence=True(bool) → 拒绝, 走 _make_slot_meta fallback (0.60)。
+
+        spec §5.2: confidence 必须是 0.0-1.0 number, bool 不接受。
+        """
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-r6b-003")
+
+        fake_content = json.dumps({
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "confidence": True,  # bool — 必须拒绝
+        }, ensure_ascii=False)
+        fake_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_body),
+        ):
+            out = interview_agent.extract_slots(
+                "我做了一个表格模板",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        meta = out["_slot_meta"][0]
+        # bool 被拒绝, 走 _make_slot_meta fallback to LLM default 0.60
+        assert meta["confidence"] == interview_agent.INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE
+        # 同时确认 meta 里 confidence 是 number 不是 bool
+        assert isinstance(meta["confidence"], float)
+        assert not isinstance(meta["confidence"], bool)
+
+    def test_llm_confidence_out_of_range_rejected(self, monkeypatch):
+        """LLM confidence 越界 (>1.0 或 <0.0) → 拒绝, 走 fallback。"""
+        from core import interview_agent
+
+        # 走 _attach_llm_slot_meta 单测 path, 不 mock urlopen
+        # 构造 validated-style parsed: {slot, _warnings, confidence, source_span}
+        parsed = {
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "confidence": 5.0,  # 越界
+            "source_span": "test",
+        }
+        out = interview_agent._attach_llm_slot_meta(
+            parsed=parsed, current_slot="action", turn_index=0,
+        )
+        assert out is not None
+        meta = out["_slot_meta"][0]
+        assert meta["confidence"] == interview_agent.INTERVIEW_SLOT_META_LLM_DEFAULT_CONFIDENCE
+
+    def test_slot_meta_max_5_entries_per_slot(self):
+        """per slot 最多保留 INTERVIEW_SLOT_META_MAX=5 条(spec §5.2)。
+
+        模拟同一 slot 写入 7 条 → session.slot_meta[slot] 只剩最后 5 条。
+        """
+        from core.interview_agent import (
+            INTERVIEW_SLOT_META_MAX,
+            InterviewSession, InterviewState, _append_slot_meta,
+            _make_slot_meta,
+        )
+
+        sess = InterviewSession(
+            session_id="ia_r6b_cap",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        # 写 7 条进 action slot
+        for i in range(7):
+            entry = _make_slot_meta(
+                extractor="rules",
+                confidence=0.8,
+                turn_index=i,
+                reason_code=f"test_{i}",
+            )
+            _append_slot_meta(sess, "action", [entry])
+
+        assert "action" in sess.slot_meta
+        kept = sess.slot_meta["action"]
+        assert len(kept) == INTERVIEW_SLOT_META_MAX, (
+            f"action slot 应保留最近 {INTERVIEW_SLOT_META_MAX} 条, 实际 {len(kept)}"
+        )
+        # 保留的是最后 5 条(turn_index 2-6)
+        kept_turns = [m["turn_index"] for m in kept]
+        assert kept_turns == [2, 3, 4, 5, 6], (
+            f"应保留最近 5 条 (turn 2-6), 实际 turn={kept_turns}"
+        )
+
+
+class TestSlotMetaPrivacyR6B:
+    """R6-B Phase 1 spec §5.2 隐私边界 + AGENTS.md。
+
+    关键不变量:
+      - session.slot_meta 不含 user_message / source_span 明文
+      - trace 不含 user_message / source_span 明文
+      - extract_slots 返回的 dict 不含 user_message 原文
+    """
+
+    def test_slot_meta_no_user_message_text(self, monkeypatch):
+        """apply_action 后 session.slot_meta 不含 user_message 原文。"""
+        from core.interview_agent import (
+            ActionType, GapCandidate, InterviewSession, InterviewState,
+            apply_action,
+        )
+
+        gap = GapCandidate(
+            gap_id="process_metric", label="流程", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=("action",),
+        )
+        sess = InterviewSession(
+            session_id="ia_r6b_priv",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        sentinel = "PII_SENTINEL_USER_MSG_R6B_999"
+        apply_action(sess, ActionType.ANSWER, f"我做了表格模板 {sentinel}")
+
+        # session.slot_meta 序列化后不含 sentinel
+        slot_meta_blob = json.dumps(sess.slot_meta, ensure_ascii=False)
+        assert sentinel not in slot_meta_blob, (
+            f"session.slot_meta 含 user_message 原文: {sess.slot_meta}"
+        )
+
+    def test_slot_meta_no_source_span_plaintext(self, monkeypatch):
+        """LLM source_span 转 hash 后, session.slot_meta 不含 source_span 明文。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-r6b-priv")
+
+        sentinel_span = "PII_SENTINEL_SOURCE_SPAN_R6B_777_abcdef"
+        fake_content = json.dumps({
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "source_span": sentinel_span,
+            "confidence": 0.85,
+        }, ensure_ascii=False)
+        fake_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_body),
+        ):
+            out = interview_agent.extract_slots(
+                "我做了一个表格模板",
+                "action",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+                turn_index=5,
+            )
+
+        blob = json.dumps(out, ensure_ascii=False)
+        # 关键: source_span 明文不在 extract_slots 返回值里
+        assert sentinel_span not in blob, (
+            f"extract_slots 返回值含 source_span 明文: {out}"
+        )
+        # 但 hash 应在
+        meta = out["_slot_meta"][0]
+        assert sentinel_span not in json.dumps(meta, ensure_ascii=False)
+
+    def test_trace_does_not_leak_source_span(self, monkeypatch):
+        """LLM 抽取后 apply_action 写 trace, trace 不含 source_span 明文。"""
+        import unittest.mock
+
+        from core import interview_agent
+        from core.interview_agent import (
+            ActionType, GapCandidate, InterviewSession, InterviewState,
+            apply_action,
+        )
+
+        captured: list[dict] = []
+
+        def fake_log(event: dict) -> None:
+            captured.append(event)
+
+        monkeypatch.setattr(
+            interview_agent, "log_agent_trace_jsonl", fake_log,
+        )
+        monkeypatch.setenv("LLM_API_KEY", "test-key-r6b-trace")
+
+        sentinel_span = "PII_SENTINEL_TRACE_SPAN_R6B_555"
+        fake_content = json.dumps({
+            "action": ["做了一个表格"],
+            "_warnings": [],
+            "source_span": sentinel_span,
+            "confidence": 0.85,
+        }, ensure_ascii=False)
+        fake_body = json.dumps({
+            "choices": [{"message": {"content": fake_content}}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        gap = GapCandidate(
+            gap_id="process_metric", label="流程", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=("action",),
+        )
+        sess = InterviewSession(
+            session_id="ia_r6b_trace",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_FakeResp(fake_body),
+        ):
+            apply_action(
+                sess, ActionType.ANSWER,
+                "PII_SENTINEL_USER_MSG_R6B_888",
+            )
+
+        # 所有 trace 都不应含 source_span / user_message 明文
+        for ev in captured:
+            blob = repr(ev)
+            assert sentinel_span not in blob, (
+                f"trace 含 source_span 明文: {ev}"
+            )
+            assert "PII_SENTINEL_USER_MSG_R6B_888" not in blob, (
+                f"trace 含 user_message 明文: {ev}"
+            )
+
+
+class TestSlotMetaUnitR6B:
+    """R6-B Phase 1 spec §5.2: helper 单元。
+
+    覆盖:
+      - _validate_confidence 边界(bool 拒绝 / 越界拒绝 / 合法通过)
+      - _compute_source_span_hash 边界(空 string / 非 string / 合法)
+      - _make_slot_meta 半残 source_span 自动归 None
+    """
+
+    def test_validate_confidence_bool_rejected(self):
+        """_validate_confidence 拒绝 bool(spec §5.2)。"""
+        from core.interview_agent import _validate_confidence
+
+        assert _validate_confidence(True) is None
+        assert _validate_confidence(False) is None
+        # 合法边界
+        assert _validate_confidence(0.0) == 0.0
+        assert _validate_confidence(1.0) == 1.0
+        assert _validate_confidence(0.5) == 0.5
+        assert _validate_confidence(0) == 0.0
+        assert _validate_confidence(1) == 1.0
+        # 越界
+        assert _validate_confidence(-0.1) is None
+        assert _validate_confidence(1.5) is None
+        # 非数字
+        assert _validate_confidence("0.5") is None
+        assert _validate_confidence(None) is None
+
+    def test_compute_source_span_hash_legal(self):
+        """_compute_source_span_hash: 合法 string → (sha256:..., len)。"""
+        from core.interview_agent import _compute_source_span_hash
+
+        h, ln = _compute_source_span_hash("测试一段文本")
+        assert h is not None and h.startswith("sha256:")
+        assert ln == len("测试一段文本")
+        # hash 长度稳定(sha256 hex 前 16 字符 + "sha256:" 前缀 = 23 字符)
+        assert len(h) == len("sha256:") + 16
+
+    def test_compute_source_span_hash_invalid(self):
+        """_compute_source_span_hash: 空 / 非 string → (None, None)。"""
+        from core.interview_agent import _compute_source_span_hash
+
+        assert _compute_source_span_hash("") == (None, None)
+        assert _compute_source_span_hash(None) == (None, None)
+        assert _compute_source_span_hash(12345) == (None, None)
+        assert _compute_source_span_hash(["text"]) == (None, None)
+
+    def test_make_slot_meta_half_residue_normalized(self):
+        """_make_slot_meta: source_span_hash 与 len 半残时, 都归 None。"""
+        from core.interview_agent import _make_slot_meta
+
+        # 只传 hash 不传 len → len=None → 两个都 None
+        m1 = _make_slot_meta(
+            extractor="rules",
+            confidence=0.8,
+            turn_index=1,
+            reason_code="test",
+            source_span_hash="sha256:abc",
+            source_span_len=None,
+        )
+        assert m1["source_span_hash"] is None
+        assert m1["source_span_len"] is None
+
+        # 只传 len 不传 hash → hash=None → 两个都 None
+        m2 = _make_slot_meta(
+            extractor="rules",
+            confidence=0.8,
+            turn_index=1,
+            reason_code="test",
+            source_span_hash=None,
+            source_span_len=10,
+        )
+        assert m2["source_span_hash"] is None
+        assert m2["source_span_len"] is None
+
+        # 都传 → 都保留
+        m3 = _make_slot_meta(
+            extractor="rules",
+            confidence=0.8,
+            turn_index=1,
+            reason_code="test",
+            source_span_hash="sha256:abc",
+            source_span_len=10,
+        )
+        assert m3["source_span_hash"] == "sha256:abc"
+        assert m3["source_span_len"] == 10
+
+
+# ----------------------------------------------------------------------
+# 10. R6-B Phase 3: confidence-aware policy 集成(spec §6)
+# ----------------------------------------------------------------------
+class TestPhase3PolicyIntegration:
+    """R6-B Phase 3: next_question / rephrase / switch_gap 跟 policy 集成。
+
+    覆盖:
+      - next_question 走 plan_next_question(spec §6 priority chain)
+      - next_question 写 session.message_log(供 anti-repeat 读取)
+      - next_question 写 session.question_plan(供 rephrase 读取 + 前端审计)
+      - rephrase 不换 slot(用 session.question_plan.slot, 不重跑 policy)
+      - switch_gap 清空 session.message_log / slot_meta / question_plan(避免跨 gap 混用)
+      - skip_count / turn_count 触顶 → next_question 返空 message(force_draft)
+    """
+
+    def _gap(self):
+        from core.interview_agent import GapCandidate
+        return GapCandidate(
+            gap_id="process_metric", label="流程量化", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=(
+                "background", "action", "result", "metric",
+            ),
+        )
+
+    def _session(self, **kw):
+        from core.interview_agent import InterviewSession, InterviewState
+        defaults = dict(
+            session_id="ia_r6b_phase3",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=self._gap(),
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        defaults.update(kw)
+        return InterviewSession(**defaults)
+
+    def test_next_question_uses_policy_for_slot_selection(self):
+        """next_question 用 policy 选 slot(而非 _current_slot 老路径)。"""
+        from core.interview_agent import next_question
+
+        sess = self._session()
+        msg = next_question(sess)
+        assert msg["slot"] in ("background", "action", "result", "metric")
+        assert msg["text"]  # 必有 text
+
+    def test_next_question_no_gap_returns_empty_message(self):
+        """selected_gap=None → next_question 返空 message(policy no_more)。"""
+        from core.interview_agent import next_question
+
+        sess = self._session(selected_gap=None)
+        msg = next_question(sess)
+        assert msg["slot"] == ""
+        assert msg["text"] == ""
+        assert msg["quick_replies"] == []
+
+    def test_next_question_writes_message_log_for_anti_repeat(self):
+        """next_question 调一次 → session.message_log 多 1 条 asked entry。
+
+        spec §6 防重复: plan_next_question 用 message_log 读 last_asked_slot。
+        """
+        from core.interview_agent import next_question
+
+        sess = self._session()
+        before_len = len(sess.message_log)
+        msg = next_question(sess)
+        assert len(sess.message_log) == before_len + 1
+        entry = sess.message_log[-1]
+        assert entry["kind"] == "asked"
+        assert entry["slot"] == msg["slot"]
+
+    def test_next_question_writes_question_plan_for_audit(self):
+        """next_question 写 session.question_plan(policy 输出 + audit)。"""
+        from core.interview_agent import next_question
+
+        sess = self._session()
+        msg = next_question(sess)
+        assert sess.question_plan is not None
+        assert sess.question_plan["slot"] == msg["slot"]
+        assert sess.question_plan["reason_code"]  # 必填
+        assert "low_confidence_slots" in sess.question_plan
+        assert "kind" in sess.question_plan
+        assert "can_draft" in sess.question_plan
+
+    def test_next_question_skip_limit_returns_empty_message(self):
+        """skip_count >= MAX → policy 返 force_draft → next_question 返空。"""
+        from core.interview_agent import next_question
+
+        sess = self._session(skip_count=2)  # MAX_CONSECUTIVE_SKIPS=2
+        msg = next_question(sess)
+        assert msg["slot"] == ""
+        assert msg["text"] == ""
+        # question_plan 仍写, reason 应是 force_draft_skip_limit
+        assert sess.question_plan is not None
+        assert sess.question_plan["reason_code"] == "force_draft_skip_limit"
+        assert sess.question_plan["kind"] == "force_draft"
+        assert sess.question_plan["can_draft"] is True
+
+    def test_next_question_turn_limit_returns_empty_message(self):
+        """turn_count >= MAX → policy 返 force_draft → next_question 返空。"""
+        from core.interview_agent import next_question
+
+        sess = self._session(turn_count=3)  # MAX_TURNS_PER_GAP=3
+        msg = next_question(sess)
+        assert msg["slot"] == ""
+        assert sess.question_plan["reason_code"] == "force_draft_turn_limit"
+
+    def test_rephrase_does_not_change_slot(self):
+        """rephrase 同 slot 改问法, 不换 slot(spec §6 防重复)。
+
+        场景: 先 next_question 拿到 slot=action → rephrase → 仍 slot=action。
+        """
+        from core.interview_agent import ActionType, apply_action, next_question
+
+        sess = self._session(captured_slots={"background": "我是测试实习生"})
+        # 先 next_question 拿当前 slot
+        first_msg = next_question(sess)
+        first_slot = first_msg["slot"]
+        first_text = first_msg["text"]
+        # rephrase
+        sess2, resp = apply_action(sess, ActionType.REPHRASE_QUESTION, None)
+        # rephrase 后 slot 应跟 next_question 选的一致(都是 policy 选)
+        assert resp["message"]["slot"] == first_slot
+        # text 应加 [换个问法] 前缀(spec §6 "改写")
+        assert resp["message"]["text"].startswith("[换个问法] ")
+        assert resp["message"]["text"] != first_text  # 至少前缀不同
+
+    def test_rephrase_stays_on_current_slot_even_if_policy_would_switch(self):
+        """rephrase 用 session.question_plan.slot, 不重跑 policy。
+
+        场景: session.question_plan.slot=method (用户当前在被问 method)
+              模拟 policy 跑一遍会切去别的 slot(因为 last_asked=method, anti-repeat 切)
+              但 rephrase 应仍问 method, 不切走。
+        """
+        from core.interview_agent import ActionType, apply_action, next_question
+
+        sess = self._session(
+            captured_slots={"background": "X", "action": "Y"},  # combo1 缺 result
+            message_log=[{"kind": "asked", "slot": "method", "turn": 0}],
+        )
+        # 先 next_question 拿到当前问什么(可能是 result, 因为 combo1 缺 result)
+        first_msg = next_question(sess)
+        current_slot = first_msg["slot"]
+        # 把 session.question_plan 强制设为 method, 模拟"上次问的是 method"
+        # 这样 rephrase 不管 policy 怎么想, 都该走 method
+        sess.question_plan = {
+            "slot": "method",
+            "reason_code": "next_suggested_slot",
+            "low_confidence_slots": [],
+            "kind": "ask_slot",
+            "can_draft": False,
+        }
+        sess2, resp = apply_action(sess, ActionType.REPHRASE_QUESTION, None)
+        # rephrase 应固定用 session.question_plan.slot = method
+        assert resp["message"]["slot"] == "method", (
+            f"rephrase 应固定用 question_plan.slot=method, "
+            f"实际 {resp['message']['slot']!r}"
+        )
+        assert resp["message"]["text"].startswith("[换个问法] ")
+
+    def test_rephrase_does_not_write_extra_message_log_entry(self):
+        """rephrase 不调 next_question(避免 policy 跑 anti-repeat 写新 entry)。
+
+        实现: rephrase 用 session.question_plan.slot 直接渲染, 不写 message_log。
+        """
+        from core.interview_agent import ActionType, apply_action
+
+        sess = self._session()
+        sess.question_plan = {
+            "slot": "background",
+            "reason_code": "missing_required_before_draft",
+            "low_confidence_slots": [],
+            "kind": "ask_slot",
+            "can_draft": False,
+        }
+        before_len = len(sess.message_log)
+        sess2, _ = apply_action(sess, ActionType.REPHRASE_QUESTION, None)
+        # rephrase 不调 next_question, 不追加 message_log
+        assert len(sess2.message_log) == before_len, (
+            f"rephrase 不应追加 message_log entry, "
+            f"before={before_len}, after={len(sess2.message_log)}"
+        )
+
+    def test_switch_gap_clears_message_log_slot_meta_question_plan(self):
+        """switch_gap 清空 message_log / slot_meta / question_plan(spec §6)。"""
+        from core.interview_agent import ActionType, apply_action
+
+        sess = self._session(
+            captured_slots={"background": "X", "action": "Y"},
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.4, "turn_index": 1,
+                    "reason_code": "keyword_background",
+                }],
+                "action": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "punctuation_split_action",
+                }],
+            },
+            message_log=[
+                {"kind": "asked", "slot": "background", "turn": 0},
+                {"kind": "asked", "slot": "action", "turn": 1},
+            ],
+            turn_count=2,
+        )
+        sess.question_plan = {
+            "slot": "result",
+            "reason_code": "missing_required_before_draft",
+            "low_confidence_slots": ["background"],
+            "kind": "ask_slot",
+            "can_draft": False,
+        }
+        # 保存 switch_gap 之前的 message_log 副本(apply_action mutate 传入的 sess)
+        before_message_log = list(sess.message_log)
+        before_len = len(before_message_log)
+        sess2, _ = apply_action(sess, ActionType.SWITCH_GAP, None)
+        # 清空旧 gap 的 slot_meta(避免跨 gap 污染)
+        assert sess2.slot_meta == {}
+        # message_log: switch_gap 先清空旧 2 条, 再 next_question 写入新 gap 第一问
+        # 所以 message_log 长度 < 旧 message_log 长度(核心: 不能更长)
+        assert len(sess2.message_log) < before_len, (
+            f"switch_gap 后 message_log 应短于旧 ({before_len}), "
+            f"实际 {sess2.message_log}"
+        )
+        # 旧 entry 的 turn=1(action 那个) 必须消失, 因为 turn_count 被重置
+        turns_in_new = [e["turn"] for e in sess2.message_log]
+        assert 1 not in turns_in_new, (
+            f"switch_gap 后 message_log 不应含 turn=1(旧 entry), "
+            f"实际 turns={turns_in_new}"
+        )
+        # 旧 entry 中 action slot 必须消失(避免 anti-repeat 误判)
+        slots_in_new = [e["slot"] for e in sess2.message_log]
+        assert "action" not in slots_in_new, (
+            f"switch_gap 后 message_log 不应含旧 gap 的 action slot, "
+            f"实际 slots={slots_in_new}"
+        )
+        # captured_slots 也清空(spec §6 + Phase 1 既有行为)
+        assert sess2.captured_slots == {}
+        # question_plan 是新 gap 的 plan(switch_gap 立即 next_question 写入),
+        # 而非旧 plan 的残余(用旧 gap 的 result slot 验证)
+        assert sess2.question_plan is not None
+        assert sess2.question_plan.get("slot") != "result", (
+            f"question_plan 残留旧 gap 的 result slot: {sess2.question_plan}"
+        )
+
+    def test_switch_gap_new_session_does_not_inherit_old_low_confidence(self):
+        """switch_gap 后, plan_next_question 不应包含旧 gap 的 low_confidence slot。"""
+        from core.interview_agent import ActionType, apply_action
+        from core.interview_policy import plan_next_question
+
+        # 旧 gap 有低置信度 slot
+        sess = self._session(
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.3, "turn_index": 1,
+                    "reason_code": "keyword_background",
+                }],
+            },
+        )
+        sess2, _ = apply_action(sess, ActionType.SWITCH_GAP, None)
+        # 新 session 的 plan 不应包含 background 在 low_confidence_slots
+        plan = plan_next_question(sess2)
+        assert "background" not in plan["low_confidence_slots"], (
+            f"switch_gap 后旧 gap 的 low_confidence slot 不应泄漏: "
+            f"{plan['low_confidence_slots']}"
+        )
+
+    def test_question_plan_response_field_after_reply(self):
+        """apply_action ANSWER 后 reply 的 question_plan 走 policy(非 phase2_placeholder)。
+
+        验证 R6-B Phase 3 替换了 Phase 2 placeholder。
+        """
+        from core.interview_agent import ActionType, apply_action
+        from core.interview_policy import (
+            INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
+            INTERVIEW_POLICY_REASON_NEXT_SLOT,
+            INTERVIEW_POLICY_REASON_NO_MORE,
+        )
+
+        sess = self._session()
+        sess2, resp = apply_action(sess, ActionType.ANSWER, "我是测试实习生")
+        qp = resp.get("question_plan")
+        assert qp is not None
+        assert qp["reason_code"] != "phase2_placeholder"
+        assert qp["reason_code"] in {
+            INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
+            INTERVIEW_POLICY_REASON_NEXT_SLOT,
+            INTERVIEW_POLICY_REASON_NO_MORE,
+        }

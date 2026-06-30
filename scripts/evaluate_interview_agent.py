@@ -70,7 +70,7 @@ from evaluate_agent_workflow import (  # noqa: E402
 
 # ---- 输入 / 输出路径 ----
 DEFAULT_OUTPUT = BACKEND_DIR / "logs" / "interview_eval_report.md"
-VERSION = "R6-A Phase 5 (scaffold + 规则版基线, 2026-06-29)"
+VERSION = "R6-A Phase 5 (规则版 baseline; R6-A Phase 4 LLM slot extraction 已上线但需 key + 真实样本, 本报告仅跑 rules 路径)"
 
 
 # ======================================================================
@@ -696,10 +696,10 @@ def write_report(
     requested_mode: str,
 ) -> None:
     """
-    报告章节(plan §5.4):
+    报告章节(plan §5.4 + R6-B 校准):
       ## 0、LLM 元信息 (R5-D Phase 2 复用)
       ## 一、Eval set 概览
-      ## 二、规则版基线 (无对照 — 等 Phase 4 上线)
+      ## 二、规则版基线 (R6-A Phase 4 LLM slot extraction 已上线, 本报告仅跑 rules; llm_assisted 对照待 R6-B Phase 5 eval compare)
       ## 三、每条样本摘要 (只含 slot key + 长度, 不含原文)
       ## 四、Fabrication guard
       ## 五、延迟分布
@@ -713,7 +713,7 @@ def write_report(
       - 报告路径在 .gitignore (backend/logs/)
     """
     lines: list[str] = []
-    lines.append("# Interview Agent 评测报告 (R6-A Phase 5 脚手架)")
+    lines.append("# Interview Agent 评测报告 (R6-A Phase 5 规则版 baseline)")
     lines.append("")
     lines.append(f"> 版本: {VERSION}")
     lines.append(f"> 跑测时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -746,8 +746,8 @@ def write_report(
                  "Simulated 不算真实使用反馈(plan §5.1 启动条件 ③ 未满足)。")
     lines.append("")
 
-    # 二、规则版基线(等 Phase 4 上线后改为对照表)
-    lines.append("## 二、规则版基线 (无对照 — 等 Phase 4 LLM 上线后改 §二 为对照表)")
+    # 二、规则版基线(R6-A Phase 4 LLM 已落地但本报告只跑 rules; llm_assisted 对照待 R6-B Phase 5 eval compare)
+    lines.append("## 二、规则版基线 (R6-A Phase 4 LLM slot extraction 已上线, 但本报告仅跑 rules baseline; llm_assisted 对照表等 R6-B Phase 5 eval compare)")
     lines.append("")
     lines.append("| 指标 | 全局 |")
     lines.append("|---|---|")
@@ -791,7 +791,7 @@ def write_report(
     lines.append("")
     lines.append("> 简单实现: regex `(\\d+(?:\\.\\d+)?)\\s*(人|%|倍|小时|天|次|万|个|条|例|分|层|个科室)` "
                  "抽取 bullets 里所有量化短语, 检查它们是否都出现在 user_messages 原文里。"
-                 "等 Phase 4 LLM 版上线后, 这里升级为对照表。")
+                 "R6-B Phase 5 eval compare 上线后, 这里升级为 rules vs llm_assisted 对照表。")
     lines.append("")
 
     # 五、延迟分布
@@ -876,11 +876,12 @@ def main(argv=None) -> int:
     resolved_mode = _resolve_eval_mode(args.mode, llm_enabled)
     llm_eval_config = _get_llm_eval_config(llm_enabled, resolved_mode)
 
-    # live 模式: Phase 5 暂不实现(Phase 4 LLM 抽取没上线, live 没东西可比)
+    # live 模式: Phase 5 暂不实现(R6-A Phase 4 LLM slot extraction 已落地但需 key + 真实使用样本做对照, 当前仅规则版 baseline)
     if resolved_mode == MODE_LIVE:
         print(
-            "[error] --mode live 当前不可用: Phase 4 LLM slot 抽取尚未上线, "
-            "Phase 5 仅支持规则版基线。请改用 --mode offline。",
+            "[error] --mode live 当前不可用: R6-A Phase 4 LLM slot extraction 已上线, "
+            "但 live 对照需 LLM_API_KEY + 真实用户样本, 本脚本当前仅跑规则版 baseline。"
+            "请改用 --mode offline。",
             file=sys.stderr,
         )
         return 2

@@ -63,6 +63,10 @@ from pathlib import Path
 from typing import Any
 
 from core.generator import load_materials  # noqa: F401  re-export for tests
+from core.interview_policy import (  # noqa: F401  re-export for tests
+    INTERVIEW_POLICY_KIND_ASK,
+    INTERVIEW_POLICY_KIND_NO_MORE,
+)
 from core.jd_parser import match_score, parse_jd
 from core.logger import log_agent_trace_jsonl
 
@@ -475,38 +479,38 @@ def _build_extraction_summary(
 
 def _build_question_plan(session: InterviewSession) -> dict[str, Any] | None:
     """
-    构造 ReplyResponse.question_plan 的最小占位实现(spec §5.3)。
+    构造 ReplyResponse.question_plan(spec §5.3 schema + §6 deterministic policy)。
 
-    Phase 2 不真正实现 deterministic policy(留给 Phase 3),
-    这里只生成一个最小结构让前端 schema 稳定:
-      - slot: 当前 _current_slot 字符串
-      - reason_code: 固定 "phase2_placeholder"
-      - low_confidence_slots: 从 session.slot_meta 聚合 confidence < 0.6 的 slot 列表
+    R6-B Phase 3:
+      委托 core.interview_policy.plan_next_question 选 slot / reason_code,
+      返回 spec §5.3 限定的 3 字段子集:
+        {slot, reason_code, low_confidence_slots}
 
-    Phase 3 会替换这个函数为 interview_policy.plan_next_question。
+    不抛(spec §6.3 "失败不阻断主流程") — 内部异常返 None。
+
+    隐私边界(spec §5.3 + AGENTS.md):
+      - 不存 user_message / source_span 明文
+      - 不含 API key / prompt 文本 / confidence 数字 / jd_text
+      - 只列 slot 名 / reason_code / 简单 list[str]
+
+    与 Phase 2 占位实现的差异:
+      - 旧(reason_code="phase2_placeholder") 永远返同一 reason_code
+      - 新(reason_code ∈ INTERVIEW_POLICY_REASON_*) 真正反映 plan 决策
+      - low_confidence_slots 聚合算法同 Phase 2(sorting 一致)
     """
     try:
-        slot = _current_slot(session) or ""
-        # 聚合 session.slot_meta 中所有 confidence < 0.6 的 slot(去重)
-        low_conf_set: set[str] = set()
-        for slot_name, entries in (session.slot_meta or {}).items():
-            if not isinstance(entries, list):
-                continue
-            for m in entries:
-                if not isinstance(m, dict):
-                    continue
-                try:
-                    conf_val = m.get("confidence")
-                    if isinstance(conf_val, (int, float)) and not isinstance(conf_val, bool):
-                        if conf_val < INTERVIEW_LOW_CONFIDENCE_THRESHOLD:
-                            low_conf_set.add(str(slot_name))
-                            break  # 同一 slot 任意一条 low → 整 slot 标 low
-                except Exception:
-                    continue
+        # 延迟 import: 避免 circular import(interview_policy 也会 import interview_prompts)
+        from core.interview_policy import plan_next_question
+
+        plan = plan_next_question(session)
+        if not isinstance(plan, dict):
+            return None
         return {
-            "slot": slot,
-            "reason_code": "phase2_placeholder",
-            "low_confidence_slots": sorted(low_conf_set),
+            "slot": str(plan.get("slot", "") or ""),
+            "reason_code": str(plan.get("reason_code", "") or ""),
+            "low_confidence_slots": list(
+                plan.get("low_confidence_slots", []) or []
+            ),
         }
     except Exception:
         return None
@@ -965,14 +969,56 @@ def next_question(session: InterviewSession) -> dict[str, Any]:
         "text": str,         # 问题文本
         "quick_replies": list[str],
       }
-    全部 slot 都已问过 / 没有 gap → 返空 dict(text="")
+    全部 slot 都已问过 / 没有 gap / policy 强制 draft → 返空 dict(text="")
+
+    R6-B Phase 3 增强(spec §6):
+      - 内部用 interview_policy.plan_next_question 选 slot
+      - 优先级: 强制 draft > 缺必要 slot > 低置信度 > gap suggested 未覆盖 >
+                接近轮数上限 result/metric > next > anti-repeat
+      - 旧前端的 message 输出结构完全保持兼容({slot, text, quick_replies} 三 key)
+      - session.message_log 追加一条 {"kind": "asked", "slot": ..., "turn": ...}
+        供 plan_next_question 的 anti-repeat 逻辑读取
+      - rephrase_question / switch_gap 不调 next_question(路径独立, 各自行为见 _do_*)
     """
+    # 延迟 import 防循环: interview_policy 也在 interview_agent 反向引用
+    from core.interview_policy import plan_next_question
+
     gap = session.selected_gap
     if gap is None:
+        # selected_gap 为空 → 仍要写 session.question_plan(便于前端审计 no_more)
+        session.question_plan = {
+            "slot": "",
+            "reason_code": "no_gap_selected",
+            "low_confidence_slots": [],
+            "kind": INTERVIEW_POLICY_KIND_NO_MORE,
+            "can_draft": False,
+        }
         return {"slot": "", "text": "", "quick_replies": []}
-    slot = _current_slot(session)
-    if slot is None:
+
+    plan = plan_next_question(session)
+    slot = str(plan.get("slot", "") or "")
+    # 无论 slot 是否为空, 都写 session.question_plan(policy 决策审计)
+    # no_more / force_draft 也需记录 reason_code 给前端
+    if not isinstance(session.message_log, list):
+        session.message_log = []
+    session.question_plan = {
+        "slot": slot,
+        "reason_code": str(plan.get("reason_code", "") or ""),
+        "low_confidence_slots": list(plan.get("low_confidence_slots", []) or []),
+        "kind": str(plan.get("kind", INTERVIEW_POLICY_KIND_ASK)),
+        "can_draft": bool(plan.get("can_draft", False)),
+    }
+    if not slot:
+        # no_more / force_draft → 不渲染问题, 但 plan 已写
         return {"slot": "", "text": "", "quick_replies": []}
+
+    # 写 session.message_log: 供 plan_next_question 的 anti-repeat 逻辑读
+    session.message_log.append({
+        "kind": "asked",
+        "slot": slot,
+        "turn": int(session.turn_count or 0),
+    })
+
     text = QUESTION_TEMPLATES.get(
         (gap.gap_id, slot),
         f"请讲讲你在 {slot} 这一块的情况。",
@@ -1773,26 +1819,70 @@ def _do_skip(session: InterviewSession) -> tuple[InterviewSession, dict]:
 
 
 def _do_rephrase(session: InterviewSession) -> tuple[InterviewSession, dict]:
-    """同一 slot, text 加 '[换个问法]' 前缀(简易实现)。"""
+    """同一 slot, text 加 '[换个问法]' 前缀(R6-B Phase 3: 不换 slot)。
+
+    实现(spec §6 防重复): 不调 next_question()(会让 policy 跑 anti-repeat
+    切换 slot), 直接从 session.question_plan.slot 拿当前 slot 渲染。
+
+    边界:
+      - session.question_plan 为 None(还没 next_question 跑过):
+        fallback 到 _current_slot(session), 仍 None 就 fallback 到 gap.suggested_slots[0]
+      - session.selected_gap 为 None: 返空 message
+      - 不调 next_question, 因此不会写 session.message_log / 更新 session.question_plan.slot,
+        确保 "rephrase 不换 slot" 这条边界(spec §6 防重复)
+    """
     sess = session
-    nxt = next_question(sess)
-    if nxt.get("text"):
-        nxt["text"] = f"[换个问法] {nxt['text']}"
+    slot = ""
+    qp = sess.question_plan or {}
+    if isinstance(qp, dict) and isinstance(qp.get("slot"), str) and qp.get("slot"):
+        slot = qp["slot"]
+    elif sess.selected_gap is not None:
+        cs = _current_slot(sess)
+        if cs:
+            slot = cs
+        elif sess.selected_gap.suggested_slots:
+            slot = sess.selected_gap.suggested_slots[0]
+    if not slot or sess.selected_gap is None:
+        return sess, {
+            "state": sess.state.value,
+            "message": {"slot": "", "text": "", "quick_replies": []},
+            "captured_delta": None,
+            "progress": _progress(sess),
+            "can_draft": can_draft(sess),
+            "force_draft": False,
+            "extraction_summary": None,
+            "question_plan": _build_question_plan(sess),
+        }
+    text = QUESTION_TEMPLATES.get(
+        (sess.selected_gap.gap_id, slot),
+        f"请讲讲你在 {slot} 这一块的情况。",
+    )
     return sess, {
         "state": sess.state.value,
-        "message": nxt,
+        "message": {
+            "slot": slot,
+            "text": f"[换个问法] {text}",
+            "quick_replies": list(QUICK_REPLIES_BY_SLOT.get(slot, ())),
+        },
         "captured_delta": None,
         "progress": _progress(sess),
         "can_draft": can_draft(sess),
         "force_draft": False,
-        # R6-B Phase 2: rephrase 不发生抽取
         "extraction_summary": None,
         "question_plan": _build_question_plan(sess),
     }
 
 
 def _do_switch_gap(session: InterviewSession) -> tuple[InterviewSession, dict]:
-    """重置 captured_slots / skip_count / turn_count, 选新 gap(排除当前)。"""
+    """重置 captured_slots / skip_count / turn_count, 选新 gap(排除当前)。
+
+    R6-B Phase 3 隔离旧 gap 的所有 plan 状态(spec §6 "switch_gap 后清空
+    或隔离旧 gap 的 question plan, 避免跨 gap 混用"):
+      - captured_slots / skip_count / turn_count / draft_card (Phase 1 已有)
+      - slot_meta / question_plan (Phase 1 已有)
+      - message_log (Phase 3 新增: 清空 last_asked_slot, 避免跨 gap
+        anti-repeat 误判 / 新 gap 第一问被错误跳过)
+    """
     sess = session
     current_gap_id = sess.selected_gap.gap_id if sess.selected_gap else None
     all_candidates = sess.gap_candidates or _default_candidates()
@@ -1807,10 +1897,10 @@ def _do_switch_gap(session: InterviewSession) -> tuple[InterviewSession, dict]:
     sess.turn_count = 0
     sess.state = InterviewState.ASKING
     sess.draft_card = None
-    # R6-B Phase 1: switch_gap 隔离旧 gap 的 question_plan / slot_meta
-    # (避免跨 gap 混用, spec §6 防重复)
+    # R6-B Phase 1+3: 隔离旧 gap 的 question_plan / slot_meta / message_log
     sess.slot_meta = {}
     sess.question_plan = None
+    sess.message_log = []
     nxt = next_question(sess)
     return sess, {
         "state": sess.state.value,

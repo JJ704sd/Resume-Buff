@@ -584,10 +584,23 @@ class TestReplyUsesSessionMode:
         # question_plan 必有
         assert "question_plan" in data
         assert data["question_plan"] is not None
-        # Phase 2 placeholder schema
+        # R6-B Phase 3: reason_code 由 deterministic policy 决定, 不再是 phase2_placeholder
         qp = data["question_plan"]
         assert "slot" in qp
-        assert qp["reason_code"] == "phase2_placeholder"
+        assert qp["reason_code"] != "phase2_placeholder", (
+            f"Phase 3 不再返回 phase2_placeholder, 实际 {qp['reason_code']!r}"
+        )
+        # 确认是 policy 的合法 reason_code
+        from core.interview_policy import (
+            INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
+            INTERVIEW_POLICY_REASON_NEXT_SLOT,
+            INTERVIEW_POLICY_REASON_NO_MORE,
+        )
+        assert qp["reason_code"] in {
+            INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
+            INTERVIEW_POLICY_REASON_NEXT_SLOT,
+            INTERVIEW_POLICY_REASON_NO_MORE,
+        }, f"reason_code 非法: {qp['reason_code']!r}"
         assert isinstance(qp["low_confidence_slots"], list)
 
     def test_reply_in_llm_assisted_session_uses_llm_extractor(

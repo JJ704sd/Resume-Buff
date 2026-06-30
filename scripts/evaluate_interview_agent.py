@@ -1,29 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Round 6-A Phase 5: Interview Agent eval 脚本(脚手架 + 规则版基线)
+Round 6-B Phase 5: Interview Agent eval compare 脚本(rules/llm/compare)
 
-设计目标(对齐 plan §5.1-5.4):
+设计目标(对齐 R6-B spec §8 + §10 Phase 5):
   - 跑固定 eval set(3 条 plan §5.4 固定样本 + 7 条 simulated samples)
-  - 用 core.interview_agent 的规则版 extract_slots / build_draft_card 跑基线
+  - --extractor rules   走规则版基线(R6-A Phase 5 默认行为, 字节级一致)
+  - --extractor llm     走 LLM 意图路径;offline 模式不得发网络 → 标记 llm_disabled_fallback
+  - --extractor compare 同一批样本跑 rules + llm 意图,报告输出对照表
   - 输出 markdown 报告到 backend/logs/interview_eval_report.md(在 .gitignore)
   - 报告只含聚合指标 + 每条样本 slot key/长度/schema_pass/fallback_used/completeness/latency
-  - 报告不含 user_message / draft_card 原文 / API key / 真实 PII
-  - 默认 mode=offline,不发 HTTP
+  - 报告不含 user_message / draft_card 原文 / API key / 真实 PII / prompt / raw response
+  - 默认 mode=offline,默认 --extractor rules(零发网络, 跟 R6-A Phase 5 字节级一致)
   - 不挂 pre-push hook(spec §12 #3 D6 决策)
 
 复用 R5-D scripts/evaluate_agent_workflow.py 的 helper:
   - _resolve_eval_mode / _get_llm_eval_config / _check_pii_safe / _percentile
   - MODE_OFFLINE / MODE_LIVE / MODE_AUTO / VALID_EVAL_MODES
 
-**Simulated data 标注边界**(对齐本轮跟用户对齐的边界):
-  - EVAL_SET 里 3 条 plan 样本 source="plan_baseline"(脱敏,固定)
-  - SIMULATED_SAMPLES 里 7 条 source="simulated_user_v1"(基于我们对话里讨论的项目做脱敏化)
-  - 报告里区分 simulated_count vs real_user_count
-  - 不污染 plan §5.1 启动条件 — 等用户在 chat panel 真跑 10+ 轮再切到 real data
+边界(R6-B spec §8 + §12):
+  - offline + (--extractor llm | --extractor compare) 强制走规则版, fallback_category="llm_disabled_fallback"
+  - live + (--extractor llm | --extractor compare) + 无 LLM_API_KEY → 拒绝
+    (RuntimeError 错误信息不含 key 值 / env var 名)
+  - live + (--extractor llm | --extractor compare) + 有 LLM_API_KEY → 真发网络
+  - 报告 / stdout 严禁出现 user_message / prompt / raw response / source_span / API key
+  - 不修改 evaluate_agent_workflow.py / evaluate_prompt_versions.py
+  - 不引入新 LLM 调用路径(只复用 core.interview_agent._extract_slots_via_llm)
+  - 不引入新依赖(纯 stdlib)
+  - 不挂 pre-push hook
 
 跑法:
-    D:\\python3.11\\python.exe scripts/evaluate_interview_agent.py --mode offline
+    D:\\python3.11\\python.exe scripts/evaluate_interview_agent.py --mode offline --extractor rules
+    D:\\python3.11\\python.exe scripts/evaluate_interview_agent.py --mode offline --extractor compare
+    D:\\python3.11\\python.exe scripts/evaluate_interview_agent.py --mode live   --extractor compare --output backend/logs/interview_eval_report_live.md
     → 写报告到 backend/logs/interview_eval_report.md
     → 打印摘要到 stdout
 """
@@ -70,7 +79,35 @@ from evaluate_agent_workflow import (  # noqa: E402
 
 # ---- 输入 / 输出路径 ----
 DEFAULT_OUTPUT = BACKEND_DIR / "logs" / "interview_eval_report.md"
-VERSION = "R6-A Phase 5 (规则版 baseline; R6-A Phase 4 LLM slot extraction 已上线但需 key + 真实样本, 本报告仅跑 rules 路径)"
+VERSION = "R6-B Phase 5 (eval compare; rules/llm/compare 三模式; offline compare 双组同跑)"
+
+# ---- R6-B Phase 5: --extractor 模式常量(spec §8) ----
+EXTRACTOR_RULES: str = "rules"
+"""走纯规则版 baseline, --extractor 默认值。字节级一致 R6-A Phase 5 行为。"""
+
+EXTRACTOR_LLM: str = "llm"
+"""走 LLM 意图路径;offline 模式强制走 rules + llm_disabled_fallback;live + 有 key 走真 LLM。"""
+
+EXTRACTOR_COMPARE: str = "compare"
+"""同一批样本跑 rules + llm 意图 2 组, 报告输出 rules vs llm_assisted 对照表。"""
+
+EXTRACTOR_MODES: tuple[str, ...] = (EXTRACTOR_RULES, EXTRACTOR_LLM, EXTRACTOR_COMPARE)
+
+# ---- R6-B Phase 5: 5 类 fallback_category(对齐 R5-C Phase 1 规范) ----
+FALLBACK_NONE: str = "none"
+FALLBACK_LLM_DISABLED: str = "llm_disabled_fallback"
+FALLBACK_TOOL_ERROR: str = "tool_error_fallback"
+FALLBACK_SCHEMA_RETRY: str = "schema_retry_fallback"
+FALLBACK_WORKFLOW_ABORT: str = "workflow_abort_fallback"
+
+# 隐私自检: 用于 _check_pii_safe 兜底白名单(同 R5-D _PII_PLACEHOLDER_STRINGS)
+PII_PLACEHOLDER_STRINGS: tuple[str, ...] = (
+    "13800000000",  # 脱敏版手机占位符(11 位但明显是 demo)
+    "your_email@example.com",  # 脱敏版邮箱占位符
+)
+
+# 低置信度阈值(对齐 core.interview_agent.INTERVIEW_LOW_CONFIDENCE_THRESHOLD = 0.6)
+INTERVIEW_EVAL_LOW_CONFIDENCE: float = 0.6
 
 
 # ======================================================================
@@ -432,6 +469,85 @@ def _fabrication_guard(draft_card: dict, user_messages: list[str]) -> bool:
 
 
 # ======================================================================
+# R6-B Phase 5: 低置信度 slot 统计(spec §8 指标)
+# ======================================================================
+def _count_low_confidence_slots(session) -> tuple[int, int]:
+    """
+    统计 session.slot_meta 里 confidence < INTERVIEW_EVAL_LOW_CONFIDENCE(0.6) 的 meta 条数。
+
+    返回 (low_count, total_count):
+      - low_count: confidence < 0.6 的 meta 条数
+      - total_count: session.slot_meta 里所有 meta 条数(含 high / low / 不合规)
+
+    隐私边界(同 spec §5.2):
+      - 只读 confidence 字段(0.0-1.0 number / bool 被拒)
+      - 不读 source_span / user_message
+
+    边界:
+      - session.slot_meta 不是 dict 或 None → (0, 0)
+      - 单 entry 缺 confidence / confidence 是 bool / 非 number → 该条不计入 low_count
+        但仍计入 total_count
+    """
+    slot_meta = getattr(session, "slot_meta", None)
+    if not isinstance(slot_meta, dict) or not slot_meta:
+        return (0, 0)
+    low = 0
+    total = 0
+    for _slot, entries in slot_meta.items():
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if not isinstance(e, dict):
+                total += 1
+                continue
+            total += 1
+            conf = e.get("confidence")
+            # bool 拒绝(spec §5.2: bool 不接受)
+            if isinstance(conf, bool):
+                continue
+            if not isinstance(conf, (int, float)):
+                continue
+            if conf < INTERVIEW_EVAL_LOW_CONFIDENCE:
+                low += 1
+    return (low, total)
+
+
+# ======================================================================
+# R6-B Phase 5: fallback_category 分类(spec §8 + R5-C Phase 1 5 类常量)
+# ======================================================================
+def _classify_interview_fallback_category(
+    *,
+    extractor_mode: str,
+    actual_mode: str,
+    error_type: str | None,
+) -> str:
+    """
+    把每条 eval row 分类到 5 类 fallback_category(spec §2.2 + R5-C Phase 1 一致)。
+
+    优先级:
+      1. error_type 非 None(单条样本跑挂了)→ FALLBACK_WORKFLOW_ABORT
+      2. extractor_mode=rules + 实际 rules → FALLBACK_NONE
+      3. extractor_mode=llm + 实际 llm_assisted → FALLBACK_NONE
+      4. extractor_mode=llm + 实际 rules → FALLBACK_LLM_DISABLED
+         (offline 模式强制规则版 / live + 无 key / live + LLM 失败都归此类)
+      5. 其它 → FALLBACK_NONE(spec §6 兜底)
+
+    边界:
+      - 不读 env / 不发网络
+      - 纯函数, 可直接被测试调
+    """
+    if error_type is not None:
+        return FALLBACK_WORKFLOW_ABORT
+    if extractor_mode == EXTRACTOR_RULES:
+        return FALLBACK_NONE
+    # extractor_mode == EXTRACTOR_LLM
+    if actual_mode == "llm_assisted":
+        return FALLBACK_NONE
+    # LLM 意图但实际走 rules — 必然是 fallback
+    return FALLBACK_LLM_DISABLED
+
+
+# ======================================================================
 # 单条评估
 # ======================================================================
 @dataclass
@@ -450,6 +566,16 @@ class EvalRow:
     captured_slot_keys: list[str] = field(default_factory=list)
     captured_slot_lengths: dict[str, int] = field(default_factory=dict)
     error_type: str | None = None
+    # R6-B Phase 5 新增(spec §8)
+    extractor_mode: str = EXTRACTOR_RULES
+    """本次 eval 意图的抽取模式: 'rules' / 'llm'。"""
+    fallback_category: str = FALLBACK_NONE
+    """5 类 fallback 分类(对齐 R5-C Phase 1): none / llm_disabled_fallback /
+    tool_error_fallback / schema_retry_fallback / workflow_abort_fallback。"""
+    low_confidence_slot_count: int = 0
+    """session.slot_meta 里 confidence < 0.6 的 meta 条数(spec §5.2)。"""
+    total_slot_meta_count: int = 0
+    """session.slot_meta 总 meta 条数(分母 — 算 low_confidence_slot_rate 用)。"""
 
     def to_dict(self) -> dict:
         return {
@@ -459,23 +585,44 @@ class EvalRow:
             "gap_id": self.gap_id,
             "schema_pass": self.schema_pass,
             "fallback_used": self.fallback_used,
+            "fallback_category": self.fallback_category,
+            "extractor_mode": self.extractor_mode,
             "draft_card_completeness": round(self.draft_card_completeness, 3),
             "fabrication_guard": self.fabrication_guard,
             "latency_ms": self.latency_ms,
             "rewrite_changed_count": self.rewrite_changed_count,
             "captured_slot_keys": list(self.captured_slot_keys),
             "captured_slot_lengths": dict(self.captured_slot_lengths),
+            "low_confidence_slot_count": self.low_confidence_slot_count,
+            "total_slot_meta_count": self.total_slot_meta_count,
             "error_type": self.error_type,
         }
 
 
-def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
+def _evaluate_one(
+    sample: dict,
+    materials: dict,
+    *,
+    extractor_mode: str = EXTRACTOR_RULES,
+) -> EvalRow:
     """
-    跑单条样本 × 规则版(无 LLM 调用):
-      1. create_session(plan §1.3)
+    跑单条样本 × 单组:
+      1. create_session(plan §1.3, R6-B Phase 2 enable_interview_llm 由 extractor_mode 决定)
       2. 多轮 user_messages 走 apply_action(answer) 累积 slot
       3. can_draft → build_draft_card
-      4. 算 schema_pass / completeness / fabrication_guard / latency
+      4. 算 schema_pass / completeness / fabrication_guard / latency / fallback_category
+
+    R6-B Phase 5: extractor_mode 取值:
+      - EXTRACTOR_RULES: 字节级一致 R6-A Phase 5 — enable_interview_llm=False, session.interview_mode="rules"
+      - EXTRACTOR_LLM:   enable_interview_llm=True; 实际 session.interview_mode 由
+                         core.interview_agent._decide_interview_mode 决定
+                         (有 key → llm_assisted; 无 key → rules + warning)
+                         不论 offline / live, 实际走 rules 都标记 FALLBACK_LLM_DISABLED
+
+    隐私边界(spec §12 + AGENTS.md):
+      - sample.user_messages 只在内存, 不写 EvalRow.to_dict() / 不写报告
+      - capture 的 slot 值只存 key + 长度, 不存原文
+      - session.slot_meta 只读 confidence 字段(不算 source_span / user_message)
     """
     t0 = time.perf_counter()
     name = sample["name"]
@@ -486,6 +633,10 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
     user_messages = list(sample.get("user_messages", []) or [])
     expected = sample.get("expected_slots", {}) or {}
 
+    if extractor_mode not in EXTRACTOR_MODES:
+        extractor_mode = EXTRACTOR_RULES  # 兜底: 非法值回 rules, 字节级一致老路径
+    enable_llm_intent = (extractor_mode == EXTRACTOR_LLM)
+
     # parse_jd + match_score 走 parse_jd 一次(规则版不需要 LLM)
     try:
         jd_digest = parse_jd(jd_text)
@@ -493,14 +644,20 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
         return EvalRow(
             name=name, source=source, role=role, gap_id=gap_id,
             schema_pass=False, fallback_used=True,
+            fallback_category=FALLBACK_WORKFLOW_ABORT,
+            extractor_mode=extractor_mode,
             draft_card_completeness=0.0, fabrication_guard=True,
             latency_ms=int((time.perf_counter() - t0) * 1000),
-            rewrite_changed_count=0, error_type=f"parse_jd:{type(e).__name__}",
+            rewrite_changed_count=0,
+            error_type=f"parse_jd:{type(e).__name__}",
         )
 
     # create_session
     try:
-        session = create_session(role, jd_text, materials)
+        session = create_session(
+            role, jd_text, materials,
+            enable_interview_llm=enable_llm_intent,
+        )
         # 强制选 plan §5.4 指定的 gap_id(从 _default_candidates() 拿)
         from core.interview_agent import _default_candidates  # noqa: PLC0415
         gap_found = None
@@ -512,6 +669,8 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
             return EvalRow(
                 name=name, source=source, role=role, gap_id=gap_id,
                 schema_pass=False, fallback_used=True,
+                fallback_category=FALLBACK_WORKFLOW_ABORT,
+                extractor_mode=extractor_mode,
                 draft_card_completeness=0.0, fabrication_guard=True,
                 latency_ms=int((time.perf_counter() - t0) * 1000),
                 rewrite_changed_count=0, error_type="gap_not_in_default",
@@ -521,6 +680,8 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
         return EvalRow(
             name=name, source=source, role=role, gap_id=gap_id,
             schema_pass=False, fallback_used=True,
+            fallback_category=FALLBACK_WORKFLOW_ABORT,
+            extractor_mode=extractor_mode,
             draft_card_completeness=0.0, fabrication_guard=True,
             latency_ms=int((time.perf_counter() - t0) * 1000),
             rewrite_changed_count=0, error_type=f"create_session:{type(e).__name__}",
@@ -533,6 +694,8 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
         return EvalRow(
             name=name, source=source, role=role, gap_id=gap_id,
             schema_pass=False, fallback_used=True,
+            fallback_category=FALLBACK_WORKFLOW_ABORT,
+            extractor_mode=extractor_mode,
             draft_card_completeness=0.0, fabrication_guard=True,
             latency_ms=int((time.perf_counter() - t0) * 1000),
             rewrite_changed_count=0, error_type=f"answer_loop:{type(e).__name__}",
@@ -547,6 +710,8 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
         return EvalRow(
             name=name, source=source, role=role, gap_id=gap_id,
             schema_pass=False, fallback_used=True,
+            fallback_category=FALLBACK_WORKFLOW_ABORT,
+            extractor_mode=extractor_mode,
             draft_card_completeness=0.0, fabrication_guard=True,
             latency_ms=int((time.perf_counter() - t0) * 1000),
             rewrite_changed_count=0, error_type=f"build_draft:{type(e).__name__}",
@@ -565,8 +730,14 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
                 schema_pass = False
                 break
 
-    # fallback_used: 规则版无 LLM, 总是 fallback=False(没走 LLM,也没走 LLM 失败)
-    fallback_used = False
+    # R6-B Phase 5: fallback_category 分类(spec §8 + R5-C Phase 1 5 类)
+    actual_mode = getattr(session, "interview_mode", "rules") or "rules"
+    fallback_category = _classify_interview_fallback_category(
+        extractor_mode=extractor_mode,
+        actual_mode=actual_mode,
+        error_type=None,
+    )
+    fallback_used = (fallback_category != FALLBACK_NONE)
 
     # completeness
     completeness = _compute_completeness(card)
@@ -587,18 +758,25 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
         for k in captured_keys if not k.startswith("_")
     }
 
+    # R6-B Phase 5: 低置信度 slot 统计(spec §8 指标)
+    low_count, total_count = _count_low_confidence_slots(session)
+
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     return EvalRow(
         name=name, source=source, role=role, gap_id=gap_id,
         schema_pass=schema_pass,
         fallback_used=fallback_used,
+        fallback_category=fallback_category,
+        extractor_mode=extractor_mode,
         draft_card_completeness=completeness,
         fabrication_guard=fabric_ok,
         latency_ms=latency_ms,
         rewrite_changed_count=rewrite_changed_count,
         captured_slot_keys=captured_keys,
         captured_slot_lengths=captured_lengths,
+        low_confidence_slot_count=low_count,
+        total_slot_meta_count=total_count,
         error_type=None,
     )
 
@@ -607,7 +785,18 @@ def _evaluate_one(sample: dict, materials: dict) -> EvalRow:
 # 全局聚合
 # ======================================================================
 def compute_metrics(all_rows: list[EvalRow]) -> dict:
-    """聚合 6 个全局指标 + 按 source 分组."""
+    """
+    聚合全局指标 + 按 source / extractor_mode 分组.
+
+    R6-A Phase 5 指标(spec §5.4):
+      - schema_pass_rate / fallback_rate / avg_completeness /
+        fabrication_violations_count / avg_latency_ms / p95_latency_ms
+
+    R6-B Phase 5 新增(spec §8):
+      - low_confidence_slot_rate: 聚合 session.slot_meta 里 confidence < 0.6 的比例
+      - by_extractor: 按 extractor_mode 二次分组的 metrics(compare 模式用)
+      - 报告新增 fallback_category_breakdown: 5 类 fallback 分布(对齐 R5-C Phase 1)
+    """
     if not all_rows:
         return {
             "total": 0,
@@ -617,7 +806,16 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
             "fabrication_violations_count": 0,
             "avg_latency_ms": 0,
             "p95_latency_ms": 0,
+            "low_confidence_slot_rate": 0.0,
             "by_source": {},
+            "by_extractor": {},
+            "fallback_category_breakdown": {
+                FALLBACK_NONE: 0,
+                FALLBACK_LLM_DISABLED: 0,
+                FALLBACK_TOOL_ERROR: 0,
+                FALLBACK_SCHEMA_RETRY: 0,
+                FALLBACK_WORKFLOW_ABORT: 0,
+            },
         }
     n = len(all_rows)
     schema_pass = sum(1 for r in all_rows if r.schema_pass)
@@ -626,6 +824,25 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
     fabric_viol = sum(1 for r in all_rows if not r.fabrication_guard)
     latencies = [r.latency_ms for r in all_rows]
 
+    # R6-B Phase 5: low_confidence_slot_rate 聚合
+    total_low = sum(r.low_confidence_slot_count for r in all_rows)
+    total_meta = sum(r.total_slot_meta_count for r in all_rows)
+    low_confidence_slot_rate = (
+        round(total_low / total_meta, 3) if total_meta > 0 else 0.0
+    )
+
+    # R6-B Phase 5: fallback_category_breakdown 5 类分布(对齐 R5-C Phase 1)
+    fb_cat_counter: dict[str, int] = {
+        FALLBACK_NONE: 0,
+        FALLBACK_LLM_DISABLED: 0,
+        FALLBACK_TOOL_ERROR: 0,
+        FALLBACK_SCHEMA_RETRY: 0,
+        FALLBACK_WORKFLOW_ABORT: 0,
+    }
+    for r in all_rows:
+        cat = r.fallback_category or FALLBACK_NONE
+        fb_cat_counter[cat] = fb_cat_counter.get(cat, 0) + 1
+
     by_source: dict[str, dict] = {}
     for r in all_rows:
         bucket = by_source.setdefault(
@@ -633,7 +850,7 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
             {
                 "total": 0, "schema_pass": 0, "fallback": 0,
                 "completeness_sum": 0.0, "fabric_viol": 0,
-                "latencies": [],
+                "latencies": [], "low_sum": 0, "meta_sum": 0,
             },
         )
         bucket["total"] += 1
@@ -645,6 +862,8 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         if not r.fabrication_guard:
             bucket["fabric_viol"] += 1
         bucket["latencies"].append(r.latency_ms)
+        bucket["low_sum"] += r.low_confidence_slot_count
+        bucket["meta_sum"] += r.total_slot_meta_count
 
     by_source_summary: dict[str, dict] = {}
     for src, b in by_source.items():
@@ -655,6 +874,47 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
             "avg_completeness": round(b["completeness_sum"] / b["total"], 3) if b["total"] else 0.0,
             "fabrication_violations_count": b["fabric_viol"],
             "avg_latency_ms": int(sum(b["latencies"]) / len(b["latencies"])) if b["latencies"] else 0,
+            "low_confidence_slot_rate": (
+                round(b["low_sum"] / b["meta_sum"], 3) if b["meta_sum"] > 0 else 0.0
+            ),
+        }
+
+    # R6-B Phase 5: by_extractor 二次分组(compare 模式用 — 含 2 组)
+    by_extractor: dict[str, dict] = {}
+    for r in all_rows:
+        bucket = by_extractor.setdefault(
+            r.extractor_mode,
+            {
+                "total": 0, "schema_pass": 0, "fallback": 0,
+                "completeness_sum": 0.0, "fabric_viol": 0,
+                "latencies": [], "low_sum": 0, "meta_sum": 0,
+            },
+        )
+        bucket["total"] += 1
+        if r.schema_pass:
+            bucket["schema_pass"] += 1
+        if r.fallback_used:
+            bucket["fallback"] += 1
+        bucket["completeness_sum"] += r.draft_card_completeness
+        if not r.fabrication_guard:
+            bucket["fabric_viol"] += 1
+        bucket["latencies"].append(r.latency_ms)
+        bucket["low_sum"] += r.low_confidence_slot_count
+        bucket["meta_sum"] += r.total_slot_meta_count
+
+    by_extractor_summary: dict[str, dict] = {}
+    for ext, b in by_extractor.items():
+        by_extractor_summary[ext] = {
+            "total": b["total"],
+            "schema_pass_rate": round(b["schema_pass"] / b["total"], 3) if b["total"] else 0.0,
+            "fallback_rate": round(b["fallback"] / b["total"], 3) if b["total"] else 0.0,
+            "avg_completeness": round(b["completeness_sum"] / b["total"], 3) if b["total"] else 0.0,
+            "fabrication_violations_count": b["fabric_viol"],
+            "avg_latency_ms": int(sum(b["latencies"]) / len(b["latencies"])) if b["latencies"] else 0,
+            "p95_latency_ms": _percentile(b["latencies"], 95) if b["latencies"] else 0,
+            "low_confidence_slot_rate": (
+                round(b["low_sum"] / b["meta_sum"], 3) if b["meta_sum"] > 0 else 0.0
+            ),
         }
 
     return {
@@ -665,7 +925,10 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         "fabrication_violations_count": fabric_viol,
         "avg_latency_ms": int(sum(latencies) / len(latencies)) if latencies else 0,
         "p95_latency_ms": _percentile(latencies, 95),
+        "low_confidence_slot_rate": low_confidence_slot_rate,
         "by_source": by_source_summary,
+        "by_extractor": by_extractor_summary,
+        "fallback_category_breakdown": fb_cat_counter,
     }
 
 
@@ -678,10 +941,12 @@ def _row_summary_for_report(row: EvalRow) -> str:
     lens_str = ", ".join(f"{k}={v}" for k, v in row.captured_slot_lengths.items()) or "—"
     return (
         f"`{row.name}` ({row.source}) | role=`{row.role}` gap=`{row.gap_id}` | "
+        f"extractor=`{row.extractor_mode}` fb_cat=`{row.fallback_category}` | "
         f"schema_pass={'✅' if row.schema_pass else '❌'} | "
         f"completeness={row.draft_card_completeness:.2f} | "
         f"fabrication={'✅' if row.fabrication_guard else '❌'} | "
         f"latency={row.latency_ms}ms | "
+        f"low_conf={row.low_confidence_slot_count}/{row.total_slot_meta_count} | "
         f"slots=[{keys_str}] lens=[{lens_str}]"
         f"{f' | error={row.error_type}' if row.error_type else ''}"
     )
@@ -694,30 +959,42 @@ def write_report(
     llm_eval_config: dict,
     *,
     requested_mode: str,
+    extractor_mode: str = EXTRACTOR_RULES,
+    by_extractor_metrics: dict | None = None,
 ) -> None:
     """
-    报告章节(plan §5.4 + R6-B 校准):
+    报告章节(plan §5.4 + R6-B Phase 5 spec §8 + §10):
       ## 0、LLM 元信息 (R5-D Phase 2 复用)
       ## 一、Eval set 概览
-      ## 二、规则版基线 (R6-A Phase 4 LLM slot extraction 已上线, 本报告仅跑 rules; llm_assisted 对照待 R6-B Phase 5 eval compare)
-      ## 三、每条样本摘要 (只含 slot key + 长度, 不含原文)
-      ## 四、Fabrication guard
-      ## 五、延迟分布
-      ## 六、隐私检查
-      ## 七、结论
+      ## 二、{extractor_label} 路径基线(全局聚合 + by_source)
+      ## 2.5、Rules vs LLM-assisted 对照(仅 --extractor compare 渲染)
+      ## 三、fallback_category 分布(R6-B Phase 5 新增, 5 类对齐 R5-C)
+      ## 四、每条样本摘要 (只含 slot key + 长度, 不含原文)
+      ## 五、Fabrication guard
+      ## 六、延迟分布
+      ## 七、隐私检查
+      ## 八、结论
 
-    隐私边界:
-      - 不含 user_message / draft_card 原文
-      - 不含 LLM_API_KEY / 含敏感 path 的 base_url
+    隐私边界(spec §8 + §12 + AGENTS.md):
+      - 不含 user_message / draft_card 原文 / prompt / raw response / source_span / API key
       - placeholder 白名单沿用 R5-D (_check_pii_safe)
       - 报告路径在 .gitignore (backend/logs/)
+      - offline 模式 + llm 意图 → row.fallback_category="llm_disabled_fallback"
+        写在报告里, 让审计一眼看到 LLM 没真跑
     """
+    extractor_label = {
+        EXTRACTOR_RULES: "规则版",
+        EXTRACTOR_LLM: "LLM 意图",
+        EXTRACTOR_COMPARE: "Compare (rules + llm 意图)",
+    }.get(extractor_mode, extractor_mode)
+
     lines: list[str] = []
-    lines.append("# Interview Agent 评测报告 (R6-A Phase 5 规则版 baseline)")
+    lines.append(f"# Interview Agent 评测报告 ({extractor_label})")
     lines.append("")
     lines.append(f"> 版本: {VERSION}")
     lines.append(f"> 跑测时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"> Mode requested: **{requested_mode}** | resolved: **{llm_eval_config['llm_mode']}**")
+    lines.append(f"> Eval mode requested: **{requested_mode}** | resolved: **{llm_eval_config['llm_mode']}**")
+    lines.append(f"> Extractor mode: **{extractor_mode}**")
     lines.append("")
 
     # 0、LLM 元信息(R5-D Phase 2 复用)
@@ -735,6 +1012,11 @@ def write_report(
     lines.append("## 一、Eval set 概览")
     lines.append("")
     lines.append(f"- 样本总数: **{metrics['total']}**")
+    if extractor_mode == EXTRACTOR_COMPARE:
+        lines.append(
+            f"- compare 双组: rules × {len(EVAL_SET_ALL)} + llm 意图 × {len(EVAL_SET_ALL)} "
+            f"= {len(EVAL_SET_ALL) * 2}"
+        )
     lines.append("- 分组:")
     for src, b in metrics["by_source"].items():
         lines.append(
@@ -746,8 +1028,8 @@ def write_report(
                  "Simulated 不算真实使用反馈(plan §5.1 启动条件 ③ 未满足)。")
     lines.append("")
 
-    # 二、规则版基线(R6-A Phase 4 LLM 已落地但本报告只跑 rules; llm_assisted 对照待 R6-B Phase 5 eval compare)
-    lines.append("## 二、规则版基线 (R6-A Phase 4 LLM slot extraction 已上线, 但本报告仅跑 rules baseline; llm_assisted 对照表等 R6-B Phase 5 eval compare)")
+    # 二、{extractor_label} 路径基线
+    lines.append(f"## 二、{extractor_label} 路径基线(R6-B Phase 5)")
     lines.append("")
     lines.append("| 指标 | 全局 |")
     lines.append("|---|---|")
@@ -757,45 +1039,104 @@ def write_report(
     lines.append(f"| `fabrication_violations_count` | {metrics['fabrication_violations_count']} |")
     lines.append(f"| `avg_latency_ms` | {metrics['avg_latency_ms']} |")
     lines.append(f"| `p95_latency_ms` | {metrics['p95_latency_ms']} |")
+    lines.append(f"| `low_confidence_slot_rate` | {metrics['low_confidence_slot_rate']:.2f} |")
     lines.append("")
     lines.append("按 source 分组:")
     lines.append("")
-    lines.append("| source | total | schema_pass_rate | avg_completeness | fabric_viol | avg_latency_ms |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| source | total | schema_pass_rate | avg_completeness | fabric_viol | avg_latency_ms | low_conf_rate |")
+    lines.append("|---|---|---|---|---|---|---|")
     for src, b in metrics["by_source"].items():
         lines.append(
             f"| `{src}` | {b['total']} | {b['schema_pass_rate']:.2f} | "
             f"{b['avg_completeness']:.2f} | {b['fabrication_violations_count']} | "
-            f"{b['avg_latency_ms']} |"
+            f"{b['avg_latency_ms']} | {b['low_confidence_slot_rate']:.2f} |"
         )
     lines.append("")
 
-    # 三、每条样本摘要(只含 slot key + 长度)
-    lines.append("## 三、每条样本摘要 (只含 slot key + 长度, 不含原文)")
+    # 2.5、Rules vs LLM-assisted 对照 (compare 模式)
+    if extractor_mode == EXTRACTOR_COMPARE and by_extractor_metrics:
+        lines.append("## 2.5、Rules vs LLM-assisted 对照 (R6-B Phase 5 eval compare)")
+        lines.append("")
+        rules_m = by_extractor_metrics.get(EXTRACTOR_RULES, {})
+        llm_m = by_extractor_metrics.get(EXTRACTOR_LLM, {})
+        lines.append("| 指标 | rules | llm 意图(offline → 强制规则 fallback) |")
+        lines.append("|---|---|---|")
+        # 7 指标对照
+        rows_pairs = [
+            ("total", "样本数", lambda m: m.get("total", 0)),
+            ("schema_pass_rate", "schema_pass_rate", lambda m: f"{m.get('schema_pass_rate', 0):.2f}"),
+            ("fallback_rate", "fallback_rate", lambda m: f"{m.get('fallback_rate', 0):.2f}"),
+            ("avg_completeness", "avg_completeness", lambda m: f"{m.get('avg_completeness', 0):.2f}"),
+            ("fabrication_violations_count", "fabrication_violations", lambda m: m.get("fabrication_violations_count", 0)),
+            ("avg_latency_ms", "avg_latency_ms", lambda m: m.get("avg_latency_ms", 0)),
+            ("p95_latency_ms", "p95_latency_ms", lambda m: m.get("p95_latency_ms", 0)),
+            ("low_confidence_slot_rate", "low_confidence_slot_rate", lambda m: f"{m.get('low_confidence_slot_rate', 0):.2f}"),
+        ]
+        for _key, label, fn in rows_pairs:
+            lines.append(f"| `{label}` | {fn(rules_m)} | {fn(llm_m)} |")
+        lines.append("")
+        # 增量 / 差异(delta) — compare 视觉强化
+        if rules_m and llm_m:
+            delta_schema = llm_m.get("schema_pass_rate", 0) - rules_m.get("schema_pass_rate", 0)
+            delta_complete = llm_m.get("avg_completeness", 0) - rules_m.get("avg_completeness", 0)
+            lines.append("**Delta (llm 意图 − rules):**")
+            lines.append(f"- `schema_pass_rate`: {delta_schema:+.2f}")
+            lines.append(f"- `avg_completeness`: {delta_complete:+.2f}")
+            lines.append("")
+        lines.append(
+            "> offline 模式下, llm 意图路径无法发网络 → 全部走规则版 + 标记 `llm_disabled_fallback`。"
+            "Delta 不代表真实 LLM 增益, 仅反映双组抽取路径在同一规则版上的稳定性。"
+            "live 模式 + 已配置 LLM 凭据才会真发网络, 那时 delta 才反映 LLM 抽取质量。"
+        )
+        lines.append("")
+
+    # 三、fallback_category 分布(R6-B Phase 5 新增)
+    lines.append("## 三、fallback_category 分布 (R6-B Phase 5, 对齐 R5-C Phase 1 5 类)")
+    lines.append("")
+    fb_break = metrics.get("fallback_category_breakdown", {})
+    lines.append("| 类别 | 数量 | 占比 |")
+    lines.append("|---|---|---|")
+    n = max(1, metrics.get("total", 0))
+    for cat in (
+        FALLBACK_NONE, FALLBACK_LLM_DISABLED, FALLBACK_TOOL_ERROR,
+        FALLBACK_SCHEMA_RETRY, FALLBACK_WORKFLOW_ABORT,
+    ):
+        cnt = fb_break.get(cat, 0)
+        rate = round(cnt / n, 3) if n else 0.0
+        lines.append(f"| `{cat}` | {cnt} | {rate:.2f} |")
+    lines.append("")
+    lines.append(
+        "> 类别定义: `none` = 无 fallback; `llm_disabled_fallback` = LLM 意图但实际走规则版"
+        "(offline 模式 / 无 key / LLM 失败); `tool_error_fallback` / `schema_retry_fallback` / "
+        "`workflow_abort_fallback` 留给后续 live 模式跑出的真实 LLM 失败场景。"
+    )
+    lines.append("")
+
+    # 四、每条样本摘要(只含 slot key + 长度)
+    lines.append("## 四、每条样本摘要 (只含 slot key + 长度, 不含原文)")
     lines.append("")
     for row in all_rows:
         lines.append(f"- {_row_summary_for_report(row)}")
     lines.append("")
 
-    # 四、Fabrication guard
-    lines.append("## 四、Fabrication guard")
+    # 五、Fabrication guard
+    lines.append("## 五、Fabrication guard")
     lines.append("")
     lines.append(f"- 总 violation 数: **{metrics['fabrication_violations_count']}**")
     viol_rows = [r for r in all_rows if not r.fabrication_guard]
     if viol_rows:
         lines.append("- 触发 violation 的样本:")
         for r in viol_rows:
-            lines.append(f"  - `{r.name}` ({r.source})")
+            lines.append(f"  - `{r.name}` ({r.source}) extractor=`{r.extractor_mode}`")
     else:
         lines.append("- 无 violation(所有样本的 draft_bullets 量化数字均能在 user_messages 里找到来源)")
     lines.append("")
     lines.append("> 简单实现: regex `(\\d+(?:\\.\\d+)?)\\s*(人|%|倍|小时|天|次|万|个|条|例|分|层|个科室)` "
-                 "抽取 bullets 里所有量化短语, 检查它们是否都出现在 user_messages 原文里。"
-                 "R6-B Phase 5 eval compare 上线后, 这里升级为 rules vs llm_assisted 对照表。")
+                 "抽取 bullets 里所有量化短语, 检查它们是否都出现在 user_messages 原文里。")
     lines.append("")
 
-    # 五、延迟分布
-    lines.append("## 五、延迟分布")
+    # 六、延迟分布
+    lines.append("## 六、延迟分布")
     lines.append("")
     latencies = [r.latency_ms for r in all_rows]
     if latencies:
@@ -808,11 +1149,12 @@ def write_report(
         lines.append("- (无样本)")
     lines.append("")
     lines.append("> offline 模式 = 纯 stdlib + 规则 regex, 不含任何 LLM 调用, latency 主要来自 "
-                 "`parse_jd` + `match_score` + JSON 编解码。")
+                 "`parse_jd` + `match_score` + JSON 编解码。live 模式 + LLM 路径会额外叠加 "
+                 "`urllib POST /chat/completions` 的网络耗时, 仅作参考, 不作为 eval 指标硬门槛。")
     lines.append("")
 
-    # 六、隐私检查
-    lines.append("## 六、隐私检查")
+    # 七、隐私检查
+    lines.append("## 七、隐私检查")
     lines.append("")
     # 把报告本身喂给 _check_pii_safe 做自检
     report_text = "\n".join(lines)
@@ -823,26 +1165,46 @@ def write_report(
         lines.append("- `_check_pii_safe(row + metrics)` 自检: **❌ 失败** (请检查是否泄漏了真实 PII)")
     lines.append("- 不含 user_message 原文 (R5-E 保护)")
     lines.append("- 不含 draft_card 原文 (R5-E 保护)")
-    lines.append("- 不含 LLM_API_KEY / 含敏感 path 的 base_url (R5-D 保护)")
+    lines.append("- 不含 prompt / raw response (R6-B Phase 5 新增保护)")
+    lines.append("- 不含 LLM 抽取源 span 明文 (R6-B Phase 1 保护, 仅存 hash + 长度)")
+    lines.append("- 不含 API key 类凭据 / 含敏感 path 的 base_url (R5-D 保护)")
     lines.append("")
 
-    # 七、结论
-    lines.append("## 七、结论")
+    # 八、结论
+    lines.append("## 八、结论")
     lines.append("")
     lines.append(
-        f"- Phase 5 脚手架就绪: 跑通 {metrics['total']} 条样本 × 规则版抽取, "
-        f"产出了 6 项全局指标 + {len(metrics['by_source'])} 个 source 分组。"
+        f"- Phase 5 eval compare 上线: 支持 `--extractor rules|llm|compare` 三模式;"
+        f"本次跑 `extractor={extractor_mode}` × {len(EVAL_SET_ALL)} 样本"
+        + (f" × 2 组 (compare)" if extractor_mode == EXTRACTOR_COMPARE else "")
     )
     lines.append(
         f"- 当前 schema_pass_rate = {metrics['schema_pass_rate']:.2f}, "
         f"avg_completeness = {metrics['avg_completeness']:.2f}, "
-        f"fabrication_violations = {metrics['fabrication_violations_count']}。"
+        f"fabrication_violations = {metrics['fabrication_violations_count']}, "
+        f"low_confidence_slot_rate = {metrics['low_confidence_slot_rate']:.2f}。"
     )
+    if extractor_mode == EXTRACTOR_COMPARE and by_extractor_metrics:
+        rules_m = by_extractor_metrics.get(EXTRACTOR_RULES, {})
+        llm_m = by_extractor_metrics.get(EXTRACTOR_LLM, {})
+        delta_schema = llm_m.get("schema_pass_rate", 0) - rules_m.get("schema_pass_rate", 0)
+        if llm_m.get("fallback_rate", 0) > 0:
+            lines.append(
+                f"- llm 意图路径 fallback_rate = {llm_m.get('fallback_rate', 0):.2f}"
+                f"(全部 `llm_disabled_fallback`): **本次 offline 跑无法证伪 LLM 抽取收益**。"
+                f"双组 delta 仅供参考, 真评估需跑 `live` + 真实 key。"
+            )
+        else:
+            lines.append(
+                f"- llm 意图路径 fallback_rate = {llm_m.get('fallback_rate', 0):.2f}, "
+                f"双组 schema_pass_rate delta = {delta_schema:+.2f}"
+            )
     lines.append(
         "- **未满足 plan §5.1 启动条件**: simulated_user_v1 ≠ 真实用户使用反馈。"
     )
     lines.append(
-        "- **下一步**: 用户在 chat panel 跑 10+ 轮真实对话后, 再跑一次本脚本生成 v2 报告(real + simulated)。"
+        "- **下一步**: 用户在 chat panel 跑 10+ 轮真实对话后, 跑 `live` 模式 + 真实 LLM key "
+        "(手动) 再生成 v2 报告作 Phase 5 收益决策依据。"
     )
     lines.append("")
 
@@ -855,16 +1217,38 @@ def write_report(
 # ======================================================================
 def main(argv=None) -> int:
     """
-    CLI:
-      --mode {offline, live, auto}  默认 offline (沿用 R5-D)
-      --output <path>              默认 backend/logs/interview_eval_report.md
+    R6-B Phase 5 CLI:
+      --mode {offline, live, auto}      默认 offline (沿用 R5-D)
+      --extractor {rules, llm, compare}  默认 rules (R6-B Phase 5)
+      --output <path>                    默认 backend/logs/interview_eval_report.md
+
+    行为决策表(对齐 R6-B spec §8 + Prompt 5):
+      ┌─────────────────┬──────────┬──────────┬──────────────┐
+      │ --extractor     │ offline  │ live+key │ live+no_key  │
+      ├─────────────────┼──────────┼──────────┼──────────────┤
+      │ rules           │ rules    │ rules    │ rules        │
+      │ llm             │ fallback │ 真 LLM   │ RuntimeError │
+      │ compare         │ 双组对比 │ 双组对比 │ RuntimeError │
+      └─────────────────┴──────────┴──────────┴──────────────┘
+
+    Exit code:
+      0 — 正常完成
+      2 — mode 非法 / live + (llm/compare) + 无 key
     """
     parser = argparse.ArgumentParser(
-        description="R6-A Phase 5: Interview Agent eval 脚本(脚手架 + 规则版基线)"
+        description="R6-B Phase 5: Interview Agent eval compare 脚本 (rules/llm/compare)"
     )
     parser.add_argument(
         "--mode", choices=list(VALID_EVAL_MODES), default=MODE_OFFLINE,
         help="eval 模式 (offline/live/auto); 默认 offline",
+    )
+    parser.add_argument(
+        "--extractor", choices=list(EXTRACTOR_MODES), default=EXTRACTOR_RULES,
+        help=(
+            "抽取模式 (rules/llm/compare); 默认 rules。"
+            " offline 模式下 llm/compare 强制走规则版 + 标记 llm_disabled_fallback;"
+            " live 模式下 llm/compare 需要 LLM_API_KEY 在 env。"
+        ),
     )
     parser.add_argument(
         "--output", type=Path, default=DEFAULT_OUTPUT,
@@ -876,37 +1260,75 @@ def main(argv=None) -> int:
     resolved_mode = _resolve_eval_mode(args.mode, llm_enabled)
     llm_eval_config = _get_llm_eval_config(llm_enabled, resolved_mode)
 
-    # live 模式: Phase 5 暂不实现(R6-A Phase 4 LLM slot extraction 已落地但需 key + 真实使用样本做对照, 当前仅规则版 baseline)
-    if resolved_mode == MODE_LIVE:
-        print(
-            "[error] --mode live 当前不可用: R6-A Phase 4 LLM slot extraction 已上线, "
-            "但 live 对照需 LLM_API_KEY + 真实用户样本, 本脚本当前仅跑规则版 baseline。"
-            "请改用 --mode offline。",
-            file=sys.stderr,
-        )
-        return 2
+    # R6-B Phase 5: live + (llm/compare) + 无 key → RuntimeError
+    # 错误信息不含 key 值 / env var 名(R5-D Phase 1 边界保护)
+    if resolved_mode == MODE_LIVE and args.extractor in (EXTRACTOR_LLM, EXTRACTOR_COMPARE):
+        if not llm_enabled:
+            print(
+                f"[error] --mode live + --extractor {args.extractor} 需要 LLM 已启用, "
+                "当前 LLM 未启用; 请改用 --mode auto 或 --mode offline,"
+                "或设置 LLM_API_KEY 环境变量后手动跑 live 模式。",
+                file=sys.stderr,
+            )
+            return 2
 
     # 加载公开脱敏版 materials.json(读公开主库, 不读 _private_backup)
     from core.generator import load_materials  # noqa: PLC0415
     materials = load_materials()
 
-    # 跑所有样本
-    all_rows: list[EvalRow] = []
-    for sample in EVAL_SET_ALL:
-        row = _evaluate_one(sample, materials)
-        all_rows.append(row)
+    # R6-B Phase 5: dispatch 按 --extractor
+    # - rules: 1 组, 默认行为(字节级一致 R6-A Phase 5)
+    # - llm:   1 组, session.enable_interview_llm=True
+    # - compare: 2 组(rules + llm 意图), 输出对照表
+    rules_rows: list[EvalRow] = []
+    llm_rows: list[EvalRow] = []
+    if args.extractor == EXTRACTOR_RULES:
+        for s in EVAL_SET_ALL:
+            rules_rows.append(_evaluate_one(s, materials, extractor_mode=EXTRACTOR_RULES))
+        all_rows = rules_rows
+        by_extractor_metrics: dict | None = None
+    elif args.extractor == EXTRACTOR_LLM:
+        for s in EVAL_SET_ALL:
+            llm_rows.append(_evaluate_one(s, materials, extractor_mode=EXTRACTOR_LLM))
+        all_rows = llm_rows
+        by_extractor_metrics = None
+    else:  # compare
+        for s in EVAL_SET_ALL:
+            rules_rows.append(_evaluate_one(s, materials, extractor_mode=EXTRACTOR_RULES))
+            llm_rows.append(_evaluate_one(s, materials, extractor_mode=EXTRACTOR_LLM))
+        all_rows = rules_rows + llm_rows
+        by_extractor_metrics = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
 
     metrics = compute_metrics(all_rows)
     write_report(
         all_rows, metrics, args.output, llm_eval_config,
         requested_mode=args.mode,
+        extractor_mode=args.extractor,
+        by_extractor_metrics=by_extractor_metrics,
     )
 
     # stdout 摘要
-    print(f"[ok] eval done. total={metrics['total']} "
-          f"schema_pass_rate={metrics['schema_pass_rate']:.2f} "
-          f"avg_completeness={metrics['avg_completeness']:.2f} "
-          f"fabric_violations={metrics['fabrication_violations_count']}")
+    if args.extractor == EXTRACTOR_COMPARE and by_extractor_metrics:
+        rules_m = by_extractor_metrics[EXTRACTOR_RULES]
+        llm_m = by_extractor_metrics[EXTRACTOR_LLM]
+        print(
+            f"[ok] eval compare done. total={metrics['total']} "
+            f"(rules={rules_m['total']} + llm 意图={llm_m['total']}) "
+            f"rules schema_pass={rules_m['schema_pass_rate']:.2f} "
+            f"llm schema_pass={llm_m['schema_pass_rate']:.2f} "
+            f"llm fallback_rate={llm_m['fallback_rate']:.2f}"
+        )
+    else:
+        print(
+            f"[ok] eval done. total={metrics['total']} "
+            f"schema_pass_rate={metrics['schema_pass_rate']:.2f} "
+            f"avg_completeness={metrics['avg_completeness']:.2f} "
+            f"fabric_violations={metrics['fabrication_violations_count']} "
+            f"low_confidence_slot_rate={metrics['low_confidence_slot_rate']:.2f}"
+        )
     print(f"[ok] report → {args.output}")
     return 0
 

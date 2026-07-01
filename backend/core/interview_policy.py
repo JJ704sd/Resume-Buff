@@ -1,11 +1,20 @@
 """
-Round 6-B Phase 3: confidence-aware deterministic next-question policy
+Round 6-B Phase 3: confidence-aware deterministic next-question policy 
+Round 6-C.2B: gap-specific critical slot 补足(R6-C.1 contract warning 触发的 policy 调整)
 
 设计原则(spec §6 + AGENTS.md):
   - 完全 deterministic, **不调用网络**, **不调用 LLM**
   - LLM 不决定 slot 顺序(policy 是唯一决策者, 后续 Phase 4+ 可能让 LLM 改写 text 但**不**改 slot)
   - 输入: InterviewSession 状态(纯只读, 不 mutate)
   - 输出: dict, 字段与 spec §5.3 一致 + 扩展("can_draft" / "kind" 给 _build_question_plan 复用)
+
+R6-C.2B 增量(spec §4.5 contract warning 分布):
+  - 新增 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 补足集合(tech_metric + communication)
+  - 新增 INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT reason_code
+  - 新增 step 4.5: 在 missing_required + low_confidence 之后, near_limit + next_suggested
+    之前, 主动追问 gap-critical slot
+  - 不修改 GAP_SUGGESTED_SLOTS(那是 interview_prompts 设计常量, 改它会污染 LLM 抽取链路)
+  - 不修改 CAN_DRAFT_CONDITIONS / MAX_TURNS_PER_GAP / SLOT_NAMES
 
 公开 API:
   - plan_next_question(session) -> dict   spec §6 priority chain
@@ -67,6 +76,45 @@ INTERVIEW_POLICY_REASON_FORCE_DRAFT_SKIP = "force_draft_skip_limit"
 INTERVIEW_POLICY_REASON_FORCE_DRAFT_TURN = "force_draft_turn_limit"
 INTERVIEW_POLICY_REASON_NO_GAP = "no_gap_selected"
 INTERVIEW_POLICY_REASON_NO_MORE = "all_gap_slots_covered"
+
+# R6-C.2B: gap-specific critical slot 追问优先级(reason_code 锁, 与 spec §6 兼容)
+INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT = "gap_critical_slot_priority"
+"""R6-C.2B: gap 维度 critical slot 主动追问(reason_code)。
+
+Rationale (R6-C.1 contract warning 报告 §4.5):
+  - tech_metric 缺 `metric` (3 sample unreachable) + `method` 在 suggested position 3 (2 sample beyond_3)
+  - communication 缺 `responsibility` (1 sample unreachable)
+  改 GAP_SUGGESTED_SLOTS 会污染 LLM 抽取链路(suggested 是 LLM 抽取端的引导顺序,
+  interview_prompts 设计常量, 不在 R6-C.2B 改动范围)。
+  policy 通过 step 4.5 在三轮内主动追问 critical slot, 让 schema_pass_rate 在
+  不修改 expected_slots 评测合同的前提下提升。
+"""
+
+
+# R6-C.2B: gap-specific critical slots 补足集合(R6-C.1 contract warning 触发的 policy 调整)
+# 列表内顺序 = 追问优先级: 前面的 slot 先问, 后面的 slot 在前面 captured 后再问
+INTERVIEW_POLICY_GAP_CRITICAL_SLOTS: dict[str, tuple[str, ...]] = {
+    # tech_metric: 三轮内必须追问 metric(量化结果) + method(方法论)
+    #   - metric: 不在 suggested 中(unreachable_expected_slot)
+    #   - method: 在 suggested position 3 (beyond_three_turns_expected_slot)
+    # priority: metric > method(metric 是合同中最难主动拿到的, 优先抢一轮)
+    "tech_metric": ("metric", "method"),
+    # communication: 三轮内必须追问 responsibility(角色/职责)
+    #   - responsibility: 不在 suggested 中(unreachable_expected_slot)
+    "communication": ("responsibility",),
+}
+"""R6-C.2B gap-specific critical slots 补足集合 — policy 内部维护, 弥补 GAP_SUGGESTED_SLOTS
+未含的关键 slot, 让评测合同 expected_slots 在三轮内更可达。
+
+deterministic 纯 dict lookup, 无网络 / 无 LLM / 无 env var。
+不影响 GAP_SUGGESTED_SLOTS(那是 interview_prompts 的设计常量, 改它会污染 LLM 抽取链路)。
+
+补足 vs GAP_SUGGESTED_SLOTS 的关系:
+  - GAP_SUGGESTED_SLOTS 是"理想追问顺序"(由 gap 类型决定的语义优先级)
+  - INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 是"合同硬要求"(由评测合同 expected_slots 触发)
+  - 两套配置正交, 在三轮内不会冲突(step 4.5 优先级低于 step 3 missing + step 4 low_conf,
+    高于 step 5 near_limit + step 6 next_suggested)
+"""
 
 # next_question_kind 枚举(供 _build_question_plan 摘要 / 前端显示)
 INTERVIEW_POLICY_KIND_ASK = "ask_slot"
@@ -198,6 +246,25 @@ def _find_low_confidence_slots(
         ):
             out.append(slot)
     return out
+
+
+def _find_missing_critical_slots(session: "InterviewSession") -> list[str]:
+    """R6-C.2B: 当前 gap 的 critical slot 集合中, 未 captured 的 slot 列表(按配置顺序)。
+
+    返回:
+      - selected_gap = None → []
+      - gap_id 不在 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS → []
+      - 否则: 按 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS[gap_id] 配置顺序,
+              过滤掉 _slot_has_value(slot, captured) 已 captured 的 slot, 返回剩下的
+    """
+    gap = session.selected_gap
+    if gap is None:
+        return []
+    critical = INTERVIEW_POLICY_GAP_CRITICAL_SLOTS.get(gap.gap_id, ())
+    if not critical:
+        return []
+    captured = session.captured_slots or {}
+    return [s for s in critical if not _slot_has_value(s, captured)]
 
 
 def _get_last_asked_slot(session: "InterviewSession") -> str | None:
@@ -339,7 +406,7 @@ def _make_ask_plan(
 def plan_next_question(session: "InterviewSession") -> dict[str, Any]:
     """R6-B Phase 3 deterministic next-question policy(spec §6)。
 
-    优先级链(spec §6 "优先级" 5 条, 加 step 0/7 防边界):
+    优先级链(spec §6 "优先级" 5 条, 加 step 0/7 防边界, R6-C.2B 加 step 4.5):
       0. session.selected_gap 为空 / suggested_slots 空 → no_more(reason: no_gap_selected)
       1. skip_count >= MAX_CONSECUTIVE_SKIPS → force_draft(reason: force_draft_skip_limit)
       2. turn_count >= MAX_TURNS_PER_GAP → force_draft(reason: force_draft_turn_limit)
@@ -347,6 +414,13 @@ def plan_next_question(session: "InterviewSession") -> dict[str, Any]:
          reason: missing_required_before_draft
       4. 低置信度 slot(captured 但 confidence < 0.6) → ask 重新确认
          reason: low_confidence_recheck
+      4.5. R6-C.2B gap-specific critical slot 优先级补足
+         — 当前 gap 在 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 有配置, 且有未 captured 的 slot
+         → ask 配置顺序的第一个未 captured critical slot
+         reason: gap_critical_slot_priority
+         (这条优先级介于 step 4 low_confidence 与 step 5 near_limit 之间 —
+         低于 missing/low_conf(硬合规) 但高于 near_limit/suggested(合同软要求),
+         因为 critical slot 是评测合同硬要求, 应该优先抢一轮)
       5. 接近轮数上限 + suggested 仍有 result/metric 未覆盖 → ask result/metric
          reason: near_limit_priority_result_metric
       6. 按 gap.suggested_slots 顺序 → ask 下一个未 captured 的 slot
@@ -423,6 +497,20 @@ def plan_next_question(session: "InterviewSession") -> dict[str, Any]:
         return _make_ask_plan(
             slot,
             INTERVIEW_POLICY_REASON_LOW_CONFIDENCE,
+            session=session,
+            low_confidence_slots=low_conf,
+        )
+
+    # 4.5. R6-C.2B gap-specific critical slot 补足(reason: gap_critical_slot_priority)
+    #   - 配置在 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 的 slot 不一定在 gap.suggested_slots 内
+    #   - 评测合同 expected_slots 要求这些 critical slot 三轮内可达
+    #   - 优先级: 在 missing_required 和 low_confidence 之后(合规优先级),
+    #     在 near_limit 和 next_suggested 之前(critical 是合同硬要求, 应优先抢一轮)
+    critical = _find_missing_critical_slots(session)
+    if critical:
+        return _make_ask_plan(
+            critical[0],
+            INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT,
             session=session,
             low_confidence_slots=low_conf,
         )

@@ -2147,4 +2147,245 @@ class TestPhase3PolicyIntegration:
             INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
             INTERVIEW_POLICY_REASON_NEXT_SLOT,
             INTERVIEW_POLICY_REASON_NO_MORE,
-        }
+        }# ----------------------------------------------------------------------
+# 11. R6-C.2B: step 4.5 gap-specific critical slot 补足(集成测试)
+# ----------------------------------------------------------------------
+class TestPhaseC2BCriticalSlotIntegration:
+    """R6-C.2B: next_question 集成下验证 step 4.5 触发。
+
+    覆盖:
+      - tech_metric gap + combo1 满 + metric 未 captured → next_question msg["slot"] = "metric"
+      - communication gap + combo1 满 + responsibility 未 captured → msg["slot"] = "responsibility"
+      - question_plan.reason_code = "gap_critical_slot_priority"
+    """
+
+    def _gap_tech_metric(self):
+        from core.interview_agent import GapCandidate
+        return GapCandidate(
+            gap_id="tech_metric",
+            label="技术方法论",
+            reason="",
+            keywords=["Python", "LLM"],
+            source=[],
+            tier="required",
+            priority=10.0,
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+
+    def _gap_communication(self):
+        from core.interview_agent import GapCandidate
+        return GapCandidate(
+            gap_id="communication",
+            label="协同/沟通",
+            reason="",
+            keywords=["沟通", "协作"],
+            source=[],
+            tier="required",
+            priority=10.0,
+            suggested_slots=("background", "action", "method", "result"),
+        )
+
+    def _session(self, gap, **kw):
+        from core.interview_agent import InterviewSession, InterviewState
+        defaults = dict(
+            session_id="ia_r6c2b_integration",
+            target_role="tech_metric",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        defaults.update(kw)
+        return InterviewSession(**defaults)
+
+    def test_next_question_tech_metric_prioritizes_metric_when_unasked(self):
+        """tech_metric gap, combo1 满, metric 未 captured → next_question 主动追问 metric。
+
+        这是 R6-C.1 contract warning (unreachable_expected_slot for metric in tech_metric)
+        的真正落地点 — policy step 4.5 让 metric 在三轮内被问到。
+        """
+        from core.interview_agent import next_question
+
+        gap = self._gap_tech_metric()
+        # combo1 (background, action, result) 满, metric 未 captured
+        sess = self._session(
+            gap,
+            captured_slots={
+                "background": "AI 评测项目",
+                "action": "建模 + 标注",
+                "result": "准确率提升",
+            },
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 1,
+                    "reason_code": "keyword_background",
+                }],
+                "action": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "punctuation_split_action",
+                }],
+                "result": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 3,
+                    "reason_code": "keyword_result",
+                }],
+            },
+        )
+        msg = next_question(sess)
+        # step 4.5 触发 → ask metric(不在 suggested 但 critical)
+        assert msg["slot"] == "metric", (
+            f"tech_metric 应优先追问 metric (R6-C.2B step 4.5), "
+            f"实际 {msg['slot']!r}"
+        )
+        # question_plan 记录 reason_code
+        assert sess.question_plan is not None
+        assert sess.question_plan["reason_code"] == "gap_critical_slot_priority"
+
+    def test_next_question_communication_prioritizes_responsibility(self):
+        """communication gap, combo1 满, responsibility 未 captured → 主动追问 responsibility。
+
+        这是 R6-C.1 contract warning (unreachable_expected_slot for responsibility
+        in communication) 的真正落地点。
+        """
+        from core.interview_agent import next_question
+
+        gap = self._gap_communication()
+        # combo1 (background, action, result) 满, responsibility 未 captured
+        sess = self._session(
+            gap,
+            captured_slots={
+                "background": "社团活动",
+                "action": "整理信息",
+                "result": "沟通顺利",
+            },
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 1,
+                    "reason_code": "keyword_background",
+                }],
+                "action": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "punctuation_split_action",
+                }],
+                "result": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 3,
+                    "reason_code": "keyword_result",
+                }],
+            },
+        )
+        msg = next_question(sess)
+        # step 4.5 触发 → ask responsibility(不在 suggested 但 critical)
+        assert msg["slot"] == "responsibility", (
+            f"communication 应优先追问 responsibility (R6-C.2B step 4.5), "
+            f"实际 {msg['slot']!r}"
+        )
+# question_plan 记录 reason_code
+        assert sess.question_plan is not None
+        assert sess.question_plan["reason_code"] == "gap_critical_slot_priority"
+
+    def test_next_question_step_4_5_does_not_break_combo1_chain(self):
+        """tech_metric: combo1 缺 slot 时 step 3 (missing) 仍优先于 step 4.5。
+
+        验证 step 4.5 不破坏现有优先级链 — combo1 缺 slot 时仍走 step 3 missing_required。
+
+        策略: 直接构造 captured_slots / slot_meta, 避免依赖 apply_action 副作用,
+        只观察 next_question 在不同 combo1 状态下选什么 slot。
+        """
+        from core.interview_agent import next_question
+
+        gap = self._gap_tech_metric()
+
+        # 场景 1: combo1 完全空 → step 3 ask combo1 第一项 background
+        sess = self._session(gap)
+        msg = next_question(sess)
+        assert msg["slot"] == "background"
+        assert sess.question_plan["reason_code"] == "missing_required_before_draft"
+
+        # 场景 2: combo1 只缺 action → step 3 ask action
+        sess2 = self._session(
+            gap,
+            captured_slots={"background": "AI 评测项目", "result": "准确率提升"},
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 1,
+                    "reason_code": "kw",
+                }],
+                "result": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "kw",
+                }],
+            },
+        )
+        msg2 = next_question(sess2)
+        assert msg2["slot"] == "action"
+        assert sess2.question_plan["reason_code"] == "missing_required_before_draft"
+
+        # 场景 3: combo1 完全满 → step 4.5 触发, ask metric
+        sess3 = self._session(
+            gap,
+            captured_slots={
+                "background": "AI 评测项目",
+                "action": "建模",
+                "result": "准确率提升",
+            },
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 1,
+                    "reason_code": "kw",
+                }],
+                "action": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "kw",
+                }],
+                "result": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 3,
+                    "reason_code": "kw",
+                }],
+            },
+        )
+        msg3 = next_question(sess3)
+        assert msg3["slot"] == "metric"
+        assert sess3.question_plan["reason_code"] == "gap_critical_slot_priority"
+
+    def test_next_question_step_4_5_writes_message_log_for_anti_repeat(self):
+        """step 4.5 ask 的 slot 也写入 session.message_log(供 anti-repeat)。
+
+        与现有 step 3 / step 4 / step 6 行为一致: 每次 next_question 调一次,
+        message_log 多 1 条 asked entry。
+        """
+        from core.interview_agent import next_question
+
+        gap = self._gap_tech_metric()
+        sess = self._session(
+            gap,
+            captured_slots={
+                "background": "AI 评测项目",
+                "action": "建模",
+                "result": "准确率提升",
+            },
+            slot_meta={
+                "background": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 1,
+                    "reason_code": "keyword_background",
+                }],
+                "action": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 2,
+                    "reason_code": "punctuation_split_action",
+                }],
+                "result": [{
+                    "extractor": "rules", "confidence": 0.9, "turn_index": 3,
+                    "reason_code": "keyword_result",
+                }],
+            },
+        )
+        before_len = len(sess.message_log)
+        msg = next_question(sess)
+        assert len(sess.message_log) == before_len + 1
+        entry = sess.message_log[-1]
+        assert entry["kind"] == "asked"
+        assert entry["slot"] == msg["slot"]  # 应是 metric

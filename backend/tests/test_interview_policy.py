@@ -1,5 +1,6 @@
 """
-Round 6-B Phase 3: interview_policy deterministic plan_next_question 测试
+Round 6-B Phase 3: interview_policy deterministic plan_next_question 测试 
+Round 6-C.2B: step 4.5 gap-specific critical slot 补足测试
 
 覆盖(spec §6 + AGENTS.md R6-B Phase 3 锁点):
   - 优先级链 0-8 完整走一遍
@@ -9,6 +10,17 @@ Round 6-B Phase 3: interview_policy deterministic plan_next_question 测试
   - 纯函数: plan_next_question 不 mutate session
   - LLM 不决定 slot 顺序: policy 模块不 import 网络 / LLM 模块(用 AST 静态扫描)
   - 常量稳定: INTERVIEW_POLICY_LOW_CONFIDENCE = 0.6 / reason_code 唯一
+
+R6-C.2B 增量:
+  - 验证 step 4.5 gap_critical_slot_priority 在不同 gap 下补足 metric / method /
+    responsibility 这些 expected_slot
+  - 验证 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 配置顺序与覆盖率
+  - 验证 step 4.5 优先级链位置:
+    < step 1 (skip_force) / step 2 (turn_force) / step 3 (missing) /
+    step 4 (low_conf)
+    > step 5 (near_limit) / step 6 (next_suggested) / step 7 (anti_repeat) /
+    step 8 (no_more)
+  - 验证现有老 768 个测试零回退
 
 边界(AGENTS.md R6-B Phase 3):
   - policy 是纯函数, 直接对 InterviewSession 引用做只读访问
@@ -33,6 +45,7 @@ from core.interview_agent import (
 )
 from core.interview_policy import (
     INTERVIEW_POLICY_ANTI_REPEAT_CONFIDENCE,
+    INTERVIEW_POLICY_GAP_CRITICAL_SLOTS,
     INTERVIEW_POLICY_KIND_ASK,
     INTERVIEW_POLICY_KIND_FORCE_DRAFT,
     INTERVIEW_POLICY_KIND_NO_MORE,
@@ -40,6 +53,7 @@ from core.interview_policy import (
     INTERVIEW_POLICY_REASON_ANTI_REPEAT,
     INTERVIEW_POLICY_REASON_FORCE_DRAFT_SKIP,
     INTERVIEW_POLICY_REASON_FORCE_DRAFT_TURN,
+    INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT,
     INTERVIEW_POLICY_REASON_LOW_CONFIDENCE,
     INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
     INTERVIEW_POLICY_REASON_NEAR_LIMIT_METRIC,
@@ -628,6 +642,7 @@ class TestPlanConstants:
             INTERVIEW_POLICY_REASON_ANTI_REPEAT,
             INTERVIEW_POLICY_REASON_FORCE_DRAFT_SKIP,
             INTERVIEW_POLICY_REASON_FORCE_DRAFT_TURN,
+            INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT,
             INTERVIEW_POLICY_REASON_LOW_CONFIDENCE,
             INTERVIEW_POLICY_REASON_MISSING_REQUIRED,
             INTERVIEW_POLICY_REASON_NEAR_LIMIT_METRIC,
@@ -645,6 +660,470 @@ class TestPlanConstants:
             INTERVIEW_POLICY_KIND_NO_MORE,
         }
         assert len(kinds) == 3
+
+
+# ----------------------------------------------------------------------
+# 7. R6-C.2B: step 4.5 gap-specific critical slot 补足
+# ----------------------------------------------------------------------
+class TestPhaseC2BCriticalSlot:
+    """R6-C.2B: 验证 step 4.5 (gap_critical_slot_priority) 的行为。
+
+    触发条件(优先级链中 step 4.5 的位置):
+      - step 0-2 (no_gap / skip_force / turn_force) 不命中 → 不触发 4.5
+      - step 3 (missing_required) 命中 → 不触发 4.5(missing 优先级更高)
+      - step 4 (low_confidence) 命中 → 不触发 4.5(low_conf 优先级更高)
+      - 当前 gap 在 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 中有配置
+      - 配置的 slot 有未 captured 的 → 触发 step 4.5, reason=gap_critical_slot_priority
+      - 否则(step 5+6+7+8) → 不触发 4.5
+
+    配置(R6-C.1 contract warning 分布锁):
+      - tech_metric: ("metric", "method")
+      - communication: ("responsibility",)
+      - process_metric / domain_x: 不配置(step 4.5 对这些 gap 不触发)
+    """
+
+    def test_step4_5_tech_metric_metric_asked_when_combo1_fulfilled(self):
+        """step 4.5: tech_metric + combo1 满 + metric 未 captured → ask metric。
+
+        tech_metric.suggested = (background, responsibility, action, method, result)
+        不含 metric, 但 metric 是 contract warning 列出的 critical slot。
+        step 4.5 应主动追问 metric, reason=gap_critical_slot_priority。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        # combo1 (background, action, result) 已满, 跳过 step 3 missing_required
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == "metric"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_step4_5_tech_metric_method_asked_when_metric_captured(self):
+        """step 4.5: tech_metric + metric captured + method 未 captured → ask method。
+
+        critical slot 列表按 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 配置顺序追问:
+        metric 先问, captured 后轮到 method。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+            "metric": "F1 0.85",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # metric 已 captured → critical 列表剩 method
+        assert plan["slot"] == "method"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_step4_5_communication_responsibility_asked(self):
+        """step 4.5: communication + responsibility 未 captured → ask responsibility。
+
+        communication.suggested = (background, action, method, result)
+        不含 responsibility, 但 responsibility 是 contract warning 列出的 critical slot。
+        """
+        gap = _make_gap(
+            gap_id="communication",
+            suggested_slots=("background", "action", "method", "result"),
+        )
+        captured = {
+            "background": "社团活动",
+            "action": "整理信息",
+            "result": "沟通顺利",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == "responsibility"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_step4_5_priority_over_near_limit_metric_slot(self):
+        """step 4.5 优先级 > step 5 near_limit: turn 接近上限时仍先问 critical slot。
+
+        tech_metric + turn_count=2 (MAX-1) + combo1 满 + metric 未 captured
+        → step 4.5 触发 (gap_critical_slot_priority)
+        而非 step 5 (near_limit_priority_result_metric)
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+            turn_count=MAX_TURNS_PER_GAP - 1,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == "metric"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_step4_5_priority_over_next_suggested_slot(self):
+        """step 4.5 优先级 > step 6 next_suggested: 即使 suggested 还有 slot 未 captured, 也先问 critical。
+
+        tech_metric + combo1 满 + metric 未 captured + suggested 还有 method 未 captured
+        → step 4.5 应先问 metric(不在 suggested 但 critical), 而非 step 6 问 method
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+            # method 故意不 captured, 让 step 6 有候选
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # step 4.5 优先 step 6 → ask metric
+        assert plan["slot"] == "metric"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_step4_5_does_not_fire_when_step3_missing(self):
+        """step 3 优先级 > step 4.5: 缺 combo slot 时不应问 critical slot。
+
+        tech_metric + combo1 缺 background → step 3 ask background,
+        不应越级到 step 4.5 ask metric。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        # combo1 缺 background, 走到 step 3 missing_required
+        captured: dict = {}
+        slot_meta: dict = {}
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == "background"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_MISSING_REQUIRED
+
+    def test_step4_5_does_not_fire_when_step4_low_confidence(self):
+        """step 4 优先级 > step 4.5: 有 low_confidence slot 时不应问 critical slot。
+
+        combo1 已满, 但 background confidence < 0.6 → step 4 recheck background,
+        不应越级到 step 4.5 ask metric。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "模糊的描述",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            "background": [_make_meta("background", 0.3)],  # low conf
+            "action": [_make_meta("action", 0.9)],
+            "result": [_make_meta("result", 0.9)],
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == "background"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_LOW_CONFIDENCE
+
+    def test_step4_5_does_not_fire_when_skip_limit_reached(self):
+        """step 1 优先级 > step 4.5: skip_count 触顶直接 force_draft。
+
+        tech_metric + skip_count=2 → step 1 force_draft,
+        不应走到 step 4.5。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        sess = _make_session(
+            gap=gap, skip_count=MAX_CONSECUTIVE_SKIPS,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == ""
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_FORCE_DRAFT_SKIP
+
+    def test_step4_5_does_not_fire_when_turn_limit_reached(self):
+        """step 2 优先级 > step 4.5: turn_count 触顶直接 force_draft。
+
+        tech_metric + turn_count=3 → step 2 force_draft,
+        不应走到 step 4.5。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        sess = _make_session(
+            gap=gap, turn_count=MAX_TURNS_PER_GAP,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["slot"] == ""
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_FORCE_DRAFT_TURN
+
+    def test_step4_5_does_not_fire_when_critical_already_captured(self):
+        """step 4.5 不触发: critical slot 全部 captured 后应让位给 step 5/6/7。
+
+        tech_metric + combo1 满 + metric+method 都 captured → step 4.5 列表空
+        → 走到 step 6 next_suggested。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+            "metric": "F1 0.85",
+            "method": "用了 rule-based",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # critical 都 captured → step 4.5 跳过, 走到 step 6 next_suggested
+        # next_suggested 在 tech_metric.suggested 里找第一个未 captured: responsibility
+        assert plan["slot"] == "responsibility"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_NEXT_SLOT
+
+    def test_step4_5_does_not_fire_for_gap_not_in_critical_registry(self):
+        """step 4.5 不触发: 不在 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 的 gap 应走老路径。
+
+        process_metric 不在 critical registry → step 4.5 无候选,
+        走 step 6 next_suggested。combo3 (responsibility, action, result) 已满,
+        next_suggested 在 suggested 里找第一个未 captured → metric。
+        """
+        gap = _make_gap(
+            gap_id="process_metric",
+            suggested_slots=("responsibility", "action", "result", "metric"),
+        )
+        # combo3 (responsibility, action, result) 必须先 captured 才能走到 step 6
+        # 但 missing_required 会优先 → 需要先 captured background 让 combo1 也满足
+        captured = {
+            "background": "课程项目",
+            "responsibility": "执行",
+            "action": "梳理流程",
+            "result": "效率提升",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # process_metric 不在 critical registry → step 4.5 跳过
+        # step 6 next_suggested 找 metric(在 suggested position 3)
+        assert plan["slot"] == "metric"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_NEXT_SLOT
+
+    def test_step4_5_priority_order_tech_metric(self):
+        """step 4.5 优先级顺序: 按 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 配置顺序追问。
+
+        tech_metric 配置 ("metric", "method"):
+          1. 全部未 captured → 先问 metric
+          2. metric captured → 轮到 method
+          3. 都 captured → step 4.5 跳过, 让位 step 6
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # 第一个 critical (metric) 未 captured → ask metric
+        assert plan["slot"] == "metric"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_GAP_CRITICAL_SLOT
+
+    def test_gap_critical_slots_registry_alignment(self):
+        """INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 锁死 R6-C.1 contract warning 分布。
+
+        R6-C.1 报告 §4.5 warning 列表:
+          - tech_metric 缺 metric + method 在 position 3 → tech_metric 配 metric+method
+          - communication 缺 responsibility → communication 配 responsibility
+        防回潮: 任何对 INTERVIEW_POLICY_GAP_CRITICAL_SLOTS 的修改都得改这个测试。
+        """
+        assert set(INTERVIEW_POLICY_GAP_CRITICAL_SLOTS.keys()) == {
+            "tech_metric", "communication",
+        }, (
+            f"R6-C.1 contract warning 触发配置只含 tech_metric + communication, "
+            f"实际: {set(INTERVIEW_POLICY_GAP_CRITICAL_SLOTS.keys())}"
+        )
+        assert INTERVIEW_POLICY_GAP_CRITICAL_SLOTS["tech_metric"] == (
+            "metric", "method",
+        )
+        assert INTERVIEW_POLICY_GAP_CRITICAL_SLOTS["communication"] == (
+            "responsibility",
+        )
+
+    def test_step4_5_low_confidence_slots_includes_unrelated_low_conf(self):
+        """step 4.5 返回的 plan.low_confidence_slots 仍聚合整个 session 的 low_conf。
+
+        即 step 4.5 ask metric 时, plan.low_confidence_slots 仍含 background 等
+        不相关 slot 的低置信度记录(供前端 audit)。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "模糊的描述",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            "background": [_make_meta("background", 0.3)],  # low conf
+            "action": [_make_meta("action", 0.9)],
+            "result": [_make_meta("result", 0.9)],
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # 这里 background 是 low_conf, 走 step 4 (low_confidence) 而不是 step 4.5
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_LOW_CONFIDENCE
+        assert "background" in plan["low_confidence_slots"]
+
+    def test_step4_5_plan_includes_low_confidence_slots_aggregation(self):
+        """step 4.5 返回 plan 的 low_confidence_slots 字段仍聚合整个 session。
+
+        验证 step 4.5 不破坏 low_confidence_slots schema 稳定性。
+        """
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        # 让 metric 之外的另一个 slot 低置信度, 验证聚合
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+            "responsibility": "模糊",  # captured 但 conf 低
+        }
+        slot_meta = {
+            "background": [_make_meta("background", 0.9)],
+            "action": [_make_meta("action", 0.9)],
+            "result": [_make_meta("result", 0.9)],
+            "responsibility": [_make_meta("responsibility", 0.4)],  # < 0.6
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        # responsibility 是 low_conf → step 4 优先 → ask responsibility, 不是 step 4.5
+        assert plan["slot"] == "responsibility"
+        assert plan["reason_code"] == INTERVIEW_POLICY_REASON_LOW_CONFIDENCE
+
+    def test_step4_5_returns_ask_plan_with_correct_kind(self):
+        """step 4.5 返回的 plan.kind 必为 INTERVIEW_POLICY_KIND_ASK。"""
+        gap = _make_gap(
+            gap_id="tech_metric",
+            suggested_slots=(
+                "background", "responsibility", "action", "method", "result",
+            ),
+        )
+        captured = {
+            "background": "AI 评测项目",
+            "action": "建模",
+            "result": "准确率提升",
+        }
+        slot_meta = {
+            s: [_make_meta(s, 0.9)] for s in captured
+        }
+        sess = _make_session(
+            gap=gap, captured_slots=captured, slot_meta=slot_meta,
+        )
+        plan = plan_next_question(sess)
+        _assert_plan_shape(plan)
+        assert plan["kind"] == INTERVIEW_POLICY_KIND_ASK
+        assert plan["next_question_kind"] == INTERVIEW_POLICY_KIND_ASK
 
 
 # ----------------------------------------------------------------------

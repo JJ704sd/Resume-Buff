@@ -61,6 +61,8 @@ from evaluate_interview_agent import (  # noqa: E402
     EVAL_SET_ALL,
     EVAL_SET_PLAN_BASELINE,
     EVAL_SET_SIMULATED,
+    EVAL_CONTRACT_WARN_BEYOND_3,
+    EVAL_CONTRACT_WARN_UNREACHABLE,
     EXTRACTOR_COMPARE,
     EXTRACTOR_LLM,
     EXTRACTOR_MODES,
@@ -78,6 +80,7 @@ from evaluate_interview_agent import (  # noqa: E402
     _evaluate_one,
     _extract_slots_iteratively,
     _fabrication_guard,
+    _validate_eval_contract,
     compute_metrics,
     main,
     write_report,
@@ -895,3 +898,354 @@ class TestPhase5Cli:
             ])
         assert exc_info.value.code != 0, \
             f"非法 extractor_mode 应被 argparse 拒绝; got code={exc_info.value.code}"
+
+
+# ======================================================================
+# R6-C.1 Eval contract 检查 + 报告 wording 修正 (路线 A, round6-c-live-eval-result §5)
+# ======================================================================
+class TestPhaseC1EvalContractValidation:
+    """
+    R6-C.1: _validate_eval_contract(sample) 单元测试。
+
+    spec(路线 A 验收点):
+      - expected slot 不在 GAP_SUGGESTED_SLOTS[gap_id] 中 → unreachable_expected_slot warning
+      - expected slot 排在 suggested 位置 >= MAX_TURNS_PER_GAP(=3) 且
+        不在 near_limit 触达集合 {metric, result} 中 → beyond_three_turns_expected_slot warning
+      - 位置 < 3 / 位置 >= 3 但属于 metric/result → 不产生 warning
+      - 未知 gap_id → 所有 expected slot 视为 unreachable
+      - warning record 只含 name/gap_id/slot/code, 不含 user_message 原文
+    """
+
+    def test_unreachable_expected_slot_creates_warning(self):
+        """
+        tech_metric suggested = (background, responsibility, action, method, result)
+        tech_metric 不在 suggested 中, expected 含 "metric" → unreachable warning.
+        """
+        sample = {
+            "name": "test_unreachable",
+            "gap_id": "tech_metric",
+            "expected_slots": {
+                "responsibility": "X",   # 可达
+                "metric": "Y",            # 不可达 (tech_metric 不在 suggested)
+            },
+        }
+        warnings = _validate_eval_contract(sample)
+        unreachable = [
+            w for w in warnings if w["code"] == EVAL_CONTRACT_WARN_UNREACHABLE
+        ]
+        assert any(w["slot"] == "metric" for w in unreachable), (
+            f"tech_metric 不应被 expected 'metric' 命中; got {unreachable}"
+        )
+        # 确认 name / gap_id 也对得上
+        for w in unreachable:
+            if w["slot"] == "metric":
+                assert w["name"] == "test_unreachable"
+                assert w["gap_id"] == "tech_metric"
+
+    def test_beyond_three_turns_expected_slot_creates_warning(self):
+        """
+        tech_metric suggested = (background[0], responsibility[1], action[2], method[3], result[4])
+        expected 含 "method"(位置 3, 非 metric/result) → beyond warning.
+        """
+        sample = {
+            "name": "test_beyond_method",
+            "gap_id": "tech_metric",
+            "expected_slots": {
+                "method": "X",  # 位置 3, 不可达
+            },
+        }
+        warnings = _validate_eval_contract(sample)
+        beyond = [
+            w for w in warnings if w["code"] == EVAL_CONTRACT_WARN_BEYOND_3
+        ]
+        assert any(w["slot"] == "method" for w in beyond), (
+            f"tech_metric.method 位置 3 应触发 beyond warning; got {beyond}"
+        )
+
+    def test_metric_or_result_near_limit_skips_beyond_warning(self):
+        """
+        spec §6 step 5: turn_count 接近上限时, policy 优先问 metric/result,
+        即使它们在 suggested 位置 >= 3, 也不应产生 beyond warning.
+        """
+        # process_metric suggested = (responsibility[0], action[1], result[2], metric[3])
+        sample_metric = {
+            "name": "test_metric_pos3",
+            "gap_id": "process_metric",
+            "expected_slots": {"metric": "X"},  # 位置 3, 可被 near_limit 提前触达
+        }
+        warnings_m = _validate_eval_contract(sample_metric)
+        beyond_m = [
+            w for w in warnings_m if w["code"] == EVAL_CONTRACT_WARN_BEYOND_3
+        ]
+        assert not beyond_m, (
+            f"process_metric.metric (位置 3) 属 near_limit 触达集合, 不应 beyond; got {warnings_m}"
+        )
+        # tech_metric suggested = (background[0], responsibility[1], action[2], method[3], result[4])
+        sample_result = {
+            "name": "test_result_pos4",
+            "gap_id": "tech_metric",
+            "expected_slots": {"result": "X"},  # 位置 4, 同样 near_limit
+        }
+        warnings_r = _validate_eval_contract(sample_result)
+        beyond_r = [
+            w for w in warnings_r if w["code"] == EVAL_CONTRACT_WARN_BEYOND_3
+        ]
+        assert not beyond_r, (
+            f"tech_metric.result (位置 4) 属 near_limit 触达集合, 不应 beyond; got {warnings_r}"
+        )
+
+    def test_achievable_slot_creates_no_warning(self):
+        """位置 < 3 的 slot 全部可达, 不应产生 warning."""
+        sample = {
+            "name": "test_achievable",
+            "gap_id": "tech_metric",
+            "expected_slots": {
+                "background": "X",         # 位置 0
+                "responsibility": "Y",     # 位置 1
+                "action": ["Z"],          # 位置 2
+            },
+        }
+        warnings = _validate_eval_contract(sample)
+        assert warnings == [], f"可达 slot 不应产生 warning; got {warnings}"
+
+    def test_empty_expected_creates_no_warning(self):
+        sample = {
+            "name": "test_empty",
+            "gap_id": "tech_metric",
+            "expected_slots": {},
+        }
+        warnings = _validate_eval_contract(sample)
+        assert warnings == []
+
+    def test_unknown_gap_id_marks_all_expected_unreachable(self):
+        """未知 gap_id → 该 gap 不在 GAP_SUGGESTED_SLOTS, 所有 expected slot 视为 unreachable."""
+        sample = {
+            "name": "test_unknown_gap",
+            "gap_id": "definitely_not_a_real_gap",
+            "expected_slots": {
+                "responsibility": "X",
+                "action": ["Y"],
+            },
+        }
+        warnings = _validate_eval_contract(sample)
+        unreachable = [
+            w for w in warnings if w["code"] == EVAL_CONTRACT_WARN_UNREACHABLE
+        ]
+        slots = {w["slot"] for w in unreachable}
+        assert slots == {"responsibility", "action"}, (
+            f"未知 gap_id 下, 所有 expected slot 都应 unreachable; got {slots}"
+        )
+
+    def test_warning_record_contains_no_user_message_or_pii(self):
+        """
+        privacy: warning record 只含 {name, gap_id, slot, code}, 不含 user_message 原文 /
+        source_span / API key / prompt 正文.
+        """
+        sample = {
+            "name": "test_no_leak",
+            "gap_id": "tech_metric",
+            "expected_slots": {
+                "metric": "Y",   # unreachable
+                "method": "Z",   # beyond 3
+            },
+            "user_messages": [
+                "SENTINEL-ROUND6C1-USER-MSG-DO-NOT-SHOW-12345",
+            ],
+        }
+        warnings = _validate_eval_contract(sample)
+        for w in warnings:
+            assert set(w.keys()) == {"name", "gap_id", "slot", "code"}, (
+                f"warning record 应只含 4 字段; got keys={set(w.keys())}"
+            )
+            serialized = json.dumps(w, ensure_ascii=False)
+            assert "SENTINEL-ROUND6C1-USER-MSG-DO-NOT-SHOW-12345" not in serialized, (
+                f"warning record 不应泄漏 user_message 原文; got {serialized}"
+            )
+            assert "LLM_API_KEY" not in serialized
+            assert "source_span" not in serialized
+
+
+class TestPhaseC1ReportContractSection:
+    """R6-C.1: write_report 新增 'Eval contract warnings' 章节."""
+
+    def test_report_contains_eval_contract_warnings_section(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert "Eval contract warnings" in report_text, (
+            "R6-C.1: 报告应含 'Eval contract warnings' 章节"
+        )
+
+    def test_report_contract_warnings_section_renders_sample_gap_slot_code(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        当样本含 unreachable expected slot (EVAL_SET_SIMULATED[4] sim_domain_x_data_label
+        含 metric, 不在 domain_x suggested 中), 报告应列出 sample / gap / slot / code.
+        """
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        # sim_domain_x_data_label expected 含 metric; domain_x 不在 suggested 中
+        # 应触发 unreachable warning, 章节列出 sample / gap / slot / code
+        assert "sim_domain_x_data_label" in report_text
+        assert "domain_x" in report_text
+        assert EVAL_CONTRACT_WARN_UNREACHABLE in report_text
+
+
+class TestPhaseC1ReportWording:
+    """
+    R6-C.1: live compare 表头按 requested_mode 动态化 +
+    fallback_rate 口径声明 (round6-c-live-eval-result §5 路线 A).
+    """
+
+    def test_live_report_does_not_show_offline_stale_wording(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        live + compare 报告: 不再写 'offline → 强制规则 fallback' stale 文案.
+        """
+        rules_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        llm_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_LLM)
+        all_rows = rules_rows + llm_rows
+        metrics = compute_metrics(all_rows)
+        by_ext = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
+        report_path = tmp_path / "live_compare.md"
+        write_report(
+            all_rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="live", extractor_mode=EXTRACTOR_COMPARE,
+            by_extractor_metrics=by_ext,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert "offline → 强制规则 fallback" not in report_text, (
+            "live 模式 compare 报告不应含 'offline → 强制规则 fallback' stale wording"
+        )
+
+    def test_offline_report_keeps_offline_fallback_label(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        offline 模式仍用 'offline → 强制规则 fallback' 描述(它是准确的, 跟实际行为一致).
+        """
+        rules_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        llm_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_LLM)
+        all_rows = rules_rows + llm_rows
+        metrics = compute_metrics(all_rows)
+        by_ext = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
+        report_path = tmp_path / "offline_compare.md"
+        write_report(
+            all_rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_COMPARE,
+            by_extractor_metrics=by_ext,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert "offline → 强制规则 fallback" in report_text, (
+            "offline 模式 compare 报告应保留 'offline → 强制规则 fallback' 描述"
+        )
+
+    def test_fallback_rate_caption_present_in_report(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        fallback_rate 是 workflow/session 级, 不是 slot 级 LLM 成功率.
+        报告应有口径声明澄清这一点(避免读者把 fallback_rate 误读为 LLM 抽取质量).
+        """
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        # 口径声明: workflow / session 级 (兼容 "workflow / session" 和 "workflow/session" 写法)
+        assert (
+            "workflow / session 级" in report_text
+            or "workflow/session 级" in report_text
+        ), "fallback_rate 应有口径声明: workflow/session 级聚合, 不是 slot 级 LLM 成功"
+        # slot 级 LLM 成功 / slot 级 抽取 — 这类描述应该被显式排除, 而不是 "fallback_rate 高 = LLM 稳"
+        assert "不是 slot 级" in report_text or "不代表 slot 级" in report_text, (
+            "fallback_rate 口径应明确否定 'slot 级 LLM 成功率' 误读"
+        )
+
+
+class TestPhaseC1ReportPrivacy:
+    """
+    R6-C.1: contract warnings 章节不泄漏 user_message / prompt / source_span / API key.
+    """
+
+    def test_report_contract_section_does_not_leak_user_message(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        sentinel_user_msg = "SENTINEL-ROUND6C1-USER-MSG-DO-NOT-LEAK-IN-CONTRACT"
+        sentinel_span = "SENTINEL-ROUND6C1-SOURCE-SPAN-DO-NOT-LEAK-IN-CONTRACT"
+        sentinel_api_key = "sk-sentinel-round6c1-api-key-must-not-appear"
+        poisoned: list[dict] = []
+        for s in all_samples:
+            s_copy = dict(s)
+            s_copy["user_messages"] = list(s.get("user_messages") or []) + [
+                sentinel_user_msg, sentinel_span,
+            ]
+            poisoned.append(s_copy)
+        rules_rows = _run_rows(poisoned, materials, extractor_mode=EXTRACTOR_RULES)
+        llm_rows = _run_rows(poisoned, materials, extractor_mode=EXTRACTOR_LLM)
+        all_rows = rules_rows + llm_rows
+        metrics = compute_metrics(all_rows)
+        by_ext = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
+        report_path = tmp_path / "r.md"
+        write_report(
+            all_rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_COMPARE,
+            by_extractor_metrics=by_ext,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        leaks: list[str] = []
+        if sentinel_user_msg in report_text:
+            leaks.append("user_message 原文 (sentinel)")
+        if sentinel_span in report_text:
+            leaks.append("source_span 明文 (sentinel)")
+        if sentinel_api_key in report_text:
+            leaks.append("API key 值 (sentinel)")
+        assert not leaks, f"contract warnings 章节泄漏隐私字段: {leaks}"
+
+    def test_report_contract_section_does_not_leak_prompt_body(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        sentinel: 用 core.interview_prompts.SLOT_EXTRACTION_SYSTEM_PROMPT 前 50 字符子串,
+        报告 / stdout 不应含此子串(spec §8 + §12 + R6-C.1 边界).
+        """
+        from core.interview_prompts import SLOT_EXTRACTION_SYSTEM_PROMPT  # noqa: PLC0415
+        sentinel_prompt_substr = SLOT_EXTRACTION_SYSTEM_PROMPT[:50]
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert sentinel_prompt_substr not in report_text, (
+            "contract warnings 章节不应泄漏 prompt 正文子串"
+        )

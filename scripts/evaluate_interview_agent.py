@@ -63,6 +63,10 @@ from core.interview_agent import (  # noqa: E402
     create_session,
     extract_slots,
 )
+from core.interview_prompts import (  # noqa: E402
+    GAP_SUGGESTED_SLOTS,
+    MAX_TURNS_PER_GAP,
+)
 from core.jd_parser import parse_jd  # noqa: E402
 
 # ---- 复用 R5-D helper(直接 import,不重写) ----
@@ -108,6 +112,19 @@ PII_PLACEHOLDER_STRINGS: tuple[str, ...] = (
 
 # 低置信度阈值(对齐 core.interview_agent.INTERVIEW_LOW_CONFIDENCE_THRESHOLD = 0.6)
 INTERVIEW_EVAL_LOW_CONFIDENCE: float = 0.6
+
+# ---- R6-C.1: Eval contract warning code 常量(路线 A, round6-c-live-eval-result §5) ----
+EVAL_CONTRACT_WARN_UNREACHABLE: str = "unreachable_expected_slot"
+"""expected slot 不在该 gap 的 GAP_SUGGESTED_SLOTS 中 — policy 不会主动追问,
+   从 user_messages 抽取可能命中, 但 schema_pass_rate 难以证明 LLM 抽取能力。"""
+
+EVAL_CONTRACT_WARN_BEYOND_3: str = "beyond_three_turns_expected_slot"
+"""expected slot 在 suggested 顺序中位置 >= MAX_TURNS_PER_GAP(=3),
+   且不在 near_limit 触达集合 {metric, result} 中 — 前 3 轮内很可能无法被问到。"""
+
+# spec §6 step 5 near_limit 提前触达集合: turn_count 接近上限时, policy 优先问
+# metric / result, 即使它们在 suggested 位置 >= MAX_TURNS_PER_GAP
+_NEAR_LIMIT_REACHABLE_SLOTS: frozenset[str] = frozenset({"metric", "result"})
 
 
 # ======================================================================
@@ -545,6 +562,85 @@ def _classify_interview_fallback_category(
         return FALLBACK_NONE
     # LLM 意图但实际走 rules — 必然是 fallback
     return FALLBACK_LLM_DISABLED
+
+
+# ======================================================================
+# R6-C.1: Eval contract 校验(路线 A, round6-c-live-eval-result §5)
+# ======================================================================
+def _validate_eval_contract(sample: dict) -> list[dict]:
+    """
+    检查 sample.expected_slots 是否在"3 轮可触达 + 该 gap suggested_slots 内"的合同下可达。
+
+    判定规则(对齐 R6-C.1 路线 A 验收点):
+      1. slot 不在 GAP_SUGGESTED_SLOTS[gap_id] 中 → unreachable_expected_slot warning
+         (policy 不会主动追问, 从 user_messages 抽取也仅在 LLM 自由发挥下可能命中)
+      2. slot 在 suggested 中但位置 >= MAX_TURNS_PER_GAP(=3) 且
+         不在 near_limit 触达集合 {metric, result} 中 → beyond_three_turns_expected_slot warning
+         (spec §6 step 5: turn_count >= MAX_TURNS_PER_GAP - 1 时, policy 优先问 metric/result,
+         但其它 slot 在 suggested 列表后段的位置 3、4 仍可能不可达)
+      3. 位置 < 3 / 位置 >= 3 但属于 metric/result → 不产生 warning
+      4. 未知 gap_id → 所有 expected slot 视为 unreachable(spec §5.3 fallback)
+
+    输入: sample dict(含 name / gap_id / expected_slots)
+    输出: list[dict] warning records, 每条仅含
+      {"name": str, "gap_id": str, "slot": str, "code": str}
+
+    隐私边界(round6-c-live-eval-result §5 + spec §12 + AGENTS.md):
+      - 不读 sample.user_messages / draft_card / source_span / API key / prompt 正文
+      - 返回 dict 只含 name / gap_id / slot / code 4 字段, 不含原文或凭据
+      - 纯函数, 不调网络, 不读 env var, 不 import 任何 LLM 模块
+    """
+    warnings: list[dict] = []
+    expected = sample.get("expected_slots", {}) or {}
+    if not expected:
+        return warnings
+
+    name = str(sample.get("name", "") or "")
+    gap_id = str(sample.get("gap_id", "") or "")
+    suggested = GAP_SUGGESTED_SLOTS.get(gap_id, ())
+
+    for slot_key in expected.keys():
+        slot_key = str(slot_key)
+        if slot_key not in suggested:
+            # 未知 gap_id / slot 不在 suggested 中 → unreachable
+            warnings.append({
+                "name": name,
+                "gap_id": gap_id,
+                "slot": slot_key,
+                "code": EVAL_CONTRACT_WARN_UNREACHABLE,
+            })
+            continue
+        # suggested 位置 index(spec §6 step 6 顺序)
+        try:
+            position = suggested.index(slot_key)
+        except ValueError:
+            # 防御性: 同时存在的 slot 不应触发, 但兜底为 unreachable
+            warnings.append({
+                "name": name,
+                "gap_id": gap_id,
+                "slot": slot_key,
+                "code": EVAL_CONTRACT_WARN_UNREACHABLE,
+            })
+            continue
+        if position >= MAX_TURNS_PER_GAP and slot_key not in _NEAR_LIMIT_REACHABLE_SLOTS:
+            warnings.append({
+                "name": name,
+                "gap_id": gap_id,
+                "slot": slot_key,
+                "code": EVAL_CONTRACT_WARN_BEYOND_3,
+            })
+
+    return warnings
+
+
+def _collect_eval_contract_warnings(samples: list[dict]) -> list[dict]:
+    """
+    聚合一组 sample 的 eval contract warning。每条 sample 的 warning 平铺, 不聚合不分组。
+    """
+    out: list[dict] = []
+    for s in samples:
+        out.extend(_validate_eval_contract(s))
+    return out
 
 
 # ======================================================================
@@ -1041,6 +1137,14 @@ def write_report(
     lines.append(f"| `p95_latency_ms` | {metrics['p95_latency_ms']} |")
     lines.append(f"| `low_confidence_slot_rate` | {metrics['low_confidence_slot_rate']:.2f} |")
     lines.append("")
+    # R6-C.1: fallback_rate 口径声明(round6-c-live-eval-result §2.5 + 路线 A 验收点)
+    lines.append(
+        "> **fallback_rate 口径声明 (R6-C.1)**: `fallback_rate` 是 workflow / session 级聚合, "
+        "即 extractor_mode=llm 时实际仍走规则版 (`fb_cat=llm_disabled_fallback`) 的样本占比; "
+        "它**不代表 slot 级 LLM 抽取成功率**, 也不区分本轮 LLM 抽取失败后规则兜底的情况。"
+        "若要判断 LLM 抽取质量, 需结合本报告 2.5 / 三 / 4.5 三层信号综合判断。"
+    )
+    lines.append("")
     lines.append("按 source 分组:")
     lines.append("")
     lines.append("| source | total | schema_pass_rate | avg_completeness | fabric_viol | avg_latency_ms | low_conf_rate |")
@@ -1059,7 +1163,13 @@ def write_report(
         lines.append("")
         rules_m = by_extractor_metrics.get(EXTRACTOR_RULES, {})
         llm_m = by_extractor_metrics.get(EXTRACTOR_LLM, {})
-        lines.append("| 指标 | rules | llm 意图(offline → 强制规则 fallback) |")
+        # R6-C.1: 列名按 requested_mode 动态化, 修正 R6-B Phase 5 残留的
+        # 'offline → 强制规则 fallback' stale wording (live 报告误用).
+        if requested_mode == MODE_LIVE:
+            llm_col_label = "llm 意图(live + 已配置 LLM 凭据 → 真实 LLM 抽取)"
+        else:
+            llm_col_label = "llm 意图(offline → 强制规则 fallback)"
+        lines.append(f"| 指标 | rules | {llm_col_label} |")
         lines.append("|---|---|---|")
         # 7 指标对照
         rows_pairs = [
@@ -1083,10 +1193,18 @@ def write_report(
             lines.append(f"- `schema_pass_rate`: {delta_schema:+.2f}")
             lines.append(f"- `avg_completeness`: {delta_complete:+.2f}")
             lines.append("")
-        lines.append(
-            "> offline 模式下, llm 意图路径无法发网络 → 全部走规则版 + 标记 `llm_disabled_fallback`。"
-            "Delta 不代表真实 LLM 增益, 仅反映双组抽取路径在同一规则版上的稳定性。"
-            "live 模式 + 已配置 LLM 凭据才会真发网络, 那时 delta 才反映 LLM 抽取质量。"
+        # R6-C.1: 修正注释, 按 requested_mode 联动, 避免 offline stale wording
+        if requested_mode == MODE_LIVE:
+            lines.append(
+                "> live 模式 + 已配置 LLM 凭据, llm 意图路径真发网络, "
+                "Delta 反映 rules vs LLM-assisted 的真实抽取质量差。"
+                "若 llm 组的 `fallback_rate` 不为 0, 需检查 LLM 调用是否被 `tool_error` / `schema_retry` 拦下。"
+            )
+        else:
+            lines.append(
+                "> offline 模式下, llm 意图路径无法发网络 → 全部走规则版 + 标记 `llm_disabled_fallback`。"
+                "Delta 不代表真实 LLM 增益, 仅反映双组抽取路径在同一规则版上的稳定性。"
+                "要评估 LLM 真实收益, 需跑 `live` 模式 + 真实 LLM 凭据。"
         )
         lines.append("")
 
@@ -1118,6 +1236,51 @@ def write_report(
     for row in all_rows:
         lines.append(f"- {_row_summary_for_report(row)}")
     lines.append("")
+
+    # 4.5、Eval contract warnings (R6-C.1, round6-c-live-eval-result §5 路线 A)
+    # 从 EVAL_SET_ALL 按 row.name 反查 sample.expected_slots, 不读 row 字段,
+    # 避免 EvalRow 引入原文(隐私边界)
+    contract_warnings: list[dict] = []
+    sample_by_name = {s.get("name"): s for s in EVAL_SET_ALL if isinstance(s, dict)}
+    seen_samples: set[str] = set()
+    for row in all_rows:
+        if row.name in seen_samples:
+            continue  # 同一 sample 在 compare 模式下跑 2 组, warning 按 sample 去重
+        seen_samples.add(row.name)
+        sample = sample_by_name.get(row.name)
+        if sample is None:
+            continue
+        contract_warnings.extend(_validate_eval_contract(sample))
+    lines.append("## 4.5、Eval contract warnings (R6-C.1)")
+    lines.append("")
+    if contract_warnings:
+        lines.append(
+            f"本章节列出 `expected_slots` 与 policy 3 轮上限 / gap suggested_slots 之间的合同不一致, "
+            f"共 **{len(contract_warnings)}** 条 unique warning (按 sample 去重, 不依赖 extractor mode)。"
+            f"warning 提示: 当前 `schema_pass_rate` / `avg_completeness` 不一定能完整反映产品目标, "
+            f"需结合本章节判断 sample 是否在合同外被评分。"
+        )
+        lines.append("")
+        lines.append("| sample | gap | slot | code |")
+        lines.append("|---|---|---|---|")
+        for w in contract_warnings:
+            lines.append(
+                f"| `{w['name']}` | `{w['gap_id']}` | `{w['slot']}` | `{w['code']}` |"
+            )
+        lines.append("")
+        lines.append(
+            "> code 含义: `unreachable_expected_slot` = expected slot 不在该 gap 的 `GAP_SUGGESTED_SLOTS` 中, "
+            "policy 不会主动追问, 从 user_messages 抽取也仅在 LLM 自由发挥下可能命中; "
+            "`beyond_three_turns_expected_slot` = expected slot 在 suggested 顺序中位置 ≥ `MAX_TURNS_PER_GAP`(=3), "
+            "且不属于 near-limit 触达集合 `{metric, result}`, 前 3 轮内很可能无法被问到。"
+        )
+        lines.append("")
+    else:
+        lines.append(
+            "- 无 contract warning: 所有样本的 `expected_slots` 在 `MAX_TURNS_PER_GAP` 内可达, "
+            "且属于对应 gap 的 `GAP_SUGGESTED_SLOTS` 集合。"
+        )
+        lines.append("")
 
     # 五、Fabrication guard
     lines.append("## 五、Fabrication guard")

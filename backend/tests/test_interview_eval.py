@@ -87,6 +87,7 @@ from evaluate_interview_agent import (  # noqa: E402
 )
 from core.interview_agent import (  # noqa: E402
     ActionType,
+    apply_action,
     create_session,
     extract_slots,
 )
@@ -1248,4 +1249,294 @@ class TestPhaseC1ReportPrivacy:
         report_text = report_path.read_text(encoding="utf-8")
         assert sentinel_prompt_substr not in report_text, (
             "contract warnings 章节不应泄漏 prompt 正文子串"
+        )
+
+
+# ======================================================================
+# R6-C.2A: Eval contract 调整 (路线 A, round6-c.2a — schema_pass_rate 变化必须
+# 解释为"评测合同变化", 不解读为 LLM 能力提升)
+# ======================================================================
+class TestPhaseC2EvalContract:
+    """
+    R6-C.2A: 每条 sample 加 product_goal / contract_note 字段,
+    communication_club 的 expected_slots 调整为 (action/method/result)
+    表达 3 轮内可生成素材目标; simulated samples 保留 expected 不删,
+    标记需后续 policy 调整 (product_goal=full_fact_coverage).
+
+    验收: schema_pass_rate 变化 = 评测合同变化, 不是 LLM 能力变化.
+    报告 4.6 章节记录每条 sample 的 product_goal + 合同决策.
+    """
+
+    def test_all_samples_have_product_goal_and_contract_note(self):
+        """所有 10 条 sample 都应有 product_goal / contract_note 字段 (R6-C.2A 新增)."""
+        for s in EVAL_SET_ALL:
+            assert "product_goal" in s, (
+                f"{s['name']} 缺 product_goal 字段"
+            )
+            assert "contract_note" in s, (
+                f"{s['name']} 缺 contract_note 字段"
+            )
+            assert s["product_goal"] in (
+                "three_turn_friendly", "full_fact_coverage",
+            ), (
+                f"{s['name']} product_goal 必须是 three_turn_friendly 或 full_fact_coverage; "
+                f"got {s['product_goal']!r}"
+            )
+            assert len(str(s["contract_note"])) > 0, (
+                f"{s['name']} contract_note 不能为空"
+            )
+
+    def test_plan_baseline_samples_are_three_turn_friendly(self):
+        """plan_baseline 3 条 (process_metric_course / communication_club / tech_metric_data)
+        应标 three_turn_friendly (3 轮内可生成素材目标)."""
+        for s in EVAL_SET_PLAN_BASELINE:
+            assert s["product_goal"] == "three_turn_friendly", (
+                f"plan_baseline 样本 {s['name']} 应是 three_turn_friendly; "
+                f"got {s['product_goal']!r}"
+            )
+
+    def test_simulated_samples_are_full_fact_coverage(self):
+        """simulated_user_v1 7 条默认标 full_fact_coverage (完整项目事实覆盖目标)."""
+        for s in EVAL_SET_SIMULATED:
+            assert s["product_goal"] == "full_fact_coverage", (
+                f"simulated 样本 {s['name']} 应是 full_fact_coverage; "
+                f"got {s['product_goal']!r}"
+            )
+
+    def test_communication_club_expected_3_turn_reachable(self):
+        """
+        R6-C.2A: communication_club 的 expected_slots 调整为 (action/method/result),
+        表达 3 轮内可生成素材目标. 移除原 responsibility (不在 communication suggested),
+        新增 method (position 2, 3 轮内 100% 必问).
+        """
+        sample = next(
+            s for s in EVAL_SET_ALL if s["name"] == "communication_club"
+        )
+        expected = sample["expected_slots"]
+        assert "responsibility" not in expected, (
+            "communication_club 调整后 expected 不应含 responsibility "
+            "(不在 communication suggested 中)"
+        )
+        assert "action" in expected, "应保留 action (position 1, 3 轮内必问)"
+        assert "method" in expected, "应新增 method (position 2, 3 轮内必问)"
+        assert "result" in expected, "应保留 result (position 3, near_limit 触达)"
+        # 3 个 expected slot 全部应在 communication suggested 内
+        warnings = _validate_eval_contract(sample)
+        assert warnings == [], (
+            f"调整后 communication_club 应无 contract warning; got {warnings}"
+        )
+
+    def test_three_turn_friendly_samples_have_no_contract_warnings(self):
+        """所有 three_turn_friendly 样本 (plan_baseline 3 条) 调整后 0 warning."""
+        for s in EVAL_SET_ALL:
+            if s["product_goal"] != "three_turn_friendly":
+                continue
+            warnings = _validate_eval_contract(s)
+            assert warnings == [], (
+                f"{s['name']} 标 three_turn_friendly 但有 warning: {warnings}"
+            )
+
+    def test_full_fact_coverage_samples_with_warning_keep_expected(self):
+        """
+        full_fact_coverage 样本若含 unreachable / beyond warning,
+        expected_slots 应保留 (不删), 仅在 contract_note 标记"需后续 policy 调整".
+        这正是 R6-C.2A 验收要求 — 完整事实覆盖不删 expected.
+        """
+        for s in EVAL_SET_ALL:
+            if s["product_goal"] != "full_fact_coverage":
+                continue
+            warnings = _validate_eval_contract(s)
+            if not warnings:
+                continue  # 合同已合规的样本不在此断言范围
+            # 合同不达标的样本应保留 expected 不删
+            assert "expected_slots" in s
+            assert len(s["expected_slots"]) >= len(warnings), (
+                f"{s['name']} 合同不达标但 expected_slots 数量 ({len(s['expected_slots'])}) "
+                f"少于 warning 数量 ({len(warnings)}), 可能被误删."
+            )
+            # contract_note 应明确提到 "需后续 policy 调整" 或等效说明
+            assert "需后续 policy 调整" in s["contract_note"] or \
+                "需要更多轮次" in s["contract_note"] or \
+                "完整项目事实覆盖" in s["contract_note"], (
+                f"{s['name']} contract_note 应说明 full_fact_coverage 决策依据; "
+                f"got: {s['contract_note']}"
+            )
+
+    def test_report_contains_product_goal_section(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """报告含 'Eval contract: product goal' 章节 (R6-C.2A 新增 4.6)."""
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert "Eval contract: product goal" in report_text, (
+            "R6-C.2A: 报告应含 'Eval contract: product goal' (4.6) 章节"
+        )
+        # 4.6 应列 product_goal 字段
+        assert "product_goal" in report_text
+        # 4.6 应解释 schema_pass_rate 变化 = 合同变化
+        assert "评测合同变化" in report_text, (
+            "4.6 章节应明确 'schema_pass_rate 变化 = 评测合同变化' 口径"
+        )
+
+    def test_report_product_goal_section_lists_all_samples(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """4.6 章节应列出全部 10 条 sample (compare 模式按 sample 去重不重复)."""
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        for s in all_samples:
+            assert f"`{s['name']}`" in report_text, (
+                f"4.6 章节应列出 sample `{s['name']}`"
+            )
+
+    def test_report_explains_schema_pass_rate_change_as_contract_change(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        验收: schema_pass_rate 变化必须解释为'评测合同变化', 不能写成 LLM 能力提升.
+        报告 4.6 + §八(结论) 都应含此口径说明.
+        """
+        rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        # 4.6 + §八 共同应有 contract 变化说明
+        assert "评测合同变化" in report_text, (
+            "报告应明确 'schema_pass_rate 数值变化 = 评测合同变化' 口径"
+        )
+        # 显式否定 "LLM 能力提升 / LLM 抽取能力提升或下降" 这类误读
+        assert "不解读为 LLM" in report_text or "不**解读为 LLM" in report_text, (
+            "报告应显式排除 'LLM 能力变化' 误读"
+        )
+
+    def test_report_product_goal_section_does_not_leak_pii(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """
+        R6-C.2A: 4.6 章节 (product goal) 不泄漏 user_message / source_span / API key.
+        contract_note 字段只描述产品目标, 不应含 user_message 原文.
+        """
+        sentinel_user_msg = "SENTINEL-ROUND6C2A-USER-MSG-DO-NOT-LEAK-12345"
+        sentinel_span = "SENTINEL-ROUND6C2A-SOURCE-SPAN-DO-NOT-LEAK-12345"
+        sentinel_api_key = "sk-sentinel-round6c2a-api-key-must-not-appear"
+        poisoned: list[dict] = []
+        for s in all_samples:
+            s_copy = dict(s)
+            s_copy["user_messages"] = list(s.get("user_messages") or []) + [
+                sentinel_user_msg, sentinel_span,
+            ]
+            poisoned.append(s_copy)
+        rows = _run_rows(poisoned, materials, extractor_mode=EXTRACTOR_RULES)
+        metrics = compute_metrics(rows)
+        report_path = tmp_path / "r.md"
+        write_report(
+            rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_RULES,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        leaks: list[str] = []
+        if sentinel_user_msg in report_text:
+            leaks.append("user_message 原文 (sentinel)")
+        if sentinel_span in report_text:
+            leaks.append("source_span 明文 (sentinel)")
+        if sentinel_api_key in report_text:
+            leaks.append("API key 值 (sentinel)")
+        assert not leaks, (
+            f"4.6 (product goal) 章节泄漏隐私字段: {leaks}"
+        )
+
+    def test_compare_report_4_6_section_renders_for_both_groups(
+        self, all_samples, materials, llm_eval_cfg, tmp_path,
+    ):
+        """compare 模式报告也含 4.6 章节, 且按 sample 去重不重复 (rules + llm 意图同份合同)."""
+        rules_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_RULES)
+        llm_rows = _run_rows(all_samples, materials, extractor_mode=EXTRACTOR_LLM)
+        all_rows = rules_rows + llm_rows
+        metrics = compute_metrics(all_rows)
+        by_ext = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
+        report_path = tmp_path / "compare.md"
+        write_report(
+            all_rows, metrics, report_path, llm_eval_cfg,
+            requested_mode="offline", extractor_mode=EXTRACTOR_COMPARE,
+            by_extractor_metrics=by_ext,
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+        assert "Eval contract: product goal" in report_text
+        # 4.6 表格每条 sample 只出现 1 次(compare 双组同跑, 按 sample 去重)
+        for s in all_samples:
+            sample_mentions = report_text.count(f"`{s['name']}`")
+            # sample 名在 4.6 (1 次) + 4.5 (可能 0/1) + 四 (compare 双组 2 次) = 至少 2 次
+            # 上界由 4.5 warnings + compare 双组决定
+            assert sample_mentions >= 2, (
+                f"compare 报告中 {s['name']} 应至少出现 2 次 (4.6 + 4.5/四); got {sample_mentions}"
+            )
+
+    def test_communication_club_removed_responsibility_slot(
+        self,
+    ):
+        """
+        验收: 不允许简单把 expected_slots 改成当前 captured slot keys.
+        communication_club 改后 expected (action/method/result) 跟 captured slots
+        集合 (来自 user_messages 的 rule-based 抽取) 不应完全相同 — 必须含 captured 没
+        填到的 slot (result), 保证"合同驱动"而非"结果驱动".
+        """
+        from core.interview_agent import (  # noqa: PLC0415
+            ActionType,
+            create_session,
+        )
+        from core.generator import load_materials  # noqa: PLC0415
+
+        sample = next(
+            s for s in EVAL_SET_ALL if s["name"] == "communication_club"
+        )
+        materials = load_materials()
+        session = create_session(
+            sample["role"], sample["jd_text"], materials,
+        )
+        # 强制选 communication gap
+        for g in (session.gap_candidates or []):
+            if g.gap_id == sample["gap_id"]:
+                session.selected_gap = g
+                break
+        assert session.selected_gap is not None
+        # 跑 user_messages 模拟
+        for msg in sample["user_messages"]:
+            if msg.strip() == "整理成素材":
+                continue
+            try:
+                session, _resp = apply_action(
+                    session, ActionType.ANSWER, msg,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+        captured_keys = {
+            k for k in (session.captured_slots or {}).keys()
+            if not k.startswith("_")
+        }
+        expected_keys = set(sample["expected_slots"].keys())
+        # 至少一个 expected key 在 captured 之外 (含 result — plan 不保证 100% 抽出)
+        # 这证明 expected 不是简单照抄 captured.
+        assert not expected_keys.issubset(captured_keys), (
+            f"communication_club expected ({expected_keys}) 不应完全包含在 captured "
+            f"({captured_keys}) 中 — 否则就是简单把 expected 改成 captured keys, "
+            f"违反 R6-C.2A 边界."
         )

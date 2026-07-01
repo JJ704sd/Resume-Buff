@@ -128,7 +128,10 @@ _NEAR_LIMIT_REACHABLE_SLOTS: frozenset[str] = frozenset({"metric", "result"})
 
 
 # ======================================================================
-# Eval set 1: plan §5.4 固定 3 条样本(脱敏, 不动)
+# Eval set 1: plan §5.4 固定 3 条样本(脱敏)
+# R6-C.2A: 每条 sample 加 product_goal / contract_note 字段, 说明评测合同.
+# plan_baseline 3 条默认 product_goal = three_turn_friendly
+# (3 轮内可生成素材, 不需要完整项目事实覆盖).
 # ======================================================================
 EVAL_SET_PLAN_BASELINE: list[dict] = [
     {
@@ -152,6 +155,16 @@ EVAL_SET_PLAN_BASELINE: list[dict] = [
             "result": "小组查问题更快, 返工减少",
         },
         "expected_draft_has_metrics": False,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 3 轮内可生成素材(threshold friendly).
+        # 合同说明: process_metric suggested = (responsibility, action, result, metric),
+        # expected (responsibility/action/result) 都在 0-2 位置, 3 轮内 100% 可达.
+        # 无 contract warning, 评测合同 = policy contract.
+        "product_goal": "three_turn_friendly",
+        "contract_note": (
+            "3 轮内可生成素材目标; responsibility/action/result 都在 process_metric "
+            "suggested 0-2 位置, 3 轮内 100% 可达, 无 contract warning."
+        ),
     },
     {
         "name": "communication_club",
@@ -168,12 +181,32 @@ EVAL_SET_PLAN_BASELINE: list[dict] = [
             "后来分工清楚很多, 负责人能直接看到自己要处理的事项。",
             "整理成素材",
         ],
+        # R6-C.2A: 合同调整 — 移除 responsibility (不在 communication suggested),
+        # 改为 (action, method, result) 表达"3 轮内可生成素材"目标.
+        # 原 expected 含 responsibility 是 R6-A Phase 5 初始设计, 但 communication
+        # gap 的 policy 不追问 responsibility (GAP_SUGGESTED_SLOTS['communication']
+        # = (background, action, method, result)), 评测合同不一致.
+        # 新 expected 选 3 轮内合理可问的关键 slot:
+        #   - action (position 1) — 3 轮内 100% 必问
+        #   - method (position 2) — 3 轮内 100% 必问
+        #   - result (position 3) — near_limit 触达, 第 3 轮优先问
         "expected_slots": {
-            "responsibility": "整理报名问题和同学反馈",
             "action": ["建立共享文档", "按时间、场地、物料分类", "同步状态"],
+            "method": "按时间、场地、物料分类",
             "result": "分工更清楚, 负责人能看到待处理事项",
         },
         "expected_draft_has_metrics": False,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 3 轮内可生成素材.
+        # 合同说明: 原 expected 含 responsibility 不在 communication suggested;
+        # 调整为 (action, method, result) 表达 3 轮内可生成素材目标.
+        # 3 个 expected slot 全部在 communication suggested 0-3 位置, 无 contract warning.
+        "product_goal": "three_turn_friendly",
+        "contract_note": (
+            "3 轮内可生成素材目标; 原 expected 含 responsibility 不在 communication "
+            "suggested 中, 调整为 (action/method/result) — action(method) 在 1-2 位置 "
+            "3 轮内 100% 必问, result 在 near_limit 第 3 轮优先问, 无 contract warning."
+        ),
     },
     {
         "name": "tech_metric_data",
@@ -196,6 +229,16 @@ EVAL_SET_PLAN_BASELINE: list[dict] = [
             "result": "整理 20 多条例子供组员参考, 判断更一致",
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 3 轮内可生成素材.
+        # 合同说明: tech_metric suggested = (background, responsibility, action, method, result).
+        # expected (responsibility/action/result): responsibility 在 1 位置, action 在 2 位置,
+        # result 在 4 位置 (near_limit 第 3 轮触达). 3 轮内合理可问, 无 contract warning.
+        "product_goal": "three_turn_friendly",
+        "contract_note": (
+            "3 轮内可生成素材目标; responsibility/action 在 tech_metric suggested "
+            "0-2 位置 3 轮内 100% 可达, result 在 near_limit 触达, 无 contract warning."
+        ),
     },
 ]
 
@@ -206,6 +249,12 @@ EVAL_SET_PLAN_BASELINE: list[dict] = [
 #   - 不写真实学校 / 公司 / 项目名 / 姓名
 #   - 用"医疗垂类评测项目 / 心电时序项目 / 开源社团 / 大型赛事志愿"等抽象描述
 #   - source="simulated_user_v1",报告里区分 simulated vs plan_baseline
+#
+# R6-C.2A: simulated_user_v1 默认 product_goal = full_fact_coverage
+# (完整项目事实覆盖, 保留 expected 含 3 轮外 / suggested 外的 slot, 标记需后续
+#  policy 调整, 不删 expected). 合同不达标的样本(tech_metric 含 metric/method 位置 3+,
+# communication 含 responsibility)用 contract_note 字段记录"需后续 policy 调整"
+# 决策依据, 报告 4.6 章节会渲染.
 # ======================================================================
 EVAL_SET_SIMULATED: list[dict] = [
     {
@@ -229,6 +278,18 @@ EVAL_SET_SIMULATED: list[dict] = [
             "metric": ["200 多条", "90% 以上", "5 份"],
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖(full_fact_coverage).
+        # 合同说明: tech_metric suggested = (background, responsibility, action, method, result),
+        # 不含 metric. expected (responsibility/action/metric) 中 metric 是 process_metric 专用
+        # slot, 不在 tech_metric suggested 中 → unreachable. 不删 expected, 标记"需后续 policy
+        # 调整" (建议: 把 metric 加入 tech_metric suggested 末尾, 或显式声明 tech_metric
+        # 同时支持 metric 抽取).
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; metric 不在 tech_metric suggested → unreachable, "
+            "不删 expected, 标记需后续 policy 调整 (建议 tech_metric suggested 补 metric)."
+        ),
     },
     {
         "name": "sim_tech_metric_ecg",
@@ -251,6 +312,18 @@ EVAL_SET_SIMULATED: list[dict] = [
             "metric": ["89.2%"],
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖.
+        # 合同说明: tech_metric suggested (background, responsibility, action, method, result),
+        # method 在 position 3 (>= MAX_TURNS_PER_GAP) → beyond_3; metric 不在 suggested →
+        # unreachable. 不删 expected, 标记"需后续 policy 调整" (建议: 扩 MAX_TURNS_PER_GAP,
+        # 或把 tech_metric 的 near_limit 触达集合从 {result} 扩到 {method, result}).
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; method 在 position 3 (beyond) + metric 不在 suggested "
+            "(unreachable), 不删 expected, 标记需后续 policy 调整 (建议 near_limit 触达集合 "
+            "补 method, 或扩 MAX_TURNS_PER_GAP)."
+        ),
     },
     {
         "name": "sim_process_metric_open_source",
@@ -273,6 +346,15 @@ EVAL_SET_SIMULATED: list[dict] = [
             "result": "复现成功率提升",
         },
         "expected_draft_has_metrics": False,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖. 本 sample 合同已合规, 无 warning.
+        # process_metric suggested (responsibility, action, result, metric), expected
+        # (responsibility/action/result) 全在 0-2 位置 3 轮内可达.
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; responsibility/action/result 都在 process_metric "
+            "suggested 0-2 位置 3 轮内可达, 无 contract warning, 合同已合规."
+        ),
     },
     {
         "name": "sim_communication_volunteer",
@@ -295,6 +377,17 @@ EVAL_SET_SIMULATED: list[dict] = [
             "result": "赛事流程高效有序",
         },
         "expected_draft_has_metrics": False,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖.
+        # 合同说明: communication suggested (background, action, method, result), 不含
+        # responsibility. expected 含 responsibility → unreachable. 不删 expected, 标记
+        # "需后续 policy 调整" (建议: communication suggested 补 responsibility, 或确认
+        # responsibility 由 action 的"我负责"前缀兜底).
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; responsibility 不在 communication suggested → unreachable, "
+            "不删 expected, 标记需后续 policy 调整 (建议 communication suggested 补 responsibility)."
+        ),
     },
     {
         "name": "sim_domain_x_data_label",
@@ -317,6 +410,15 @@ EVAL_SET_SIMULATED: list[dict] = [
             "result": "组员判断一致性提升",
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖. 本 sample 合同已合规, 无 warning.
+        # domain_x suggested (responsibility, action, method, difficulty, result),
+        # expected (responsibility/action/result) 都在 0/1/4 位置 (含 near_limit result).
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; responsibility/action 在 domain_x suggested 0-1 位置 3 轮内 "
+            "可达, result 在 near_limit 触达, 无 contract warning, 合同已合规."
+        ),
     },
     {
         "name": "sim_tech_metric_rubric_design",
@@ -339,6 +441,17 @@ EVAL_SET_SIMULATED: list[dict] = [
             "metric": ["0-4 分档位", "4 层"],
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖.
+        # 合同说明: tech_metric suggested (background, responsibility, action, method, result).
+        # method 在 position 3 (beyond) + metric 不在 suggested (unreachable).
+        # 不删 expected, 标记"需后续 policy 调整" (同 sim_tech_metric_ecg).
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; method 在 position 3 (beyond) + metric 不在 suggested "
+            "(unreachable), 不删 expected, 标记需后续 policy 调整 (建议 near_limit 触达集合 "
+            "补 method, tech_metric suggested 补 metric)."
+        ),
     },
     {
         "name": "sim_process_metric_eval_pipeline",
@@ -361,6 +474,15 @@ EVAL_SET_SIMULATED: list[dict] = [
             "result": "验证模型可靠性",
         },
         "expected_draft_has_metrics": True,
+        # ---- R6-C.2A: 评测合同标注 ----
+        # 产品目标: 完整项目事实覆盖. 本 sample 合同已合规, 无 warning.
+        # process_metric suggested (responsibility, action, result, metric), expected
+        # (responsibility/action/result) 全在 0-2 位置 3 轮内可达.
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; responsibility/action/result 都在 process_metric "
+            "suggested 0-2 位置 3 轮内可达, 无 contract warning, 合同已合规."
+        ),
     },
 ]
 
@@ -1282,6 +1404,63 @@ def write_report(
         )
         lines.append("")
 
+    # 4.6、Eval contract: product goal (R6-C.2A, round6-c.2a 路线 A 收尾)
+    # 列出每条 sample 的 product_goal + contract 决策说明.
+    # schema_pass_rate 的变化必须解释为"评测合同变化" — 本表 + 4.5 章节共同支撑.
+    lines.append("## 4.6、Eval contract: product goal (R6-C.2A)")
+    lines.append("")
+    # 去重 sample, 只列每个 sample 一次(compare 模式双组不重复)
+    contract_goals: list[dict] = []
+    seen_goal_samples: set[str] = set()
+    for s in EVAL_SET_ALL:
+        if not isinstance(s, dict):
+            continue
+        name = s.get("name", "")
+        if name in seen_goal_samples:
+            continue
+        seen_goal_samples.add(name)
+        goal = str(s.get("product_goal", "") or "")
+        note = str(s.get("contract_note", "") or "")
+        contract_goals.append({
+            "name": name,
+            "source": str(s.get("source", "") or ""),
+            "gap_id": str(s.get("gap_id", "") or ""),
+            "product_goal": goal,
+            "contract_note": note,
+        })
+    # 3 轮内合同已合规的样本数(无 warning)
+    goal_no_warning_count = sum(
+        1 for g in contract_goals
+        if not any(w["name"] == g["name"] for w in contract_warnings)
+    )
+    goal_with_warning_count = len(contract_goals) - goal_no_warning_count
+    lines.append(
+        f"本章节记录每条样本的 **产品目标** + expected_slots **合同决策**, 配合 4.5 章节 "
+        f"(`Eval contract warnings`) 共同支撑 `schema_pass_rate` 的解读。共 **{len(contract_goals)}** "
+        f"条 sample: **{goal_no_warning_count}** 条 3 轮内合同已合规, "
+        f"**{goal_with_warning_count}** 条保留 expected 不删, 标记需后续 policy 调整。"
+    )
+    lines.append("")
+    lines.append("| sample | source | gap | product_goal | 合同说明 |")
+    lines.append("|---|---|---|---|---|")
+    for g in contract_goals:
+        lines.append(
+            f"| `{g['name']}` | `{g['source']}` | `{g['gap_id']}` | "
+            f"`{g['product_goal']}` | {g['contract_note']} |"
+        )
+    lines.append("")
+    # 验收口径说明: schema_pass_rate 变化 = 评测合同变化
+    lines.append(
+        "> **R6-C.2A 验收口径**: 本轮 (R6-C.2A) 调整了 `communication_club` 的 `expected_slots` "
+        "(移除 responsibility / 增加 method, 表达 3 轮内可生成素材目标), 并对其他 simulated 样本 "
+        "标注 `product_goal=full_fact_coverage` 但保留 expected 不删 (`sim_communication_volunteer` "
+        "/ `sim_tech_metric_medical_eval` / `sim_tech_metric_ecg` / `sim_tech_metric_rubric_design`)。"
+        "`schema_pass_rate` 数值变化必须解读为 **评测合同变化** (expected_slots 调整 / product_goal "
+        "标记), **不**解读为 LLM 抽取能力提升或下降。若需评估 LLM 真实抽取质量, 应跑 `live` 模式 + "
+        "真实 LLM 凭据 + 同一合同下比较 rules vs llm_assisted 双组 delta。"
+    )
+    lines.append("")
+
     # 五、Fabrication guard
     lines.append("## 五、Fabrication guard")
     lines.append("")
@@ -1365,6 +1544,25 @@ def write_report(
     lines.append(
         "- **未满足 plan §5.1 启动条件**: simulated_user_v1 ≠ 真实用户使用反馈。"
     )
+    # R6-C.2A: schema_pass_rate 变化 = 评测合同变化
+    # 当前轮次 (R6-C.2A) 调整了 communication_club 的 expected_slots,
+    # 并对其他 simulated 样本标注 product_goal / contract_note.
+    # schema_pass_rate 数字变化必须解读为合同变化, 不解读为 LLM 能力变化.
+    contract_change_count = sum(
+        1 for s in EVAL_SET_ALL
+        if isinstance(s, dict) and s.get("product_goal") in {
+            "three_turn_friendly", "full_fact_coverage",
+        }
+    )
+    if contract_change_count > 0:
+        lines.append(
+            f"- **R6-C.2A 合同调整**: 本轮有 **{contract_change_count}** 条样本标注了 "
+            f"`product_goal` 字段 (three_turn_friendly / full_fact_coverage), 其中 "
+            f"`communication_club` 的 `expected_slots` 已调整 (移除 responsibility, 改为 "
+            f"action/method/result, 表达 3 轮内可生成素材目标)。`schema_pass_rate` 数值变化应"
+            f"解读为 **评测合同变化**, 不解读为 LLM 抽取能力变化。详见 4.5 (warnings) / 4.6 "
+            f"(product goal) 章节。"
+        )
     lines.append(
         "- **下一步**: 用户在 chat panel 跑 10+ 轮真实对话后, 跑 `live` 模式 + 真实 LLM key "
         "(手动) 再生成 v2 报告作 Phase 5 收益决策依据。"

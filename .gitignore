@@ -39,6 +39,9 @@ backend/logs/
 .harness/plans/
 .harness/scripts/
 
+# 面试讲解(本地脱敏稿,含大量面试题内容,R6-E 起 avoid 入库)
+.planning/面试讲解/
+
 # 环境变量(本地运行时配置,不入库;用 backend/.env.example 作模板)
 # 防止 LLM_API_KEY / 数据库密码等敏感配置误 commit
 .env

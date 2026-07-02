@@ -1584,7 +1584,324 @@ class TestPhaseC2BCriticalSlotIntegration:
 
 
 # ----------------------------------------------------------------------
-# 10. R6-C.3: LLM 抽取可观测性 + prompt few-shot 优化
+# 11. R6-E Phase 4 fix: _do_answer slot 选择对齐 policy 决策
+# ----------------------------------------------------------------------
+class TestSlotExtractionAlignsWithPolicy:
+    """R6-E Phase 4: 修复 _do_answer slot 选择 bug。
+
+    Bug 描述:
+      _do_answer() 用 `_current_slot(sess)` 选 slot,该 helper 按
+      `gap.suggested_slots` 顺序跳过已 captured。但 `next_question()` 走
+      `plan_next_question` 按 `CAN_DRAFT_CONDITIONS` 缺啥问啥。两者不一致:
+
+      例如 communication gap (suggested = ("background", "action", "method", "result"))
+        第 3 轮 policy 知道 combo1 (background, action, result) 缺 result,
+        所以 question_plan.slot = "result", UI 问 "沟通之后有什么变化?"。
+        但 _current_slot 按 suggested 顺序跳过 bg + action, 返回 "method",
+        把用户答的 result 内容塞进 method slot → captured 永远缺 result
+        → can_draft 永远 False → /draft 端点 400。
+
+    修复 (核心边界保持):
+      _do_answer 优先用 sess.question_plan["slot"](policy 决策结果),
+      fallback 到 _current_slot(sess),再 fallback 到 ""。
+
+    本测试覆盖:
+      1. 4 个 gap 各跑 1 个 3 轮对话,断言最终 captured 满足至少 1 个
+         CAN_DRAFT_CONDITIONS combo + can_draft(session) == True
+      2. 边界: sess.question_plan.slot="" 时 fallback 到 _current_slot 不报错
+      3. 边界: sess.question_plan=None 时 fallback 不报错
+      4. 边界: 3 轮对话里 captured_delta 的 key == UI 显示的 slot
+         (不能 method 槽抽到 result 问题的答案)
+    """
+
+    @staticmethod
+    def _gap(gap_id: str, suggested_slots: tuple[str, ...]):
+        from core.interview_agent import GapCandidate
+
+        return GapCandidate(
+            gap_id=gap_id,
+            label=f"{gap_id}_label",
+            reason="",
+            keywords=[],
+            source=[],
+            tier="required",
+            priority=10.0,
+            suggested_slots=suggested_slots,
+        )
+
+    @staticmethod
+    def _session(gap):
+        from core.interview_agent import InterviewSession, InterviewState
+
+        return InterviewSession(
+            session_id=f"ia_r6e_p4_{gap.gap_id}",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+    @staticmethod
+    def _run_3_turn_dialogue(
+        gap,
+        turn_messages: list[str],
+        turn_expected_slots: list[str],
+    ) -> tuple:
+        """跑 3 轮 next_question + apply_action(ANSWER) 对话, 返回 (final_session, all_responses)。
+
+        turn_messages[i] 是用户在第 i+1 轮的回复;
+        turn_expected_slots[i] 是 UI 在第 i+1 轮问的 slot(next_question 返回值)。
+
+        验证:
+          - 3 轮内 captured 满足至少 1 个 CAN_DRAFT_CONDITIONS combo
+          - can_draft(session) == True
+          - 第 i+1 轮 captured_delta 的 key 应等于 turn_expected_slots[i]
+        """
+        from core.interview_agent import (
+            ActionType, apply_action, can_draft, next_question,
+        )
+        from core.interview_prompts import CAN_DRAFT_CONDITIONS
+
+        sess = TestSlotExtractionAlignsWithPolicy._session(gap)
+        all_responses = []
+        for i, msg in enumerate(turn_messages):
+            # UI: 先问下一个 slot(模拟 /start 或前一轮返回的 next_question)
+            nxt = next_question(sess)
+            # 期望 next_question 给的 slot == 用户答的 slot(对齐 policy)
+            assert nxt["slot"] == turn_expected_slots[i], (
+                f"第 {i + 1} 轮: 期望 UI 问 slot={turn_expected_slots[i]!r}, "
+                f"实际 {nxt['slot']!r}"
+            )
+            # 用户回答
+            sess, resp = apply_action(sess, ActionType.ANSWER, msg)
+            all_responses.append(resp)
+            # 验证 captured_delta 的 key 应等于当前被问的 slot
+            captured_delta = resp.get("captured_delta") or {}
+            assert turn_expected_slots[i] in captured_delta, (
+                f"第 {i + 1} 轮: 期望 captured_delta 含 key={turn_expected_slots[i]!r}, "
+                f"实际 captured_delta={list(captured_delta.keys())!r}, "
+                f"full={captured_delta!r}"
+            )
+        # 最终验证 can_draft + combo 满足
+        assert can_draft(sess), (
+            f"{gap.gap_id}: 3 轮对话后 can_draft 仍 False, "
+            f"captured={sess.captured_slots!r}"
+        )
+        # 至少满足 1 个 combo
+        satisfied = False
+        for combo in CAN_DRAFT_CONDITIONS:
+            if all(
+                (isinstance(sess.captured_slots.get(s), str)
+                 and sess.captured_slots.get(s, "").strip())
+                or (isinstance(sess.captured_slots.get(s), list)
+                    and len(sess.captured_slots.get(s, [])) > 0)
+                for s in combo
+            ):
+                satisfied = True
+                break
+        assert satisfied, (
+            f"{gap.gap_id}: 3 轮后没有任何 CAN_DRAFT_CONDITIONS combo 满足, "
+            f"captured={sess.captured_slots!r}"
+        )
+        return sess, all_responses
+
+    def test_communication_gap_3_turns_can_draft_true(self):
+        """communication gap 3 轮对话后 can_draft=True。
+
+        这是 orchestrator 实测复现的 bug 场景:
+          第 1 轮 UI 问 background → 答
+          第 2 轮 UI 问 action → 答
+          第 3 轮 UI 问 result (policy combo1 缺 result) → 答 result 内容
+
+        修复前: 第 3 轮 captured_delta["method"] 被错误填充(因为 _current_slot 返回 method),
+                captured 永远缺 result, can_draft=False。
+        修复后: 第 3 轮 captured_delta["result"] = "减少了错误", combo1 (bg, action, result)
+                满足, can_draft=True。
+        """
+        gap = self._gap("communication", ("background", "action", "method", "result"))
+        sess, responses = self._run_3_turn_dialogue(
+            gap,
+            turn_messages=[
+                "有的, 我会定期组织线上线下会议, 让信息对齐",
+                "执行了一个动作: 整理需求文档, 拉齐团队理解",
+                "减少了错误: 沟通后返工率明显下降",
+            ],
+            turn_expected_slots=["background", "action", "result"],
+        )
+        # 进一步断言 captured 的内容
+        assert "background" in sess.captured_slots
+        assert "action" in sess.captured_slots
+        assert "result" in sess.captured_slots
+        # method 不应被填充(用户从未被问 method,也不该有内容)
+        assert "method" not in sess.captured_slots, (
+            f"communication: method 不应被错误填充, "
+            f"captured={sess.captured_slots!r}"
+        )
+
+    def test_process_metric_gap_3_turns_can_draft_true(self):
+        """process_metric gap 3 轮对话后 can_draft=True。
+
+        process_metric suggested = (responsibility, action, result, metric)。
+        policy.step3 优先级链选 combo1 (background, action, result) 作为缺得最少的 combo,
+        第 1 轮问 background(虽然 background 不在 suggested 里 — policy 仍按 combo1 追问),
+        第 2 轮问 action, 第 3 轮问 result。
+
+        修复前: 第 3 轮 _current_slot 返回 metric(因为 suggested[2]=result 已 captured 后
+                下一个未 captured 是 metric,但 UI 实际问 result), 用户答的内容塞进 metric
+                而非 result,combo1 永远缺 result。
+        修复后: 第 3 轮 policy 选 result, captured["result"] 填充, combo1 满足。
+        """
+        gap = self._gap("process_metric", ("responsibility", "action", "result", "metric"))
+        sess, _ = self._run_3_turn_dialogue(
+            gap,
+            turn_messages=[
+                "AI 测试反馈整理项目背景, 我做流程闭环",
+                "梳理了反馈分类流程, 按优先级分派",
+                "流程跑通后, 闭环时长从 3 天缩短到 1 天",
+            ],
+            turn_expected_slots=["background", "action", "result"],
+        )
+        assert "background" in sess.captured_slots
+        assert "action" in sess.captured_slots
+        assert "result" in sess.captured_slots
+
+    def test_tech_metric_gap_3_turns_can_draft_true(self):
+        """tech_metric gap 3 轮对话后 can_draft=True。
+
+        tech_metric suggested = (background, responsibility, action, method, result)。
+        policy.step3 选 combo1 (background, action, result), 3 轮依次问 bg / action / result。
+        修复前: 第 3 轮 _current_slot 在 bg + resp + action captured 后返回 method,
+                用户答 result 内容塞进 method 而非 result。
+        修复后: 第 3 轮 captured["result"] 填充, combo1 满足。
+        """
+        gap = self._gap(
+            "tech_metric",
+            ("background", "responsibility", "action", "method", "result"),
+        )
+        sess, _ = self._run_3_turn_dialogue(
+            gap,
+            turn_messages=[
+                "AI 评测项目背景, 我做数据质量评估",
+                "执行了数据标注 + 模型评测的完整动作链",
+                "结果: 准确率提升 5 个百分点",
+            ],
+            turn_expected_slots=["background", "action", "result"],
+        )
+        assert "background" in sess.captured_slots
+        assert "action" in sess.captured_slots
+        assert "result" in sess.captured_slots
+
+    def test_domain_x_gap_3_turns_can_draft_true(self):
+        """domain_x gap 3 轮对话后 can_draft=True。
+
+        domain_x suggested = (responsibility, action, method, difficulty, result)。
+        policy.step3 仍按 combo1 (background, action, result) 追问(虽然 background 不在
+        suggested 里 — policy 优先级按 CAN_DRAFT_CONDITIONS), 3 轮依次问 bg / action / result。
+
+        修复前: 第 3 轮 _current_slot 在 bg + resp + action captured 后返回 method
+                (suggested[2]=method 仍未 captured), 用户答 result 内容塞进 method 而非 result。
+        修复后: policy 第 3 轮继续问 missing_required (combo1 缺 result),
+                captured["result"] 填充。
+        """
+        gap = self._gap(
+            "domain_x",
+            ("responsibility", "action", "method", "difficulty", "result"),
+        )
+        sess, _ = self._run_3_turn_dialogue(
+            gap,
+            turn_messages=[
+                "医疗 NLP 项目背景, 心电信号分类任务",
+                "做了数据标注 + 模型评测的完整动作链",
+                "结果: 心电信号分类 F1 提升 12 个百分点",
+            ],
+            turn_expected_slots=["background", "action", "result"],
+        )
+        assert "background" in sess.captured_slots
+        assert "action" in sess.captured_slots
+        assert "result" in sess.captured_slots
+
+    def test_question_plan_empty_slot_falls_back_to_current_slot(self):
+        """sess.question_plan.slot="" 时 fallback 到 _current_slot 不报错。
+
+        这是兜底边界: 当 question_plan.slot 为空字符串(例如 force_draft / no_more 路径),
+        _do_answer 应回退到 _current_slot 的旧逻辑,避免抛错。
+        """
+        from core.interview_agent import (
+            ActionType, GapCandidate, InterviewSession, InterviewState,
+            apply_action,
+        )
+
+        gap = GapCandidate(
+            gap_id="process_metric", label="流程", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=("action", "method", "result", "metric"),
+        )
+        sess = InterviewSession(
+            session_id="ia_r6e_p4_fallback_empty",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+            question_plan={"slot": "", "reason_code": "force_draft_turn_limit"},
+        )
+        # 不应抛错,captured_slots 至少一个 key 被填充(_current_slot 返回 "action")
+        sess2, resp = apply_action(sess, ActionType.ANSWER, "梳理了反馈分类流程")
+        delta = resp.get("captured_delta") or {}
+        assert "action" in delta, (
+            f"question_plan.slot='' 时 fallback 到 _current_slot 应选 'action', "
+            f"实际 delta={list(delta.keys())!r}"
+        )
+
+    def test_question_plan_none_falls_back_to_current_slot(self):
+        """sess.question_plan=None 时 fallback 到 _current_slot 不报错。
+
+        老 session 或非 policy 路径下 question_plan 可能是 None, _do_answer
+        不应抛 AttributeError。
+        """
+        from core.interview_agent import (
+            ActionType, GapCandidate, InterviewSession, InterviewState,
+            apply_action,
+        )
+
+        gap = GapCandidate(
+            gap_id="process_metric", label="流程", reason="",
+            keywords=[], source=[], tier="required",
+            priority=10.0, suggested_slots=("action", "method", "result", "metric"),
+        )
+        sess = InterviewSession(
+            session_id="ia_r6e_p4_fallback_none",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=gap,
+            state=InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+            question_plan=None,
+        )
+        # 不应抛错
+        sess2, resp = apply_action(sess, ActionType.ANSWER, "梳理了反馈分类流程")
+        delta = resp.get("captured_delta") or {}
+        assert "action" in delta, (
+            f"question_plan=None 时 fallback 到 _current_slot 应选 'action', "
+            f"实际 delta={list(delta.keys())!r}"
+        )
+
+
+# ----------------------------------------------------------------------
+# 12. R6-C.3: LLM 抽取可观测性 + prompt few-shot 优化
 # ----------------------------------------------------------------------
 def interview_agent_for_test():
     """Helper: import interview_agent module-level symbols."""

@@ -1344,7 +1344,33 @@ def build_draft_card(session: InterviewSession) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewSession, dict]:
     sess = session
-    slot = _current_slot(sess)
+    # R6-E Phase 4 fix: slot 选择优先用 sess.question_plan["slot"](policy 决策结果),
+    # 而不是按 gap.suggested_slots 顺序跳过 captured 的 _current_slot 兜底。
+    #
+    # 为什么需要这个修复:
+    #   - 缺口选择走 plan_next_question(spec §6 优先级链), 它按 CAN_DRAFT_CONDITIONS
+    #     找"差得最少"的 combo, 然后问 combo 里第一个未 captured 的 slot。
+    #   - 例如 communication gap (suggested=("background","action","method","result"))
+    #     走到第 3 轮时, policy 已经满足 combo1 (background, action, result) 中前两个,
+    #     缺的是 result, 所以 policy 在 question_plan.slot 写 "result"(UI 也问 result)。
+    #   - 但 _current_slot 按 suggested 顺序跳 background + action, 返回 "method"
+    #     (第一个未 captured),导致抽取把用户答的 result 内容塞进 method slot,
+    #     result slot 永远空, combo1 永远不满, can_draft=False, /draft 端点 400。
+    #
+    # 修复策略(最小侵入):
+    #   1. 优先用 sess.question_plan["slot"](policy 决定要问哪个 slot)
+    #   2. fallback 到 _current_slot(sess)(spec 兼容: 老测试 / 非 policy 路径仍能用)
+    #   3. 再 fallback 到 ""(extract_slots 在未知 slot 时返空 dict,不抛)
+    #
+    # 不动 _current_slot 本体(_do_rephrase 还在用), 不动 next_question / plan_next_question
+    # (R6-B Phase 3 / R6-C.2B 锁定), 不动 slot 抽取逻辑(R6-C.3 / Phase 1 锁定)。
+    plan = sess.question_plan if isinstance(sess.question_plan, dict) else None
+    plan_slot = str((plan or {}).get("slot") or "").strip()
+    if plan_slot:
+        slot = plan_slot
+    else:
+        current = _current_slot(sess)
+        slot = current or ""
     # turn_index 用当前 turn_count + 1(spec §5.2 turn_index 反映这一轮是第几轮)
     # 注意: extract_slots 返回之后 turn_count 还没自增, 所以 turn_index = turn_count + 1
     next_turn_index = (sess.turn_count or 0) + 1

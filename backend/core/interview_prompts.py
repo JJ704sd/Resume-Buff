@@ -283,8 +283,23 @@ SLOT_EXTRACTION_SYSTEM_PROMPT: str = (
     "- 用户没明确提: value 留空 (str→\"\" / list→[]) 并加 warning \"未识别槽位内容, 已存原文供用户编辑\"\n"
     "- 不要编造信息, 只抽取用户原文能对应的事实\n"
     "- 不要展示 reasoning / chain-of-thought\n"
+    "\n"
+    "Few-shot 示例(输入 → 期望 JSON):\n"
+    "示例 1 (string slot, responsibility):\n"
+    "  当前 slot: responsibility\n"
+    "  用户回答: 我负责一个数据标注项目, 主要是检查文本分类结果是否符合规则。\n"
+    "  → {\"responsibility\": \"检查文本分类结果是否符合规则\", \"_warnings\": []}\n"
+    "示例 2 (list slot, action):\n"
+    "  当前 slot: action\n"
+    "  用户回答: 我先看样例; 再把容易混淆的类别写成判断标准; 遇到边界情况就记录下来。\n"
+    "  → {\"action\": [\"查看样例\", \"把容易混淆的类别写成判断标准\", \"记录边界情况\"], \"_warnings\": []}\n"
 )
-"""LLM slot 抽取的 system prompt(plan §4.4)。
+"""LLM slot 抽取的 system prompt(plan §4.4 + R6-C.3 优化)。
+
+R6-C.3 改动(优化项):
+  - 增加 2 个短 few-shot 例子, 覆盖 string slot (responsibility) + list slot (action)
+  - 例子只用"数据标注" / "看样例 / 判断标准 / 边界"这类脱敏描述, **不**引用任何 JD 原文
+    (遵守 spec §4.4 模板不含 JD 全文的隐私边界)
 
 R5-E 保护:
   - 这是**新常量**,**不**进 PROMPT_VERSIONS, 不挂 evaluate_prompt_versions.py

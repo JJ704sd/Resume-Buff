@@ -2389,3 +2389,466 @@ class TestPhaseC2BCriticalSlotIntegration:
         entry = sess.message_log[-1]
         assert entry["kind"] == "asked"
         assert entry["slot"] == msg["slot"]  # 应是 metric
+
+
+# ----------------------------------------------------------------------
+# 10. R6-C.3: LLM 抽取可观测性 + prompt few-shot 优化
+# ----------------------------------------------------------------------
+class TestPhaseC3LLMObservability:
+    """R6-C.3: 4 个维度测试
+
+    覆盖:
+      A. Request body 改动 — response_format 字段
+      B. temperature 仍 0.0
+      C. slot_source_breakdown / llm_parse_retry_count / llm_to_rules_slot_fallback_count
+      D. prompt few-shot 示例存在 + 不含 JD 原文
+    """
+
+    # ---------- A. Request body 改动 ----------
+
+    def test_request_body_includes_response_format_json_object(self, monkeypatch):
+        """R6-C.3: LLM 请求 body 含 `response_format={"type": "json_object"}`。
+
+        Mock urlopen 抓 body bytes, json.loads 验证字段结构 + 顺序(在 messages 后,
+        temperature 前, 跟 spec 一致)。
+        """
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-rf")
+
+        captured_body: dict = {}
+
+        def _fake_urlopen(req, timeout=None):
+            # req.data 是 bytes, 抓出来供后续断言
+            captured_body.update(json.loads(req.data.decode("utf-8")))
+            class _R:
+                def read(self_inner):
+                    return json.dumps({
+                        "choices": [{"message": {"content": json.dumps({
+                            "responsibility": "检查文本分类结果",
+                            "_warnings": [],
+                        }, ensure_ascii=False)}}],
+                    }, ensure_ascii=False).encode("utf-8")
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return _R()
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            side_effect=_fake_urlopen,
+        ):
+            interview_agent.extract_slots(
+                "我负责一个数据标注项目, 主要是检查文本分类结果是否符合规则。",
+                "responsibility",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # 验证 response_format 字段
+        assert "response_format" in captured_body, (
+            f"LLM 请求 body 必须含 response_format 字段, 实际 keys={list(captured_body.keys())}"
+        )
+        assert captured_body["response_format"] == {"type": "json_object"}, (
+            f"response_format 应是 {{type: json_object}}, 实际 {captured_body['response_format']!r}"
+        )
+
+    # ---------- B. temperature 仍 0.0 ----------
+
+    def test_request_body_temperature_remains_zero(self, monkeypatch):
+        """R6-C.3 兼容: temperature 仍 = 0.0(spec §4.4 字节级一致)。"""
+        import unittest.mock
+
+        from core import interview_agent
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-temp")
+
+        captured_body: dict = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured_body.update(json.loads(req.data.decode("utf-8")))
+            class _R:
+                def read(self_inner):
+                    return json.dumps({
+                        "choices": [{"message": {"content": json.dumps({
+                            "responsibility": "x", "_warnings": [],
+                        }, ensure_ascii=False)}}],
+                    }, ensure_ascii=False).encode("utf-8")
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return _R()
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            side_effect=_fake_urlopen,
+        ):
+            interview_agent.extract_slots(
+                "我负责一个数据标注项目, 主要是检查文本分类结果是否符合规则。",
+                "responsibility",
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        assert captured_body.get("temperature") == 0.0, (
+            f"temperature 必须仍 = 0.0 (R6-C.3 兼容), 实际 {captured_body.get('temperature')!r}"
+        )
+
+    # ---------- C. 可观测性字段 ----------
+
+    def test_session_default_observability_fields_zero_and_empty(self):
+        """R6-C.3: InterviewSession 默认值 = slot_source_breakdown={}, retries=0, fb=0。
+
+        老测试构造 InterviewSession 时关键字缺省即可(字节级兼容)。
+        """
+        from core.interview_agent import InterviewSession
+
+        sess = InterviewSession(
+            session_id="ia-c3-default",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent_for_test().InterviewState.EMPTY,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        assert sess.slot_source_breakdown == {}, (
+            f"默认 slot_source_breakdown 应是 {{}}, 实际 {sess.slot_source_breakdown!r}"
+        )
+        assert sess.llm_parse_retry_count == 0
+        assert sess.llm_to_rules_slot_fallback_count == 0
+
+    def test_slot_source_breakdown_rules_only_when_llm_disabled(self):
+        """R6-C.3: llm_enabled=False → slot_source_breakdown 只 +rules, retries/fb 永远 0。"""
+        from core import interview_agent
+        from core.interview_agent import InterviewSession
+
+        sess = InterviewSession(
+            session_id="ia-c3-rules",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent.InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+        for _ in range(3):
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                sess,  # 传 session 写可观测性
+                llm_enabled=False,
+            )
+        # rules 路径走 3 次 → breakdown["rules"] = 3
+        assert sess.slot_source_breakdown == {"rules": 3, "llm": 0, "mixed": 0} or \
+               sess.slot_source_breakdown.get("rules") == 3, (
+            f"rules 路径 3 次应 +3 rules, 实际 {sess.slot_source_breakdown!r}"
+        )
+        assert sess.llm_parse_retry_count == 0, (
+            f"rules 路径不调 LLM, retries 应 = 0, 实际 {sess.llm_parse_retry_count}"
+        )
+        assert sess.llm_to_rules_slot_fallback_count == 0, (
+            f"rules 路径无 fallback, fb 应 = 0, 实际 {sess.llm_to_rules_slot_fallback_count}"
+        )
+
+    def test_slot_source_breakdown_records_llm_success(self, monkeypatch):
+        """R6-C.3: LLM 成功 → slot_source_breakdown[llm] +1, retries 不增。"""
+        import unittest.mock
+
+        from core import interview_agent
+        from core.interview_agent import InterviewSession
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-llm-ok")
+
+        sess = InterviewSession(
+            session_id="ia-c3-llm-ok",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent.InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+        class _R:
+            def read(self_inner):
+                return json.dumps({
+                    "choices": [{"message": {"content": json.dumps({
+                        "action": ["做了一个表格模板"],
+                        "_warnings": [],
+                    }, ensure_ascii=False)}}],
+                }, ensure_ascii=False).encode("utf-8")
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_R(),
+        ) as mock_urlopen:
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                sess,
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # 1 次 urlopen, LLM 成功, +1 llm
+        assert mock_urlopen.call_count == 1
+        assert sess.slot_source_breakdown.get("llm") == 1, (
+            f"LLM 成功应 +1 llm, 实际 {sess.slot_source_breakdown!r}"
+        )
+        assert sess.llm_parse_retry_count == 0, (
+            f"LLM 1 次成功不 retry, retries 应 = 0, 实际 {sess.llm_parse_retry_count}"
+        )
+        assert sess.llm_to_rules_slot_fallback_count == 0, (
+            f"LLM 成功不 fallback, fb 应 = 0, 实际 {sess.llm_to_rules_slot_fallback_count}"
+        )
+
+    def test_llm_parse_retry_count_increments_on_invalid_json(self, monkeypatch):
+        """R6-C.3: LLM 返非 JSON → retry 1 次 → llm_parse_retry_count += 1。
+
+        2 次都返非 JSON, 最终 fallback 规则版 → llm_to_rules_slot_fallback_count += 1。
+        """
+        import unittest.mock
+
+        from core import interview_agent
+        from core.interview_agent import InterviewSession
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-retry")
+
+        sess = InterviewSession(
+            session_id="ia-c3-retry",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent.InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+        class _R:
+            def read(self_inner):
+                return b"not a json response"  # 非 JSON, schema 必错
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_R(),
+        ) as mock_urlopen:
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                sess,
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # urlopen 调 2 次(1 retry)
+        assert mock_urlopen.call_count == 2
+        # retry 计数 +1
+        assert sess.llm_parse_retry_count == 1, (
+            f"JSON 错 retry 1 次, llm_parse_retry_count 应 = 1, 实际 {sess.llm_parse_retry_count}"
+        )
+        # fallback 计数 +1(因为 2 次都 schema 错)
+        assert sess.llm_to_rules_slot_fallback_count == 1, (
+            f"最终 fallback 规则版, fb 应 = 1, 实际 {sess.llm_to_rules_slot_fallback_count}"
+        )
+        # rules 路径 +1(fallback 走规则)
+        assert sess.slot_source_breakdown.get("rules") == 1, (
+            f"fallback 后走 rules, rules 应 +1, 实际 {sess.slot_source_breakdown!r}"
+        )
+
+    def test_llm_to_rules_slot_fallback_count_increments_on_network_error(self, monkeypatch):
+        """R6-C.3: LLM 网络错(URLError) → 不 retry, fb_to_rules += 1, retries 不增。"""
+        import unittest.mock
+        from urllib.error import URLError
+
+        from core import interview_agent
+        from core.interview_agent import InterviewSession
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-net")
+
+        sess = InterviewSession(
+            session_id="ia-c3-net",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent.InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            side_effect=URLError("conn refused"),
+        ) as mock_urlopen:
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action",
+                sess,
+                llm_enabled=True,
+                llm_base_url="https://mock.example.com",
+                llm_model="mock-model",
+            )
+
+        # 网络错不 retry → urlopen 调 1 次
+        assert mock_urlopen.call_count == 1
+        # 网络错不计入 retries(只 JSON / schema 错才 retry)
+        assert sess.llm_parse_retry_count == 0, (
+            f"网络错不 retry, retries 应 = 0, 实际 {sess.llm_parse_retry_count}"
+        )
+        # fallback 计数 +1
+        assert sess.llm_to_rules_slot_fallback_count == 1, (
+            f"网络错 fallback, fb 应 = 1, 实际 {sess.llm_to_rules_slot_fallback_count}"
+        )
+        # rules 路径 +1
+        assert sess.slot_source_breakdown.get("rules") == 1
+
+    def test_observability_default_session_param_no_side_effect(self):
+        """R6-C.3: extract_slots(session=None) → 不写任何可观测性字段, 字节级一致老路径。"""
+        from core import interview_agent
+
+        # 没传 session(默认) → 不应崩, 不应有 side effect
+        result = interview_agent.extract_slots(
+            "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+            "action",
+            llm_enabled=False,
+        )
+        assert isinstance(result.get("action"), list)
+
+    def test_observability_accumulates_across_multiple_answers(self, monkeypatch):
+        """R6-C.3: 连续多轮 answer → 可观测性字段累加(不重置)。"""
+        import unittest.mock
+
+        from core import interview_agent
+        from core.interview_agent import InterviewSession
+
+        monkeypatch.setenv("LLM_API_KEY", "test-key-c3-acc")
+
+        sess = InterviewSession(
+            session_id="ia-c3-acc",
+            target_role="test_qa",
+            jd_digest={},
+            selected_gap=None,
+            state=interview_agent.InterviewState.ASKING,
+            turn_count=0,
+            captured_slots={},
+            skip_count=0,
+            draft_card=None,
+            message_log=[],
+        )
+
+        # 第 1 轮: LLM 成功
+        class _ROk:
+            def read(self_inner):
+                return json.dumps({
+                    "choices": [{"message": {"content": json.dumps({
+                        "action": ["做了一个表格模板"], "_warnings": [],
+                    }, ensure_ascii=False)}}],
+                }, ensure_ascii=False).encode("utf-8")
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            return_value=_ROk(),
+        ):
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action", sess, llm_enabled=True,
+                llm_base_url="https://mock.example.com", llm_model="mock-model",
+            )
+        # 第 2 轮: LLM 网络错
+        from urllib.error import URLError
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+            side_effect=URLError("conn refused"),
+        ):
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action", sess, llm_enabled=True,
+                llm_base_url="https://mock.example.com", llm_model="mock-model",
+            )
+        # 第 3 轮: rules 路径
+        with unittest.mock.patch(
+            "core.interview_agent.urllib.request.urlopen",
+        ) as mock_urlopen:
+            interview_agent.extract_slots(
+                "我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。",
+                "action", sess, llm_enabled=False,
+            )
+            mock_urlopen.assert_not_called()
+
+        # 累加: llm=1, rules=2 (第 2 轮 fallback + 第 3 轮直接 rules)
+        assert sess.slot_source_breakdown.get("llm") == 1, (
+            f"第 1 轮 LLM 成功, llm 应 = 1, 实际 {sess.slot_source_breakdown!r}"
+        )
+        assert sess.slot_source_breakdown.get("rules") == 2, (
+            f"第 2 轮 fallback + 第 3 轮 rules, rules 应 = 2, 实际 {sess.slot_source_breakdown!r}"
+        )
+        assert sess.llm_parse_retry_count == 0
+        assert sess.llm_to_rules_slot_fallback_count == 1, (
+            f"第 2 轮网络错 fallback, fb 应 = 1, 实际 {sess.llm_to_rules_slot_fallback_count}"
+        )
+
+    # ---------- D. prompt few-shot 优化 ----------
+
+    def test_slot_extraction_prompt_has_few_shot_examples(self):
+        """R6-C.3: SLOT_EXTRACTION_SYSTEM_PROMPT 含 few-shot 示例(覆盖 string + list)。"""
+        from core.interview_prompts import SLOT_EXTRACTION_SYSTEM_PROMPT
+
+        prompt = SLOT_EXTRACTION_SYSTEM_PROMPT
+        # 必须含 "Few-shot" 或 "示例" 字样
+        assert "示例" in prompt or "Few-shot" in prompt or "few-shot" in prompt, (
+            f"SLOT_EXTRACTION_SYSTEM_PROMPT 必须含 few-shot 示例标注, 当前:\n{prompt}"
+        )
+        # 必须含 string slot 的例子 — responsibility
+        assert "responsibility" in prompt, (
+            f"few-shot 应覆盖 string slot (e.g. responsibility), 当前:\n{prompt}"
+        )
+        # 必须含 list slot 的例子 — action
+        assert "action" in prompt, (
+            f"few-shot 应覆盖 list slot (e.g. action), 当前:\n{prompt}"
+        )
+
+    def test_slot_extraction_prompt_few_shot_no_jd_text(self):
+        """R6-C.3: few-shot 示例不含 JD 原文(隐私边界)。"""
+        from core.interview_prompts import SLOT_EXTRACTION_SYSTEM_PROMPT
+
+        prompt = SLOT_EXTRACTION_SYSTEM_PROMPT
+        # few-shot 例子应只含"输入/输出"和说明, 不应含真实 JD 字面
+        # 这里只检查不含 "{jd_text}" 变量
+        assert "{jd_text}" not in prompt, (
+            f"SLOT_EXTRACTION_SYSTEM_PROMPT 不应含 {{jd_text}} 变量"
+        )
+        # 也不应含 prompt version 字面
+        assert "v6-interview-slot" not in prompt, (
+            f"SLOT_EXTRACTION_SYSTEM_PROMPT 不应含 version 字符串字面"
+        )
+
+
+def interview_agent_for_test():
+    """Helper: import interview_agent module-level symbols."""
+    from core import interview_agent
+    return interview_agent

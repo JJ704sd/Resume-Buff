@@ -56,6 +56,25 @@ Round 6-B Phase 4: draft verifier 接入(spec §7):
     (只存 4 个计数 + warnings list[str] + extraction_mode 字面量, 不存原文)
   - 老路径(verification_summary=None)字节级一致 — save_card 跳过 verification meta
   - verifier 默认不调 LLM(pure stdlib), unsupported_claims 不阻止保存
+
+Round 6-C.3: LLM 抽取可观测性(2026-07-02 落地):
+  - InterviewSession 新增 3 个 LLM 抽取层可观测性字段(均有默认值, 保持旧测试构造兼容):
+      * slot_source_breakdown: dict[str, int]
+        = {rules: N, llm: M, mixed: K}
+        每轮 answer 完成后 +1 — rules 永远 +1(主路径), LLM 成功 +1 llm,
+        rules fallback 也算 rules(不重复), 失败透传算 mixed (罕见).
+      * llm_parse_retry_count: int
+        = 累计 JSON parse / schema retry 次数(spec §4.4 "失败 retry 1 次"
+          一次调 urlopen 算 1, 不算 round; 网络错不 retry 故不计入)
+      * llm_to_rules_slot_fallback_count: int
+        = LLM 抽取出错 fallback 规则版的次数(网络错 + JSON 错 + schema 错都算)
+  - _call_llm_for_slot_extraction: request body 加
+    response_format={"type": "json_object"} 强约束 JSON 输出(OpenAI-compatible),
+    temperature 仍 0.0(spec §4.4)
+  - 隐私边界: 3 个可观测字段只存整数 / 短字符串, 不含 user_message / source_span /
+    draft_card / API key / prompt 正文 / raw response. eval 报告只展示计数 / 比率.
+  - 老路径(llm_enabled=False / 默认)字节级一致: 3 字段保持 0 / {} / {}, 因为
+    _extract_slots_by_rules 不写 session 的 LLM 可观测字段.
 """
 from __future__ import annotations
 
@@ -169,6 +188,30 @@ class InterviewSession:
     """下一问策略输出(spec §6, Phase 3 才填充)。"""
     verification_summary: dict[str, Any] | None = None
     """draft_card 核验摘要(spec §7, Phase 4 才填充)。"""
+
+    # R6-C.3: LLM 抽取可观测性字段(3 个)
+    # 全部含默认值, 老测试构造兼容(关键字缺省即可)
+    slot_source_breakdown: dict[str, int] = field(default_factory=dict)
+    """R6-C.3 LLM 抽取可观测性: 每轮 answer 抽取完成后, 在 session 上记录来源分布。
+       schema: {rules: int, llm: int, mixed: int}
+         - rules: 走 _extract_slots_by_rules 的次数(含 LLM fallback 到规则版)
+         - llm: 走 LLM 且成功的次数(由 _extract_slots_via_llm 返非 None 时计数)
+         - mixed: 同一轮里不同 slot 来源不一致的次数(罕见, 当前实现未触发, 保留字段位)
+       默认 {}; 老路径(llm_enabled=False)字节级一致 → 累计只 +rules.
+       不含 user_message / source_span / draft_card 原文(隐私边界)。
+    """
+    llm_parse_retry_count: int = 0
+    """R6-C.3 LLM 抽取可观测性: 累计 LLM JSON parse / schema retry 次数。
+       每次 _extract_slots_via_llm 第 1 次调 LLM 失败后 retry 1 次, retry 1 次 +1。
+       网络错(URLError/HTTPError/TimeoutError)不 retry, 不计入此字段。
+       默认 0; 老路径字节级一致 → 永远 0(因为不走 LLM)。
+    """
+    llm_to_rules_slot_fallback_count: int = 0
+    """R6-C.3 LLM 抽取可观测性: 累计 LLM 失败 fallback 规则版的次数。
+       触发条件: LLM 网络错 / JSON 错 / schema 错 — 任意一种导致 _extract_slots_via_llm 返 None,
+       caller fallback _extract_slots_by_rules 时 +1。
+       默认 0; 老路径字节级一致 → 永远 0。
+    """
 
 
 # ----------------------------------------------------------------------
@@ -1071,7 +1114,7 @@ def next_question(session: InterviewSession) -> dict[str, Any]:
 def extract_slots(
     user_message: str,
     current_slot: str,
-    session: InterviewSession | None = None,  # noqa: ARG001  Phase 1+4 不使用,保留扩展位
+    session: InterviewSession | None = None,
     *,
     llm_enabled: bool = False,
     llm_api_key: str | None = None,
@@ -1081,7 +1124,11 @@ def extract_slots(
 ) -> dict[str, Any]:
     """
     按 current_slot 抽取 user_message,返回要写入 captured_slots 的 dict。
-    不修改 session — 由 apply_action 负责 mutate。
+    不修改 session 业务字段(captured_slots / slot_meta)— 由 apply_action 负责 mutate。
+    R6-C.3 起, session 不为 None 时, 本函数会更新 3 个 LLM 可观测性字段:
+      - session.slot_source_breakdown: 每轮 answer 完成后 +1 (rules / llm / mixed)
+      - session.llm_parse_retry_count: 累计 retry 次数
+      - session.llm_to_rules_slot_fallback_count: 累计 fallback 次数
 
     Phase 1 行为(llm_enabled=False / 默认):规则抽取,字节级一致。
     Phase 4 行为(llm_enabled=True + 有 key):调 LLM,schema retry 1 次,
@@ -1096,7 +1143,22 @@ def extract_slots(
       - background / responsibility / difficulty / result: 单 string
       - action / method / metric: list
       未命中关键词 → 加 1 条 warning("未识别槽位内容, 已存原文供用户编辑")
+
+    边界保护:
+      - session=None → 不写任何可观测性字段(默认 tests 不传 session)
+      - 老路径(llm_enabled=False) → slot_source_breakdown 只 +rules,
+        llm_parse_retry_count / llm_to_rules_slot_fallback_count 永远 0
+      - LLM 失败 → 仍走规则版, 但 slot_source_breakdown +rules (LLM 已 fallback)
+        且 llm_to_rules_slot_fallback_count +1
     """
+    # R6-C.3 可观测性 helper: 写 session.slot_source_breakdown[key] += 1
+    def _bump_source(source_key: str) -> None:
+        if session is None or not isinstance(session.slot_source_breakdown, dict):
+            return
+        session.slot_source_breakdown[source_key] = (
+            session.slot_source_breakdown.get(source_key, 0) + 1
+        )
+
     # Phase 4: 默认 / LLM 关闭 → 走规则版(Phase 1 字节级一致)
     config = _resolve_interview_llm_config(
         llm_enabled=llm_enabled,
@@ -1105,6 +1167,7 @@ def extract_slots(
         llm_model=llm_model,
     )
     if not config["enabled_for_call"]:
+        _bump_source("rules")
         return _extract_slots_by_rules(user_message, current_slot, turn_index=turn_index)
 
     # Phase 4 LLM 路径: 失败 fallback 规则版
@@ -1113,9 +1176,15 @@ def extract_slots(
         current_slot=current_slot,
         config=config,
         turn_index=turn_index,
+        session=session,
     )
     if parsed is None:
+        # LLM 失败 fallback 规则版 — 同时记 rules 路径 +1, fallback 计数 +1
+        _bump_source("rules")
+        if session is not None:
+            session.llm_to_rules_slot_fallback_count += 1
         return _extract_slots_by_rules(user_message, current_slot, turn_index=turn_index)
+    _bump_source("llm")
     return parsed
 
 
@@ -1419,9 +1488,17 @@ def _call_llm_for_slot_extraction(
       - **不**做 JSON 解析 / schema 校验 / retry — caller 负责
         (让 caller 能区分"网络失败" vs "返回非 JSON" vs "schema 错" 3 类失败)
 
-    隐私边界(plan §4.3):
-      - api_key 仅作 Authorization header, 不进返回值 / 日志
+    R6-C.3 改动(可观测性增强):
+      - request body 加 `response_format={"type": "json_object"}` 强约束
+        OpenAI-compatible 端点返回合法 JSON, 降低 JSON parse retry 概率
+      - temperature 仍 0.0(spec §4.4 字节级一致, 不动)
+      - 字段顺序: model → messages → response_format → temperature
+        (model + temperature 是已有的固定字段; 新字段插在中间避免破坏顺序)
+
+    隐私边界(plan §4.3 + R6-C.3):
+      - api_key 仅作 Authorization header, 不进返回值 / 日志 / 请求体可观测字段
       - 失败时不返回响应原文
+      - response_format 是 OpenAI 标准字段, 不含用户原文
     """
     url = base_url.rstrip("/") + "/chat/completions"
     body = {
@@ -1430,6 +1507,7 @@ def _call_llm_for_slot_extraction(
             {"role": "system", "content": SLOT_EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.0,
     }
     data = json.dumps(body).encode("utf-8")
@@ -1486,6 +1564,7 @@ def _extract_slots_via_llm(
     current_slot: str,
     config: dict[str, Any],
     turn_index: int = 0,
+    session: InterviewSession | None = None,
 ) -> dict[str, Any] | None:
     """
     Phase 4 LLM 抽取主路径(plan §4.4 + R6-B Phase 1 spec §5.2):
@@ -1506,6 +1585,13 @@ def _extract_slots_via_llm(
       - payload 只含 slot + user_message,**不**含 jd_text / session / materials
       - api_key 永不入返回值 / trace
       - 失败不返回响应原文
+
+    R6-C.3 可观测性接入:
+      - session 不为 None 时, 第 1 次调 LLM 失败 → retry 1 次时 session.llm_parse_retry_count += 1
+      - 网络错(URLError/HTTPError/TimeoutError)不 retry, 不计入 llm_parse_retry_count
+        (caller fallback 时 +1 llm_to_rules_slot_fallback_count)
+      - JSON 错 / schema 错 触发 retry, 计入 llm_parse_retry_count
+      - session=None → 不写可观测性字段(测试用)
 
     R5-E 保护:
       - 不 import llm_rewriter 的 SYSTEM_PROMPT / PROMPT_VERSIONS
@@ -1558,6 +1644,9 @@ def _extract_slots_via_llm(
         )
 
     # JSON / schema 都失败 → retry 1 次, 加强约束(strict_retry=True, 沿用 _call_with_retry)
+    # R6-C.3: 记 +1 retry 计数(spec §4.4 一次 retry 算一次, 不算 round)
+    if session is not None:
+        session.llm_parse_retry_count += 1
     retry_payload = dict(user_payload)
     retry_payload["instructions"] = (
         "上一轮输出不是合法 JSON 或 schema 不符, 请只输出 JSON, "
@@ -1753,8 +1842,10 @@ def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewS
     # R6-B Phase 2(spec §5.3): reply 沿用 session.interview_mode 决定 llm_enabled
     # 老路径(sess.interview_mode == "rules") 字节级一致: llm_enabled=False 走 _extract_slots_by_rules
     use_llm = (sess.interview_mode == INTERVIEW_MODE_LLM_ASSISTED)
+    # R6-C.3: 传 sess 让 extract_slots 写 3 个可观测性字段
+    # (slot_source_breakdown / llm_parse_retry_count / llm_to_rules_slot_fallback_count)
     delta = extract_slots(
-        user_message, slot or "",
+        user_message, slot or "", sess,
         turn_index=next_turn_index,
         llm_enabled=use_llm,
     )
@@ -2029,6 +2120,23 @@ def apply_action(
 
 
 # ----------------------------------------------------------------------
+# R6-C.3: LLM 抽取可观测性 schema(供 tests + scripts 引用)
+# ----------------------------------------------------------------------
+INTERVIEW_OBSERVABILITY_SCHEMA: dict[str, str] = {
+    "slot_source_breakdown": "dict[str, int] — {rules: N, llm: M, mixed: K}",
+    "llm_parse_retry_count": "int — 累计 JSON parse / schema retry 次数",
+    "llm_to_rules_slot_fallback_count": "int — 累计 LLM 失败 fallback 规则版次数",
+}
+"""R6-C.3 LLM 抽取可观测性字段 schema(测试 + scripts 引用)。
+
+边界:
+  - 3 个字段全部存在默认值, 老测试构造 InterviewSession 时关键字缺省即可
+  - 老路径(llm_enabled=False)字节级一致: 3 字段保持 0 / {} / {}
+  - 字段值不写 user_message / source_span / draft_card / API key / prompt 正文
+"""
+
+
+# ----------------------------------------------------------------------
 # 暴露模块级符号, 供 from core.interview_agent import * 测试用
 # ----------------------------------------------------------------------
 __all__ = [
@@ -2071,4 +2179,6 @@ __all__ = [
     "_default_candidates", "_INTERVIEW_SESSIONS",
     "_log_interview_trace",
     "_validate_edited_card", "_generate_project_id",
+    # R6-C.3: LLM 抽取可观测性字段名(供 tests + scripts 引用)
+    "INTERVIEW_OBSERVABILITY_SCHEMA",
 ]

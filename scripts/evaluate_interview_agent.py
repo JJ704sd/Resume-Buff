@@ -83,7 +83,7 @@ from evaluate_agent_workflow import (  # noqa: E402
 
 # ---- 输入 / 输出路径 ----
 DEFAULT_OUTPUT = BACKEND_DIR / "logs" / "interview_eval_report.md"
-VERSION = "R6-B Phase 5 (eval compare; rules/llm/compare 三模式; offline compare 双组同跑)"
+VERSION = "R6-C.3 (LLM 抽取可观测性 + prompt few-shot; rules/llm/compare 三模式)"
 
 # ---- R6-B Phase 5: --extractor 模式常量(spec §8) ----
 EXTRACTOR_RULES: str = "rules"
@@ -794,6 +794,18 @@ class EvalRow:
     """session.slot_meta 里 confidence < 0.6 的 meta 条数(spec §5.2)。"""
     total_slot_meta_count: int = 0
     """session.slot_meta 总 meta 条数(分母 — 算 low_confidence_slot_rate 用)。"""
+    # R6-C.3 新增(spec: LLM 抽取可观测性 — 只存计数 / 比率, 不含原文)
+    slot_source_breakdown: dict[str, int] = field(default_factory=dict)
+    """R6-C.3 抽取来源分布: {rules: N, llm: M, mixed: K}
+       老路径(llm_enabled=False)只 +rules; LLM 成功 +llm; LLM 失败 fallback 时 +rules。
+       仅含整数 / 短字符串("rules" / "llm" / "mixed"), 不含 user_message / draft_card / prompt。
+    """
+    llm_parse_retry_count: int = 0
+    """R6-C.3 累计 JSON parse / schema retry 次数(LLM 网络错不 retry, 不计入)。
+       老路径永远 0(不走 LLM); offline 模式 llm 意图也永远 0(LLM 不发网络)。"""
+    llm_to_rules_slot_fallback_count: int = 0
+    """R6-C.3 累计 LLM 失败 fallback 规则版次数(网络错 + JSON 错 + schema 错 都算)。
+       老路径永远 0; offline 模式 llm 意图永远 0(LLM 不发网络)。"""
 
     def to_dict(self) -> dict:
         return {
@@ -813,6 +825,9 @@ class EvalRow:
             "captured_slot_lengths": dict(self.captured_slot_lengths),
             "low_confidence_slot_count": self.low_confidence_slot_count,
             "total_slot_meta_count": self.total_slot_meta_count,
+            "slot_source_breakdown": dict(self.slot_source_breakdown),
+            "llm_parse_retry_count": self.llm_parse_retry_count,
+            "llm_to_rules_slot_fallback_count": self.llm_to_rules_slot_fallback_count,
             "error_type": self.error_type,
         }
 
@@ -979,6 +994,22 @@ def _evaluate_one(
     # R6-B Phase 5: 低置信度 slot 统计(spec §8 指标)
     low_count, total_count = _count_low_confidence_slots(session)
 
+    # R6-C.3: 收集 LLM 抽取可观测性(纯读 session 字段, 不修改)
+    # session 字段由 core.interview_agent 在 _do_answer → extract_slots 时写入,
+    # 这里只 snapshot 到 EvalRow 供报告聚合
+    obs_breakdown = getattr(session, "slot_source_breakdown", {}) or {}
+    obs_retry = int(getattr(session, "llm_parse_retry_count", 0) or 0)
+    obs_fallback = int(
+        getattr(session, "llm_to_rules_slot_fallback_count", 0) or 0
+    )
+    # defensive copy + 只取已知 key, 防 session 字段污染
+    safe_breakdown: dict[str, int] = {}
+    if isinstance(obs_breakdown, dict):
+        for k in ("rules", "llm", "mixed"):
+            v = obs_breakdown.get(k, 0)
+            if isinstance(v, int) and not isinstance(v, bool):
+                safe_breakdown[k] = v
+
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     return EvalRow(
@@ -995,6 +1026,9 @@ def _evaluate_one(
         captured_slot_lengths=captured_lengths,
         low_confidence_slot_count=low_count,
         total_slot_meta_count=total_count,
+        slot_source_breakdown=safe_breakdown,
+        llm_parse_retry_count=obs_retry,
+        llm_to_rules_slot_fallback_count=obs_fallback,
         error_type=None,
     )
 
@@ -1034,6 +1068,10 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
                 FALLBACK_SCHEMA_RETRY: 0,
                 FALLBACK_WORKFLOW_ABORT: 0,
             },
+            # R6-C.3: LLM 抽取可观测性聚合
+            "slot_source_breakdown_total": {"rules": 0, "llm": 0, "mixed": 0},
+            "llm_parse_retry_count_total": 0,
+            "llm_to_rules_slot_fallback_count_total": 0,
         }
     n = len(all_rows)
     schema_pass = sum(1 for r in all_rows if r.schema_pass)
@@ -1061,6 +1099,16 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         cat = r.fallback_category or FALLBACK_NONE
         fb_cat_counter[cat] = fb_cat_counter.get(cat, 0) + 1
 
+    # R6-C.3: LLM 抽取可观测性聚合(只加整数 / 短字符串, 不加原文)
+    slot_source_total: dict[str, int] = {"rules": 0, "llm": 0, "mixed": 0}
+    llm_retry_total = 0
+    llm_fallback_total = 0
+    for r in all_rows:
+        for k in ("rules", "llm", "mixed"):
+            slot_source_total[k] += int(r.slot_source_breakdown.get(k, 0) or 0)
+        llm_retry_total += int(r.llm_parse_retry_count or 0)
+        llm_fallback_total += int(r.llm_to_rules_slot_fallback_count or 0)
+
     by_source: dict[str, dict] = {}
     for r in all_rows:
         bucket = by_source.setdefault(
@@ -1069,6 +1117,8 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
                 "total": 0, "schema_pass": 0, "fallback": 0,
                 "completeness_sum": 0.0, "fabric_viol": 0,
                 "latencies": [], "low_sum": 0, "meta_sum": 0,
+                "source_rules": 0, "source_llm": 0, "source_mixed": 0,
+                "retry_sum": 0, "fb_sum": 0,
             },
         )
         bucket["total"] += 1
@@ -1082,6 +1132,11 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         bucket["latencies"].append(r.latency_ms)
         bucket["low_sum"] += r.low_confidence_slot_count
         bucket["meta_sum"] += r.total_slot_meta_count
+        bucket["source_rules"] += int(r.slot_source_breakdown.get("rules", 0) or 0)
+        bucket["source_llm"] += int(r.slot_source_breakdown.get("llm", 0) or 0)
+        bucket["source_mixed"] += int(r.slot_source_breakdown.get("mixed", 0) or 0)
+        bucket["retry_sum"] += int(r.llm_parse_retry_count or 0)
+        bucket["fb_sum"] += int(r.llm_to_rules_slot_fallback_count or 0)
 
     by_source_summary: dict[str, dict] = {}
     for src, b in by_source.items():
@@ -1095,6 +1150,13 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
             "low_confidence_slot_rate": (
                 round(b["low_sum"] / b["meta_sum"], 3) if b["meta_sum"] > 0 else 0.0
             ),
+            "slot_source_breakdown": {
+                "rules": b["source_rules"],
+                "llm": b["source_llm"],
+                "mixed": b["source_mixed"],
+            },
+            "llm_parse_retry_count_total": b["retry_sum"],
+            "llm_to_rules_slot_fallback_count_total": b["fb_sum"],
         }
 
     # R6-B Phase 5: by_extractor 二次分组(compare 模式用 — 含 2 组)
@@ -1106,6 +1168,8 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
                 "total": 0, "schema_pass": 0, "fallback": 0,
                 "completeness_sum": 0.0, "fabric_viol": 0,
                 "latencies": [], "low_sum": 0, "meta_sum": 0,
+                "source_rules": 0, "source_llm": 0, "source_mixed": 0,
+                "retry_sum": 0, "fb_sum": 0,
             },
         )
         bucket["total"] += 1
@@ -1119,6 +1183,11 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         bucket["latencies"].append(r.latency_ms)
         bucket["low_sum"] += r.low_confidence_slot_count
         bucket["meta_sum"] += r.total_slot_meta_count
+        bucket["source_rules"] += int(r.slot_source_breakdown.get("rules", 0) or 0)
+        bucket["source_llm"] += int(r.slot_source_breakdown.get("llm", 0) or 0)
+        bucket["source_mixed"] += int(r.slot_source_breakdown.get("mixed", 0) or 0)
+        bucket["retry_sum"] += int(r.llm_parse_retry_count or 0)
+        bucket["fb_sum"] += int(r.llm_to_rules_slot_fallback_count or 0)
 
     by_extractor_summary: dict[str, dict] = {}
     for ext, b in by_extractor.items():
@@ -1133,6 +1202,13 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
             "low_confidence_slot_rate": (
                 round(b["low_sum"] / b["meta_sum"], 3) if b["meta_sum"] > 0 else 0.0
             ),
+            "slot_source_breakdown": {
+                "rules": b["source_rules"],
+                "llm": b["source_llm"],
+                "mixed": b["source_mixed"],
+            },
+            "llm_parse_retry_count_total": b["retry_sum"],
+            "llm_to_rules_slot_fallback_count_total": b["fb_sum"],
         }
 
     return {
@@ -1147,6 +1223,10 @@ def compute_metrics(all_rows: list[EvalRow]) -> dict:
         "by_source": by_source_summary,
         "by_extractor": by_extractor_summary,
         "fallback_category_breakdown": fb_cat_counter,
+        # R6-C.3: LLM 抽取可观测性聚合
+        "slot_source_breakdown_total": slot_source_total,
+        "llm_parse_retry_count_total": llm_retry_total,
+        "llm_to_rules_slot_fallback_count_total": llm_fallback_total,
     }
 
 
@@ -1157,6 +1237,12 @@ def _row_summary_for_report(row: EvalRow) -> str:
     """单条样本摘要: 只含 name/source/slot key/length, 不含原文."""
     keys_str = ", ".join(row.captured_slot_keys) if row.captured_slot_keys else "(空)"
     lens_str = ", ".join(f"{k}={v}" for k, v in row.captured_slot_lengths.items()) or "—"
+    # R6-C.3: 加 3 个可观测性指标到每行摘要(只含整数 / 短字符串)
+    breakdown = row.slot_source_breakdown or {}
+    src_str = "/".join(
+        f"{k}={int(breakdown.get(k, 0) or 0)}"
+        for k in ("rules", "llm", "mixed")
+    )
     return (
         f"`{row.name}` ({row.source}) | role=`{row.role}` gap=`{row.gap_id}` | "
         f"extractor=`{row.extractor_mode}` fb_cat=`{row.fallback_category}` | "
@@ -1165,6 +1251,8 @@ def _row_summary_for_report(row: EvalRow) -> str:
         f"fabrication={'✅' if row.fabrication_guard else '❌'} | "
         f"latency={row.latency_ms}ms | "
         f"low_conf={row.low_confidence_slot_count}/{row.total_slot_meta_count} | "
+        f"src=[{src_str}] retries={row.llm_parse_retry_count} "
+        f"fb_to_rules={row.llm_to_rules_slot_fallback_count} | "
         f"slots=[{keys_str}] lens=[{lens_str}]"
         f"{f' | error={row.error_type}' if row.error_type else ''}"
     )
@@ -1461,6 +1549,75 @@ def write_report(
     )
     lines.append("")
 
+    # 4.7、LLM 抽取可观测性 (R6-C.3, 不泄漏原文 — 只展示计数 / 比率)
+    lines.append("## 4.7、LLM 抽取可观测性 (R6-C.3 — slot_source / retries / fallback)")
+    lines.append("")
+    # 全局聚合 3 指标
+    breakdown_total = metrics.get("slot_source_breakdown_total", {}) or {}
+    breakdown_rules = int(breakdown_total.get("rules", 0) or 0)
+    breakdown_llm = int(breakdown_total.get("llm", 0) or 0)
+    breakdown_mixed = int(breakdown_total.get("mixed", 0) or 0)
+    breakdown_total_count = breakdown_rules + breakdown_llm + breakdown_mixed
+    llm_retries_total = int(metrics.get("llm_parse_retry_count_total", 0) or 0)
+    llm_fb_total = int(
+        metrics.get("llm_to_rules_slot_fallback_count_total", 0) or 0
+    )
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---|")
+    lines.append(f"| `slot_source_breakdown.rules` | {breakdown_rules} |")
+    lines.append(f"| `slot_source_breakdown.llm` | {breakdown_llm} |")
+    lines.append(f"| `slot_source_breakdown.mixed` | {breakdown_mixed} |")
+    if breakdown_total_count > 0:
+        llm_rate = round(breakdown_llm / breakdown_total_count, 3)
+        lines.append(
+            f"| `slot_source_breakdown.llm_rate` | {llm_rate} |"
+        )
+    else:
+        lines.append("| `slot_source_breakdown.llm_rate` | (空) |")
+    lines.append(f"| `llm_parse_retry_count_total` | {llm_retries_total} |")
+    lines.append(f"| `llm_to_rules_slot_fallback_count_total` | {llm_fb_total} |")
+    lines.append("")
+    # by_source 拆分
+    lines.append("按 source 拆分:")
+    lines.append("")
+    lines.append("| source | rules | llm | mixed | retries | fb_to_rules |")
+    lines.append("|---|---|---|---|---|---|")
+    for src, b in metrics["by_source"].items():
+        s = b.get("slot_source_breakdown", {}) or {}
+        lines.append(
+            f"| `{src}` | {int(s.get('rules', 0) or 0)} | "
+            f"{int(s.get('llm', 0) or 0)} | {int(s.get('mixed', 0) or 0)} | "
+            f"{int(b.get('llm_parse_retry_count_total', 0) or 0)} | "
+            f"{int(b.get('llm_to_rules_slot_fallback_count_total', 0) or 0)} |"
+        )
+    lines.append("")
+    # by_extractor 拆分(compare 模式有用)
+    if metrics.get("by_extractor"):
+        lines.append("按 extractor 拆分:")
+        lines.append("")
+        lines.append("| extractor | rules | llm | mixed | retries | fb_to_rules |")
+        lines.append("|---|---|---|---|---|---|")
+        for ext, b in metrics["by_extractor"].items():
+            s = b.get("slot_source_breakdown", {}) or {}
+            lines.append(
+                f"| `{ext}` | {int(s.get('rules', 0) or 0)} | "
+                f"{int(s.get('llm', 0) or 0)} | {int(s.get('mixed', 0) or 0)} | "
+                f"{int(b.get('llm_parse_retry_count_total', 0) or 0)} | "
+                f"{int(b.get('llm_to_rules_slot_fallback_count_total', 0) or 0)} |"
+            )
+        lines.append("")
+    # 隐私边界声明(R6-C.3 核心)
+    lines.append(
+        "> **隐私边界 (R6-C.3)**: 本章节只展示 **slot key** + **整数计数** + **比率**。"
+        "**绝不**包含: user_message 原文 / prompt 正文 / LLM raw response / source_span 明文 / "
+        "draft_card 原文 / API key / 含敏感 path 的 base_url。"
+        "3 个指标口径: `slot_source_breakdown` = 本轮 answer 抽取的来源分布, "
+        "rules=走规则版 / llm=LLM 成功 / mixed=混合(罕见); "
+        "`llm_parse_retry_count` = 累计 JSON parse / schema retry 次数(网络错不 retry 不计入); "
+        "`llm_to_rules_slot_fallback_count` = LLM 失败 fallback 规则版累计次数(网络 + JSON + schema 错都算)。"
+    )
+    lines.append("")
+
     # 五、Fabrication guard
     lines.append("## 五、Fabrication guard")
     lines.append("")
@@ -1510,6 +1667,7 @@ def write_report(
     lines.append("- 不含 prompt / raw response (R6-B Phase 5 新增保护)")
     lines.append("- 不含 LLM 抽取源 span 明文 (R6-B Phase 1 保护, 仅存 hash + 长度)")
     lines.append("- 不含 API key 类凭据 / 含敏感 path 的 base_url (R5-D 保护)")
+    lines.append("- LLM 抽取可观测性只含 slot key + 整数计数 + 比率, 不含原文 (R6-C.3 保护)")
     lines.append("")
 
     # 八、结论
@@ -1562,6 +1720,21 @@ def write_report(
             f"action/method/result, 表达 3 轮内可生成素材目标)。`schema_pass_rate` 数值变化应"
             f"解读为 **评测合同变化**, 不解读为 LLM 抽取能力变化。详见 4.5 (warnings) / 4.6 "
             f"(product goal) 章节。"
+        )
+    # R6-C.3: 列出 LLM 抽取可观测性指标(让审计一眼看到 offline 模式 LLM 没真跑)
+    obs_breakdown = metrics.get("slot_source_breakdown_total", {}) or {}
+    obs_rules = int(obs_breakdown.get("rules", 0) or 0)
+    obs_llm = int(obs_breakdown.get("llm", 0) or 0)
+    obs_retries = int(metrics.get("llm_parse_retry_count_total", 0) or 0)
+    obs_fb = int(metrics.get("llm_to_rules_slot_fallback_count_total", 0) or 0)
+    if obs_rules or obs_llm or obs_retries or obs_fb:
+        lines.append(
+            f"- **R6-C.3 LLM 抽取可观测性**: `slot_source_breakdown` = "
+            f"rules={obs_rules} / llm={obs_llm} / mixed={int(obs_breakdown.get('mixed', 0) or 0)}; "
+            f"`llm_parse_retry_count_total` = {obs_retries}; "
+            f"`llm_to_rules_slot_fallback_count_total` = {obs_fb}。"
+            f"offline 模式默认 `llm=0 / retries=0 / fb=0`(LLM 不发网络), "
+            f"真实 LLM 调用需在 live 模式 + 已配置 LLM 凭据时才会出现 llm>0。"
         )
     lines.append(
         "- **下一步**: 用户在 chat panel 跑 10+ 轮真实对话后, 跑 `live` 模式 + 真实 LLM key "

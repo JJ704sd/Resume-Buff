@@ -1540,3 +1540,358 @@ class TestPhaseC2EvalContract:
             f"({captured_keys}) 中 — 否则就是简单把 expected 改成 captured keys, "
             f"违反 R6-C.2A 边界."
         )
+
+
+# ----------------------------------------------------------------------
+# R6-C.3: LLM 抽取可观测性 (slot_source / retries / fallback_to_rules)
+# ----------------------------------------------------------------------
+class TestPhaseC3ObservabilityFields:
+    """R6-C.3: EvalRow + compute_metrics + write_report 都含 LLM 抽取可观测性 3 指标.
+
+    覆盖:
+      - EvalRow 新增 3 字段 (slot_source_breakdown / llm_parse_retry_count /
+        llm_to_rules_slot_fallback_count), 默认值正确
+      - compute_metrics 聚合 3 字段到全局 + by_source + by_extractor
+      - 默认 rules 路径下 retries/fb = 0
+      - 报告 §4.7 章节存在 + 渲染 3 指标
+      - 报告不含 user_message / prompt / source_span / API key(隐私边界)
+    """
+
+    def test_eval_row_default_observability_fields(self):
+        """EvalRow 新增 3 字段默认值正确(空 dict / 0 / 0)。"""
+        from evaluate_interview_agent import EvalRow
+
+        row = EvalRow(
+            name="t", source="x", role="r", gap_id="g",
+            schema_pass=True, fallback_used=False,
+            draft_card_completeness=0.5, fabrication_guard=True,
+            latency_ms=10, rewrite_changed_count=0,
+        )
+        assert row.slot_source_breakdown == {}, (
+            f"slot_source_breakdown 默认应是 {{}}, 实际 {row.slot_source_breakdown!r}"
+        )
+        assert row.llm_parse_retry_count == 0
+        assert row.llm_to_rules_slot_fallback_count == 0
+
+    def test_eval_row_to_dict_includes_observability(self):
+        """EvalRow.to_dict() 含 3 个可观测性字段(供 report 渲染)。"""
+        from evaluate_interview_agent import EvalRow
+
+        row = EvalRow(
+            name="t", source="x", role="r", gap_id="g",
+            schema_pass=True, fallback_used=False,
+            draft_card_completeness=0.5, fabrication_guard=True,
+            latency_ms=10, rewrite_changed_count=0,
+            slot_source_breakdown={"rules": 2, "llm": 1, "mixed": 0},
+            llm_parse_retry_count=1,
+            llm_to_rules_slot_fallback_count=1,
+        )
+        d = row.to_dict()
+        assert d["slot_source_breakdown"] == {"rules": 2, "llm": 1, "mixed": 0}
+        assert d["llm_parse_retry_count"] == 1
+        assert d["llm_to_rules_slot_fallback_count"] == 1
+
+    def test_compute_metrics_aggregates_observability(self):
+        """compute_metrics 聚合 3 指标到全局 + by_source + by_extractor。"""
+        from evaluate_interview_agent import EvalRow, compute_metrics
+
+        rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r1", gap_id="g1",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                slot_source_breakdown={"rules": 3, "llm": 0, "mixed": 0},
+                llm_parse_retry_count=0,
+                llm_to_rules_slot_fallback_count=0,
+            ),
+            EvalRow(
+                name="b", source="simulated_user_v1", role="r2", gap_id="g2",
+                schema_pass=False, fallback_used=True,
+                draft_card_completeness=0.3, fabrication_guard=True,
+                latency_ms=20, rewrite_changed_count=1,
+                slot_source_breakdown={"rules": 1, "llm": 2, "mixed": 0},
+                llm_parse_retry_count=1,
+                llm_to_rules_slot_fallback_count=1,
+            ),
+        ]
+        m = compute_metrics(rows)
+        # 全局聚合
+        assert m["slot_source_breakdown_total"] == {"rules": 4, "llm": 2, "mixed": 0}, (
+            f"slot_source_breakdown_total 聚合错, 实际 {m['slot_source_breakdown_total']!r}"
+        )
+        assert m["llm_parse_retry_count_total"] == 1
+        assert m["llm_to_rules_slot_fallback_count_total"] == 1
+        # by_source 拆分
+        assert m["by_source"]["plan_baseline"]["slot_source_breakdown"] == {
+            "rules": 3, "llm": 0, "mixed": 0,
+        }
+        assert m["by_source"]["simulated_user_v1"]["slot_source_breakdown"] == {
+            "rules": 1, "llm": 2, "mixed": 0,
+        }
+        assert m["by_source"]["simulated_user_v1"]["llm_parse_retry_count_total"] == 1
+        assert (
+            m["by_source"]["simulated_user_v1"]["llm_to_rules_slot_fallback_count_total"]
+            == 1
+        )
+
+    def test_compute_metrics_empty_rows_returns_zero_observability(self):
+        """空 rows → 3 指标默认 = 0 / 0 / {rules:0, llm:0, mixed:0}(避免 KeyError)。"""
+        from evaluate_interview_agent import compute_metrics
+
+        m = compute_metrics([])
+        assert m["slot_source_breakdown_total"] == {"rules": 0, "llm": 0, "mixed": 0}
+        assert m["llm_parse_retry_count_total"] == 0
+        assert m["llm_to_rules_slot_fallback_count_total"] == 0
+
+    def test_by_extractor_metrics_includes_observability(self):
+        """by_extractor 二次分组也含 3 个可观测性字段(compare 模式用)。"""
+        from evaluate_interview_agent import EvalRow, compute_metrics
+
+        rows = [
+            EvalRow(
+                name="a", source="x", role="r", gap_id="g",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                extractor_mode="rules",
+                slot_source_breakdown={"rules": 1, "llm": 0, "mixed": 0},
+            ),
+            EvalRow(
+                name="b", source="x", role="r", gap_id="g",
+                schema_pass=True, fallback_used=True,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=20, rewrite_changed_count=0,
+                extractor_mode="llm",
+                slot_source_breakdown={"rules": 1, "llm": 1, "mixed": 0},
+                llm_to_rules_slot_fallback_count=1,
+            ),
+        ]
+        m = compute_metrics(rows)
+        # rules 组
+        assert m["by_extractor"]["rules"]["slot_source_breakdown"]["rules"] == 1
+        # llm 组
+        assert m["by_extractor"]["llm"]["slot_source_breakdown"]["llm"] == 1
+        assert (
+            m["by_extractor"]["llm"]["llm_to_rules_slot_fallback_count_total"] == 1
+        )
+
+
+class TestPhaseC3ObservabilityReport:
+    """R6-C.3: 报告渲染 3 个可观测性指标(§4.7 章节)。"""
+
+    def test_report_contains_observability_section(self, tmp_path):
+        """报告 §4.7 章节存在, 渲染 3 个全局聚合指标。"""
+        from evaluate_interview_agent import (
+            EvalRow,
+            EXTRACTOR_RULES,
+            _get_llm_eval_config,
+            compute_metrics,
+            write_report,
+        )
+
+        rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r", gap_id="g",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                slot_source_breakdown={"rules": 2, "llm": 1, "mixed": 0},
+                llm_parse_retry_count=1,
+                llm_to_rules_slot_fallback_count=0,
+            ),
+        ]
+        m = compute_metrics(rows)
+        out = tmp_path / "report.md"
+        cfg = _get_llm_eval_config(False, "offline")
+        write_report(
+            rows, m, out, cfg,
+            requested_mode="offline",
+            extractor_mode=EXTRACTOR_RULES,
+        )
+        text = out.read_text(encoding="utf-8")
+        # 章节标题
+        assert "## 4.7" in text, f"报告缺 §4.7 章节:\n{text[:500]}"
+        # 3 个全局指标
+        assert "slot_source_breakdown.rules" in text
+        assert "slot_source_breakdown.llm" in text
+        assert "llm_parse_retry_count_total" in text
+        assert "llm_to_rules_slot_fallback_count_total" in text
+        # 隐私边界声明
+        assert "隐私边界 (R6-C.3)" in text
+
+    def test_report_observability_no_user_message_leak(self, tmp_path):
+        """报告 §4.7 章节不含 user_message 原文(隐私边界)。"""
+        from evaluate_interview_agent import (
+            EvalRow,
+            EXTRACTOR_RULES,
+            _get_llm_eval_config,
+            compute_metrics,
+            write_report,
+        )
+
+        # 准备一个含 sentinel user_message 字符串的 sample
+        # 让 evaluate_one 路径走不到, 直接构造 EvalRow 即可
+        rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r", gap_id="g",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                slot_source_breakdown={"rules": 1, "llm": 0, "mixed": 0},
+            ),
+        ]
+        m = compute_metrics(rows)
+        out = tmp_path / "report.md"
+        cfg = _get_llm_eval_config(False, "offline")
+        write_report(
+            rows, m, out, cfg,
+            requested_mode="offline",
+            extractor_mode=EXTRACTOR_RULES,
+        )
+        text = out.read_text(encoding="utf-8")
+        # 抽样 10 个 sentinel 短语验证(从 user_messages 池里抽, 不期望出现在报告里)
+        sentinel_phrases = [
+            "我做了一个表格模板",
+            "我建了共享文档",
+            "我用了漏斗式评分算法",
+            "我用漏斗式评分算法",
+            "我对接了 12 个工作组",
+            "我采用 Accuracy",
+            "我做了标准化模板",
+            "ECGFounder",
+            "我抽样看边界 case",
+            "我做了科室 × 服务周期",
+        ]
+        leaked = [p for p in sentinel_phrases if p in text]
+        assert not leaked, (
+            f"报告 §4.7 章节泄漏 user_message 原文: {leaked}"
+        )
+
+    def test_report_observability_no_prompt_no_source_span_no_api_key(self, tmp_path):
+        """报告 §4.7 章节不含 prompt 正文 / source_span 明文 / API key。"""
+        from evaluate_interview_agent import (
+            EvalRow,
+            EXTRACTOR_RULES,
+            _get_llm_eval_config,
+            compute_metrics,
+            write_report,
+        )
+
+        rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r", gap_id="g",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                slot_source_breakdown={"rules": 1, "llm": 0, "mixed": 0},
+            ),
+        ]
+        m = compute_metrics(rows)
+        out = tmp_path / "report.md"
+        cfg = _get_llm_eval_config(False, "offline")
+        write_report(
+            rows, m, out, cfg,
+            requested_mode="offline",
+            extractor_mode=EXTRACTOR_RULES,
+        )
+        text = out.read_text(encoding="utf-8")
+        # 4.7 章节边界声明
+        # 注: 报告会在隐私边界声明里用"user_message"等字面量来描述"不含什么",
+        # 所以这里只断言真正的"原文/凭据/数据"不该出现, 不断言字面量字段名.
+        for forbidden in (
+            "Few-shot 示例",  # 例子内容不该在报告里
+            "sha256:",  # source_span hash 原始值
+            "Bearer ",  # auth 头
+            "sk-",  # API key 前缀
+            "LLM_API_KEY",  # env var 名
+            "BEGIN PROMPT",  # prompt 哨兵
+        ):
+            assert forbidden not in text, (
+                f"报告 §4.7 章节不应含 {forbidden!r}"
+            )
+
+    def test_compare_report_observability_by_extractor(self, tmp_path):
+        """compare 模式报告按 extractor 拆 3 指标(rules vs llm_assisted)。"""
+        from evaluate_interview_agent import (
+            EvalRow,
+            EXTRACTOR_COMPARE,
+            EXTRACTOR_LLM,
+            EXTRACTOR_RULES,
+            _get_llm_eval_config,
+            compute_metrics,
+            write_report,
+        )
+
+        rules_rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r", gap_id="g",
+                schema_pass=True, fallback_used=False,
+                draft_card_completeness=0.5, fabrication_guard=True,
+                latency_ms=10, rewrite_changed_count=0,
+                extractor_mode=EXTRACTOR_RULES,
+                slot_source_breakdown={"rules": 3, "llm": 0, "mixed": 0},
+            ),
+        ]
+        llm_rows = [
+            EvalRow(
+                name="a", source="plan_baseline", role="r", gap_id="g",
+                schema_pass=False, fallback_used=True,
+                draft_card_completeness=0.3, fabrication_guard=True,
+                latency_ms=20, rewrite_changed_count=0,
+                extractor_mode=EXTRACTOR_LLM,
+                slot_source_breakdown={"rules": 3, "llm": 0, "mixed": 0},
+            ),
+        ]
+        all_rows = rules_rows + llm_rows
+        m = compute_metrics(all_rows)
+        by_extractor = {
+            EXTRACTOR_RULES: compute_metrics(rules_rows),
+            EXTRACTOR_LLM: compute_metrics(llm_rows),
+        }
+        out = tmp_path / "report.md"
+        cfg = _get_llm_eval_config(False, "offline")
+        write_report(
+            all_rows, m, out, cfg,
+            requested_mode="offline",
+            extractor_mode=EXTRACTOR_COMPARE,
+            by_extractor_metrics=by_extractor,
+        )
+        text = out.read_text(encoding="utf-8")
+        # 按 extractor 拆章节存在
+        assert "按 extractor 拆分" in text
+        # 双组都列出
+        assert "`rules`" in text
+        assert "`llm`" in text
+
+    def test_default_rules_eval_session_observes_zero_retries_and_fb(self, monkeypatch):
+        """默认 rules 路径跑 1 条 sample → retries=0 + fb=0 + breakdown 仅 rules。"""
+        # 防止真实 LLM key 干扰
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+        from evaluate_interview_agent import (
+            EVAL_SET_ALL,
+            EXTRACTOR_RULES,
+            _evaluate_one,
+        )
+        from core.generator import load_materials
+
+        mats = load_materials()
+        # 挑 1 条 plan_baseline 跑
+        sample = EVAL_SET_ALL[0]
+        row = _evaluate_one(sample, mats, extractor_mode=EXTRACTOR_RULES)
+
+        # rules 路径: retries / fb 都是 0
+        assert row.llm_parse_retry_count == 0, (
+            f"rules 路径 retries 应 = 0, 实际 {row.llm_parse_retry_count}"
+        )
+        assert row.llm_to_rules_slot_fallback_count == 0, (
+            f"rules 路径 fb 应 = 0, 实际 {row.llm_to_rules_slot_fallback_count}"
+        )
+        # breakdown 含 rules > 0
+        assert row.slot_source_breakdown.get("rules", 0) > 0, (
+            f"rules 路径 breakdown 应含 rules > 0, 实际 {row.slot_source_breakdown!r}"
+        )
+        assert row.slot_source_breakdown.get("llm", 0) == 0, (
+            f"rules 路径 llm 应 = 0, 实际 {row.slot_source_breakdown!r}"
+        )

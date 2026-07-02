@@ -611,7 +611,7 @@ class TestReplyUsesSessionMode:
         mock _call_llm_for_slot_extraction 返合法 JSON content,
         验证 reply 走 LLM 路径而不是 rules 路径。
         """
-        from core import interview_agent
+        from core import interview_llm
 
         def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
             slot = user_payload.get("slot", "")
@@ -619,7 +619,7 @@ class TestReplyUsesSessionMode:
             return json.dumps({slot: "我负责 AI 测试数据质量", "_warnings": []})
 
         monkeypatch.setattr(
-            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+            interview_llm, "_call_llm_for_slot_extraction", fake_call_llm,
         )
 
         # start with enable=True + 有 key
@@ -722,7 +722,7 @@ class TestResponsePrivacy:
         self, client_with_env_key, monkeypatch,
     ):
         """ReplyResponse 不含 user_message / source_span 明文(就算 LLM 抽取成功)。"""
-        from core import interview_agent
+        from core import interview_llm
 
         def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
             slot = user_payload.get("slot", "")
@@ -734,7 +734,7 @@ class TestResponsePrivacy:
             })
 
         monkeypatch.setattr(
-            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+            interview_llm, "_call_llm_for_slot_extraction", fake_call_llm,
         )
 
         start = client_with_env_key.post(
@@ -772,14 +772,14 @@ class TestResponsePrivacy:
 
     def test_reply_response_does_not_leak_api_key(self, client_with_env_key, monkeypatch):
         """ReplyResponse 不含 API key 值 / Bearer / env var 名。"""
-        from core import interview_agent
+        from core import interview_llm
 
         def fake_call_llm(*, user_payload, model, base_url, api_key, timeout_sec):
             slot = user_payload.get("slot", "")
             return json.dumps({slot: "测试反馈整理", "_warnings": []})
 
         monkeypatch.setattr(
-            interview_agent, "_call_llm_for_slot_extraction", fake_call_llm,
+            interview_llm, "_call_llm_for_slot_extraction", fake_call_llm,
         )
 
         start = client_with_env_key.post(

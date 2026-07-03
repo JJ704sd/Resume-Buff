@@ -902,6 +902,191 @@ class TestPhase5Cli:
 
 
 # ======================================================================
+# R6-G F-2.3: live + (llm/compare) + 无 key → stderr 错误信息脱敏
+# (R5-D spec §6.4 + R6-F audit §2 review-needed)
+# ======================================================================
+class TestPhaseGStderrNoEnvVarLeak:
+    """
+    R6-G F-2.3: main() 在 live + (llm/compare) + 无 key 路径的 stderr 错误信息
+    **绝不**含 env var 名(`LLM_API_KEY`)。
+
+    旧实现(line 1801-1806)错误信息写 "或设置 LLM_API_KEY 环境变量后手动跑 live 模式",
+    违反 R5-D spec §6.4 "错误信息不能包含 key 值或 env var 名" 的精神。
+    R6-G F-2.3 改用 "在环境变量里配置 LLM 凭据" 通用描述, 不引用 env var 名。
+
+    测法说明:
+      main() 内 `if not llm_enabled: print([error]...); return 2` 是 defensive 分支 —
+      正常流 `_resolve_eval_mode(live, False)` 会先抛 RuntimeError(R5-D TestEvalModeNoKeyLeak
+      已锁), main() print 走不到。测试通过同时 mock 2 层来强制走 main() print 分支。
+    """
+
+    def _force_main_stderr_branch(self, monkeypatch, extractor_mode):
+        """辅助: 强制 main() 走 stderr print 分支(defensive guard)。
+
+        main() 内的 `if resolved_mode == MODE_LIVE and args.extractor in (llm, compare):`
+        print 分支是 defensive 代码 — 正常流 `_resolve_eval_mode(live, False)` 会先 raise
+        (R5-D TestEvalModeNoKeyLeak 已锁)。测试通过 mock `_resolve_eval_mode` 直接返
+        MODE_LIVE 来绕过 raise, 让 main() 进 print 分支。
+        """
+        import evaluate_interview_agent as ev_mod
+        # 1) is_llm_enabled 返 False → main() 进 `if not llm_enabled` 分支
+        monkeypatch.setattr(ev_mod, "is_llm_enabled", lambda: False)
+        # 2) _resolve_eval_mode 直接返 "live", 跳过其内部 raise
+        #    (无论入参 mode 是什么, 都返 MODE_LIVE 让 main() 进 print 分支)
+        monkeypatch.setattr(
+            ev_mod, "_resolve_eval_mode",
+            lambda _mode, _llm_enabled: "live",
+        )
+
+    def test_main_live_llm_no_key_stderr_no_env_var_name(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """live + --extractor llm + 无 key → exit 2, stderr 不含 LLM_API_KEY 字面量。"""
+        self._force_main_stderr_branch(monkeypatch, EXTRACTOR_LLM)
+        import evaluate_interview_agent as ev_mod
+
+        out_path = tmp_path / "out.md"
+        monkeypatch.chdir(BACKEND_DIR)
+
+        exit_code = ev_mod.main([
+            "--mode", "live",
+            "--extractor", "llm",
+            "--output", str(out_path),
+        ])
+        captured = capsys.readouterr()
+
+        # exit code 2(R6-B Phase 5 沿用)
+        assert exit_code == 2, (
+            f"live + llm + 无 key 应 exit 2, 实际 {exit_code}"
+        )
+
+        # stderr 不含 env var 名
+        assert "LLM_API_KEY" not in captured.err, (
+            f"stderr 错误信息不应包含 env var 名 LLM_API_KEY: {captured.err!r}"
+        )
+        # stderr 不含 api key 前缀
+        assert "sk-" not in captured.err, (
+            f"stderr 错误信息不应包含 key 前缀: {captured.err!r}"
+        )
+        # stderr 不含 Bearer 字样
+        assert "Bearer" not in captured.err, (
+            f"stderr 错误信息不应包含 Bearer: {captured.err!r}"
+        )
+        # stderr 含 "[error]" 标记 + 引导用户
+        assert "[error]" in captured.err
+        # stderr 含通用描述("LLM 凭据" 或 "环境变量" 一类)
+        assert (
+            "LLM 凭据" in captured.err
+            or "环境变量" in captured.err
+            or "环境" in captured.err
+        ), (
+            f"stderr 应含通用 LLM 凭据配置描述, 实际: {captured.err!r}"
+        )
+
+    def test_main_live_compare_no_key_stderr_no_env_var_name(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """live + --extractor compare + 无 key → exit 2, stderr 不含 LLM_API_KEY。"""
+        self._force_main_stderr_branch(monkeypatch, EXTRACTOR_COMPARE)
+        import evaluate_interview_agent as ev_mod
+
+        out_path = tmp_path / "out.md"
+        monkeypatch.chdir(BACKEND_DIR)
+
+        exit_code = ev_mod.main([
+            "--mode", "live",
+            "--extractor", "compare",
+            "--output", str(out_path),
+        ])
+        captured = capsys.readouterr()
+
+        assert exit_code == 2
+        assert "LLM_API_KEY" not in captured.err, (
+            f"stderr 错误信息不应包含 env var 名 LLM_API_KEY: {captured.err!r}"
+        )
+        assert "sk-" not in captured.err
+        assert "Bearer" not in captured.err
+
+    def test_main_live_rules_no_key_does_not_print_error(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """live + --extractor rules + 无 key → 不触发 stderr error 分支(控制组)。
+
+        rules 模式不依赖 LLM, 走 pure rules 路径, 不应触发任何 stderr 错误。
+        """
+        # 模拟 live + 无 key — 但 rules 模式不进 if 分支
+        import evaluate_interview_agent as ev_mod
+        from evaluate_agent_workflow import _resolve_eval_mode as _real_resolve
+        # is_llm_enabled 返 False 模拟无 key
+        monkeypatch.setattr(ev_mod, "is_llm_enabled", lambda: False)
+        # _resolve_eval_mode 跳过其内部 raise, 走 "live"(rules 模式不需要 LLM, 走通)
+        monkeypatch.setattr(
+            ev_mod, "_resolve_eval_mode",
+            lambda mode, _llm: "live",
+        )
+
+        out_path = tmp_path / "out.md"
+        monkeypatch.chdir(BACKEND_DIR)
+
+        try:
+            ev_mod.main([
+                "--mode", "live",
+                "--extractor", "rules",
+                "--output", str(out_path),
+            ])
+        except Exception:
+            # rules 模式不调 LLM, 正常应该 exit 0 — 但意外异常也要容忍
+            pass
+        captured = capsys.readouterr()
+
+        # rules 模式不应触发 [error] 分支
+        assert "[error]" not in captured.err, (
+            f"live + rules 模式不应触发 [error] 分支: {captured.err!r}"
+        )
+
+    def test_help_text_no_env_var_name(self):
+        """main() 模块源码扫描: 帮助文本 / print 字符串**都不**含 env var 名。
+
+        静态扫描是兜底: 即使 R5-D `_resolve_eval_mode` 在 live+no_key 时先 raise,
+        main() print 分支是 defensive 代码, 也必须保证不含 env var 名,
+        以防未来重构把 _resolve_eval_mode 内联到 main() 时泄漏。
+        """
+        import inspect
+        import re
+
+        import evaluate_interview_agent as ev_mod
+
+        src = inspect.getsource(ev_mod)
+        # 找出所有含 [error] 的字符串字面量(主要查 main() 的 print)
+        error_strings = re.findall(
+            r'"[^"\']*\[error\][^"\']*"|\'[^\']*\[error\][^\']*\'',
+            src,
+        )
+        for s in error_strings:
+            assert "LLM_API_KEY" not in s, (
+                f"main() [error] 字符串不应含 env var 名 LLM_API_KEY: {s!r}"
+            )
+            assert "sk-" not in s, (
+                f"main() [error] 字符串不应含 key 前缀: {s!r}"
+            )
+            assert "Bearer" not in s, (
+                f"main() [error] 字符串不应含 Bearer: {s!r}"
+            )
+
+        # 也扫 help 文本
+        help_strings = re.findall(
+            r'help=\(\s*([^)]+)\s*\)',
+            src,
+        )
+        for chunk in help_strings:
+            # 多行字符串, 拼起来查
+            cleaned = re.sub(r'"\s*"|\'\s*\'', '', chunk)
+            assert "LLM_API_KEY" not in cleaned, (
+                f"main() help 文本不应含 env var 名: {cleaned!r}"
+            )
+
+
+# ======================================================================
 # R6-C.1 Eval contract 检查 + 报告 wording 修正 (路线 A, round6-c-live-eval-result §5)
 # ======================================================================
 class TestPhaseC1EvalContractValidation:

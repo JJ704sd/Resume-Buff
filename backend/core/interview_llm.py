@@ -419,6 +419,8 @@ def _call_llm_for_slot_extraction(
         return None
 
     # 尝试从 OpenAI-style envelope 提取 content; 提取不到也返 raw(让 caller 自己判)
+    # R6-G F-2.2: 清理冗余 — `Exception` 已包含 `json.JSONDecodeError` / `TypeError`,
+    # 重复 except 属 hygiene 冗余, 行为不变(R6-F audit §2 review-needed 顺手清).
     try:
         resp_obj = json.loads(raw)
         if isinstance(resp_obj, dict):
@@ -428,7 +430,8 @@ def _call_llm_for_slot_extraction(
                 content = msg.get("content")
                 if isinstance(content, str):
                     return content
-    except (json.JSONDecodeError, TypeError, Exception):
+    except Exception:
+        # envelope 提取失败(JSONDecodeError / TypeError / 其他)
         pass
 
     # envelope 提取失败, 把 raw 文本交给 caller(可能是非 JSON, 让 caller 决定 retry)

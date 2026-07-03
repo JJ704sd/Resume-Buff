@@ -1781,7 +1781,7 @@ def main(argv=None) -> int:
         help=(
             "抽取模式 (rules/llm/compare); 默认 rules。"
             " offline 模式下 llm/compare 强制走规则版 + 标记 llm_disabled_fallback;"
-            " live 模式下 llm/compare 需要 LLM_API_KEY 在 env。"
+            " live 模式下 llm/compare 需要在环境变量里配置 LLM 凭据。"
         ),
     )
     parser.add_argument(
@@ -1795,13 +1795,14 @@ def main(argv=None) -> int:
     llm_eval_config = _get_llm_eval_config(llm_enabled, resolved_mode)
 
     # R6-B Phase 5: live + (llm/compare) + 无 key → RuntimeError
-    # 错误信息不含 key 值 / env var 名(R5-D Phase 1 边界保护)
+    # R6-G F-2.3: 错误信息**绝不**含 key 值 / env var 名(R5-D spec §6.4 + R6-F audit §2)
+    # 改用 "配置对应环境变量" 通用描述, 不写 env var 名.
     if resolved_mode == MODE_LIVE and args.extractor in (EXTRACTOR_LLM, EXTRACTOR_COMPARE):
         if not llm_enabled:
             print(
                 f"[error] --mode live + --extractor {args.extractor} 需要 LLM 已启用, "
                 "当前 LLM 未启用; 请改用 --mode auto 或 --mode offline,"
-                "或设置 LLM_API_KEY 环境变量后手动跑 live 模式。",
+                "或在环境变量里配置 LLM 凭据后手动跑 live 模式。",
                 file=sys.stderr,
             )
             return 2

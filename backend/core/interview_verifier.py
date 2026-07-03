@@ -47,6 +47,28 @@ SOURCE_SLOT_KEYS: tuple[str, ...] = (
 # 隐私边界最大预览长度(warnings 摘要里截到多长, spec §7 "禁止把完整 ... draft_card 原文写入 _interview_meta")
 _WARNING_BULLET_PREVIEW_LEN: int = 30
 
+# R6-G F-2.1: verifier 内部崩溃 sentinel 提示(R6-F audit §2 review-needed)
+# 当 verifier 主链路 try/except 兜成全 0 计数时, 往 warnings 里塞一条短字符串,
+# 让前端 UI 看到 sentinel 提示 "我崩了, 数据不可信", 不让 unsupported=0 误导用户
+# 以为 "全部 verified 通过"。文字纯状态描述, 不含 user_message / source_span /
+# draft_bullets / API key / jd_text / prompt 正文(隐私边界, 沿用 spec §7)。
+_VERIFIER_INTERNAL_ERROR_SENTINEL: str = "事实核验未完成, 请联系开发者或重新生成"
+"""verifier 主链路 try/except 兜底时附加到 warnings 的 sentinel 字符串。
+
+边界:
+  - 纯状态描述, 不含任何字段值(无 user_message / source_span / draft_bullets / API key)
+  - 前端 UI 看到 sentinel 知道 verifier 崩了, 不会误判为 "全部 verified 通过"
+  - 与 INTERVIEW_LOW_CONFIDENCE_THRESHOLD 类常量同源, 纯字面量
+"""
+
+_CONFIDENCE_COLLECT_ERROR_SENTINEL: str = "置信度数据收集失败, 请联系开发者或重新生成"
+"""compute_confidence_notes 内部 try/except 兜底时返的 sentinel。
+
+边界:
+  - 同 _VERIFIER_INTERNAL_ERROR_SENTINEL, 纯状态描述
+  - 不含 slot 名 / confidence 数字 / source_span / user_message
+"""
+
 
 # ----------------------------------------------------------------------
 # helpers
@@ -327,12 +349,14 @@ def verify_draft_card(
         }
     except Exception:
         # spec §6.3 "失败不阻断主流程"
+        # R6-G F-2.1: 兜底时附 sentinel 警告, 让前端 UI 知道 verifier 内部崩了
+        # 避免 unsupported_claims=0 + low_confidence_claims=0 误导为 "全部 verified 通过"
         return {
             "claims_total": 0,
             "claims_supported": 0,
             "low_confidence_claims": 0,
             "unsupported_claims": 0,
-            "warnings": [],
+            "warnings": [_VERIFIER_INTERNAL_ERROR_SENTINEL],
         }
 
 
@@ -349,7 +373,8 @@ def compute_confidence_notes(session: InterviewSession) -> list[str]:
     try:
         low_conf = _collect_low_confidence_slots(session)
     except Exception:
-        return []
+        # R6-G F-2.1: 兜底时返 sentinel, 前端不会误判为 "无低置信度"
+        return [_CONFIDENCE_COLLECT_ERROR_SENTINEL]
     return [
         f"{slot_name} 槽位置信度偏低, 保存前请确认"
         for slot_name in low_conf
@@ -361,4 +386,7 @@ __all__ = [
     "SOURCE_SLOT_KEYS",
     "verify_draft_card",
     "compute_confidence_notes",
+    # R6-G F-2.1: sentinel 常量(测试可 import 验证隐私边界)
+    "_VERIFIER_INTERNAL_ERROR_SENTINEL",
+    "_CONFIDENCE_COLLECT_ERROR_SENTINEL",
 ]

@@ -524,3 +524,129 @@ class TestVerifierNoNetwork:
         assert found_env == [], (
             f"verifier 不该读 env: {found_env}"
         )
+
+
+# ----------------------------------------------------------------------
+# 9. TestVerifierInternalErrorSentinel — R6-G F-2.1: 内部崩溃 sentinel 提示
+# ----------------------------------------------------------------------
+# R6-F audit §2 review-needed:
+#   verifier 主链路 try/except 兜成 5 字段全 0/[] 时, 前端 UI 看到
+#   unsupported_claims=0 + low_confidence_claims=0 会误以为 "全部 verified 通过",
+#   verifier 实际崩了用户感知不到。
+# R6-G F-2.1 修复:
+#   verify_draft_card 兜底时往 warnings 塞 1 条 sentinel 字符串;
+#   compute_confidence_notes 兜底时返 [sentinel] 而非 []。
+#   sentinel 文字纯状态描述, 不含 user_message / source_span / draft_bullets /
+#   API key / jd_text / prompt 正文(隐私边界, 沿用 spec §7)。
+# ----------------------------------------------------------------------
+class TestVerifierInternalErrorSentinel:
+    """
+    R6-G F-2.1: verifier 内部崩溃 sentinel 提示 + 隐私边界。
+
+    spec §6.3 "失败不阻断主流程" 兼容: 数字字段保持 0, 不抛; 但 warnings
+    必须非空(防止前端误判为 "全部 verified 通过")。
+    """
+
+    def test_verify_draft_card_internal_error_emits_sentinel_warning(self, monkeypatch):
+        """verify_draft_card 主链路抛异常时, warnings 含 sentinel, 4 计数全 0。"""
+        from core.interview_verifier import (
+            _VERIFIER_INTERNAL_ERROR_SENTINEL,
+            verify_draft_card,
+        )
+
+        sess = _FakeSession(captured_slots={"action": ["x"]})
+
+        # 强制 _collect_source_strings 抛异常 → 触发兜底 except 分支
+        from core import interview_verifier as iv_mod
+
+        def _boom(_captured):
+            raise RuntimeError("forced verifier internal error for F-2.1 test")
+        monkeypatch.setattr(iv_mod, "_collect_source_strings", _boom)
+
+        result = verify_draft_card({"draft_bullets": ["valid bullet"]}, sess)
+
+        # 4 计数全 0(spec §6.3 兼容)
+        assert result["claims_total"] == 0
+        assert result["claims_supported"] == 0
+        assert result["low_confidence_claims"] == 0
+        assert result["unsupported_claims"] == 0
+        # warnings 含 sentinel(防前端误判)
+        assert result["warnings"] == [_VERIFIER_INTERNAL_ERROR_SENTINEL]
+        # sentinel 是不空字符串(防止空字符串绕过 UI 渲染)
+        assert _VERIFIER_INTERNAL_ERROR_SENTINEL
+        assert isinstance(_VERIFIER_INTERNAL_ERROR_SENTINEL, str)
+
+    def test_compute_confidence_notes_internal_error_emits_sentinel(self, monkeypatch):
+        """compute_confidence_notes 主链路抛异常时, 返 [sentinel] 而非 []。"""
+        from core.interview_verifier import (
+            _CONFIDENCE_COLLECT_ERROR_SENTINEL,
+            compute_confidence_notes,
+        )
+
+        sess = _FakeSession(
+            slot_meta={"result": [{"confidence": 0.45, "turn_index": 1}]},
+        )
+
+        # 强制 _collect_low_confidence_slots 抛异常
+        from core import interview_verifier as iv_mod
+
+        def _boom(_session, _threshold=None):
+            raise RuntimeError("forced confidence collect error for F-2.1 test")
+        monkeypatch.setattr(iv_mod, "_collect_low_confidence_slots", _boom)
+
+        notes = compute_confidence_notes(sess)
+        assert notes == [_CONFIDENCE_COLLECT_ERROR_SENTINEL]
+        assert _CONFIDENCE_COLLECT_ERROR_SENTINEL
+        assert isinstance(_CONFIDENCE_COLLECT_ERROR_SENTINEL, str)
+
+    def test_sentinel_does_not_leak_user_message_or_source_span_or_api_key(self):
+        """sentinel 文字是纯状态描述, 不含 user_message / source_span / API key 哨兵。"""
+        from core.interview_verifier import (
+            _CONFIDENCE_COLLECT_ERROR_SENTINEL,
+            _VERIFIER_INTERNAL_ERROR_SENTINEL,
+        )
+
+        # 用一批常见哨兵 / 隐私关键词验证 sentinel 文字干净
+        sentinels = [
+            _VERIFIER_INTERNAL_ERROR_SENTINEL,
+            _CONFIDENCE_COLLECT_ERROR_SENTINEL,
+        ]
+        forbidden_substrings = [
+            "user_message", "source_span", "draft_bullets",
+            "api_key", "API key", "sk-", "Bearer", "LLM_API_KEY",
+            "jd_text", "prompt", "session", "captured",
+        ]
+        for s in sentinels:
+            for f in forbidden_substrings:
+                assert f.lower() not in s.lower(), (
+                    f"sentinel {s!r} 泄漏隐私关键词 {f!r}"
+                )
+
+    def test_sentinels_exported_in_all(self):
+        """__all__ 含 2 个 sentinel 常量, 测试 / 外部模块可稳定 import。"""
+        import core.interview_verifier as iv_mod
+
+        assert "_VERIFIER_INTERNAL_ERROR_SENTINEL" in iv_mod.__all__
+        assert "_CONFIDENCE_COLLECT_ERROR_SENTINEL" in iv_mod.__all__
+        assert hasattr(iv_mod, "_VERIFIER_INTERNAL_ERROR_SENTINEL")
+        assert hasattr(iv_mod, "_CONFIDENCE_COLLECT_ERROR_SENTINEL")
+
+    def test_happy_path_does_not_emit_sentinel(self):
+        """happy path(无崩溃) → warnings 不含 sentinel(防误报噪音)。"""
+        from core.interview_verifier import (
+            _CONFIDENCE_COLLECT_ERROR_SENTINEL,
+            _VERIFIER_INTERNAL_ERROR_SENTINEL,
+            compute_confidence_notes,
+            verify_draft_card,
+        )
+
+        sess = _FakeSession(
+            captured_slots={"action": ["a"]},
+            slot_meta={"result": [{"confidence": 0.45, "turn_index": 1}]},
+        )
+        # 正常 verify
+        result = verify_draft_card({"draft_bullets": ["a"]}, sess)
+        assert _VERIFIER_INTERNAL_ERROR_SENTINEL not in result["warnings"]
+        # 正常 confidence
+        notes = compute_confidence_notes(sess)
+        assert _CONFIDENCE_COLLECT_ERROR_SENTINEL not in notes

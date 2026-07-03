@@ -1310,6 +1310,106 @@ class TestPhaseC3LLMObservability:
             f"SLOT_EXTRACTION_SYSTEM_PROMPT 不应含 version 字符串字面"
         )
 
+    # ---------- E. R6-G F-2.2: envelope 提取 except hygiene(行为不变 + 防回潮) ----------
+
+    def test_envelope_extraction_handles_invalid_json(self, monkeypatch):
+        """R6-G F-2.2: envelope 提取处 json.loads 抛 JSONDecodeError → fallback raw。
+
+        行为不变验证(R6-F audit §2): 即使清理了 except 冗余, JSON 错误路径
+        仍正确 fallback 到 raw 文本(让 caller 决定 retry)。
+        """
+        from core import interview_llm
+        # 直接调 _call_llm_for_slot_extraction, mock urlopen 返回 invalid JSON
+        with unittest.mock.patch(
+            "core.interview_llm.urllib.request.urlopen",
+        ) as mock_urlopen:
+            # 返回非 JSON 字符串, 触发 json.loads JSONDecodeError → except → pass
+            mock_resp = unittest.mock.MagicMock()
+            mock_resp.read.return_value = b"not a json string at all"
+            mock_resp.__enter__ = lambda self: self
+            mock_resp.__exit__ = lambda self, *args: None
+            mock_urlopen.return_value = mock_resp
+
+            result = interview_llm._call_llm_for_slot_extraction(
+                user_payload={"slot": "action", "user_message": "x"},
+                model="m", base_url="https://api.example.com/v1",
+                api_key="sk-test-x", timeout_sec=5,
+            )
+            # envelope 失败, 返 raw 文本(行为不变)
+            assert result == "not a json string at all"
+
+    def test_envelope_extraction_handles_type_error(self, monkeypatch):
+        """R6-G F-2.2: envelope 提取处 TypeError 路径(防御性) → fallback raw。
+
+        resp_obj.get("choices") 返 None 时, .get 调 None 抛 AttributeError,
+        但 json.loads 路径上 raw 字符串可能触发 TypeError(json.loads 接受 None 时) —
+        测试 F-2.2 清理后仍能兜住。
+        """
+        from core import interview_llm
+        with unittest.mock.patch(
+            "core.interview_llm.urllib.request.urlopen",
+        ) as mock_urlopen:
+            # 返 raw=None, 模拟 read().decode() 失败 — 这里只验证 envelope 路径
+            # 改用 raw = "null"(合法 JSON 但 choices 是 null) 触发 TypeError 路径
+            mock_resp = unittest.mock.MagicMock()
+            mock_resp.read.return_value = b"null"
+            mock_resp.__enter__ = lambda self: self
+            mock_resp.__exit__ = lambda self, *args: None
+            mock_urlopen.return_value = mock_resp
+
+            result = interview_llm._call_llm_for_slot_extraction(
+                user_payload={"slot": "action", "user_message": "x"},
+                model="m", base_url="https://api.example.com/v1",
+                api_key="sk-test-x", timeout_sec=5,
+            )
+            # null 是合法 JSON, json.loads 返 None → not isinstance(None, dict) → 跳过
+            # envelope 提取失败, 返 raw 文本
+            assert result == "null"
+
+    def test_envelope_except_clause_not_redundant(self):
+        """R6-G F-2.2: 静态扫描 _call_llm_for_slot_extraction 内的 except 不含冗余 tuple。
+
+        原代码: `except (json.JSONDecodeError, TypeError, Exception): pass`
+        清理后: `except Exception: pass`(Exception 已包含前两者, 属 hygiene 冗余)
+        防回潮: AST 扫描应找不到 `(json.JSONDecodeError, TypeError, ...)` 这种 tuple。
+        """
+        import ast
+        from pathlib import Path
+
+        llm_path = (
+            Path(__file__).resolve().parent.parent
+            / "core"
+            / "interview_llm.py"
+        )
+        source = llm_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        # 收集所有 except handler 的 type 字段
+        found_redundant: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                # Tuple 形式 except (X, Y, ...): 视为可能冗余
+                if isinstance(node.type, ast.Tuple):
+                    elts = [
+                        ast.unparse(e) for e in node.type.elts
+                        if isinstance(e, ast.Name)
+                    ]
+                    # 含 Exception 又有其他具体类的, 即冗余
+                    if "Exception" in elts and len(elts) > 1:
+                        found_redundant.append(", ".join(elts))
+
+        # 清理后, _call_llm_for_slot_extraction 内的 except 不应含 tuple 形式
+        # 全模块扫描可能命中其他 except(网络错那里有 tuple 但不含 Exception),
+        # 精确检查只过滤 json.JSONDecodeError 场景
+        json_redundant = [
+            r for r in found_redundant
+            if "json" in r.lower() or "JSONDecode" in r
+        ]
+        assert json_redundant == [], (
+            f"_call_llm_for_slot_extraction 内的 envelope 提取 except "
+            f"不应含 json.JSONDecodeError 等冗余 tuple: {json_redundant}"
+        )
+
 
 
 

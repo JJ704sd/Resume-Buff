@@ -377,7 +377,7 @@ watch(
             v-for="r in m.quickReplies"
             :key="r"
             class="ip-quick-chip"
-            :type="['整理成素材', '换个问法', '跳过这个问题'].includes(r) ? 'info' : ''"
+            :type="['整理成素材', '换个问法', '跳过这个问题'].includes(r) ? 'info' : 'primary'"
             effect="plain"
             @click="onQuickReply(r)"
           >{{ r }}</el-tag>

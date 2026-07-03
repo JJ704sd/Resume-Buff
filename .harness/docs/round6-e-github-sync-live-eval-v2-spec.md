@@ -1,8 +1,8 @@
 # Round 6-E: GitHub 同步 + Live Eval v2 决策门禁 Spec
 
 > 适用项目: 简历帮 / Resume-Buff  
-> 本地日期: 2026-07-02  
-> 状态: draft spec  
+> 本地日期: 2026-07-02(起草) / 2026-07-03(closeout)  
+> 状态: **closeout (2026-07-03 同步至 origin/main = 3b632c7)**  
 > 推荐下一轮主题: 先把本地 R6-C/R6-D 成果同步成可审查状态, 再用真实前端对话数据决定是否继续投资 LLM slot 抽取优化。
 
 ---
@@ -25,6 +25,10 @@
 
 本地仓库根目录: `D:\简历帮`
 
+> **2026-07-03 closeout 更新**:本节初始取证(2026-07-02)记录的 `origin/main 落后 9 commit` 状态已过期。R6-E closeout 时(2026-07-03)`local HEAD = origin/main = 3b632c7`,已 sync(0 ahead / 0 behind)。R6-E Phase 4 `_do_answer` slot 对齐 Bug fix(commit `7fe798c`)经用户授权已 push 至远端。具体取证见 R6-F 报告 `.harness/docs/round6-f-project-review-bug-audit-report.md` §1.1 GitHub 状态当前事实段。
+> 
+> **原始取证(2026-07-02 起草时)** ↓
+
 ```text
 branch: main
 local HEAD: a03c8c0 docs(round6-c): refine live eval next-step plan + sync ROADMAP to 930 baseline
@@ -32,6 +36,8 @@ origin/main: 69ed431 docs(round6-b): fix stale baseline wording after phase 7 cl
 ahead/behind: origin/main...main = 0 behind / 9 ahead
 untracked: .planning/面试讲解/
 ```
+
+> **2026-07-03 closeout 状态**:HEAD = origin/main = `3b632c7`,已 sync(0 ahead / 0 behind);后续 R6-G 不应再把本节当现行事实引用。
 
 本地领先远端 9 个提交:
 

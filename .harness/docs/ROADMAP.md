@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前项目快照(2026-07-03 **R6-G 完成**:`review-needed` 3 项整理 — verifier sentinel 失败提示 + llm envelope 重复 except hygiene 清理 + stderr 错误信息脱 `LLM_API_KEY` / `sk-` / `Bearer`(commit `ae0e89b`);+12 pytest,936 → **948 baseline** 实测 117.94s;**R6-F closeout 完成**:文档 / baseline 漂移 + UI chip 噪音 + 临时文件清理 + R6-E Phase 4 slot 对齐 fix 已 closeout(commit `a3f48b1`),见 `.harness/docs/round6-f-project-review-bug-audit-report.md`;**R6-E closeout 完成**:本地 main 与 origin/main 已同步至 `3b632c7`(0 ahead / 0 behind);R6-E Phase 4 `_do_answer` slot 对齐 bug fix(commit `7fe798c`)+ docs-only patch 落地,936 baseline 实测 65.60s;**R6-H 启动**:live eval v2 决策门禁 spec `.harness/docs/round6-h-live-eval-v2-decision-gate-spec.md` 已落档 draft,等用户在前端跑 10+ 轮真实对话后启动 Phase 2 跑分;R6-C.1+ C.2A+ C.2B+ C.3 全部完成 + R6-D 机械拆分行为不变重构 全部完成;R6-B Phase 0+1+2+3+4+5+6 可信增强层 全部完成;R6-A Phase 1+2+3+4+5 全部完成,LLM slot extraction 已上线;R5-E Prompt 版本化 + A/B Eval 闭环 + 文档收尾 全部完成,**不 rollout winner**;**当前 main 比 origin/main ahead 3 commits**(R6-E docs-only + R6-F closeout + R6-G review-needed 3 项,推送前需用户授权))
+## 0. 当前项目快照(2026-07-03 **R6-G 完成**:`review-needed` 3 项整理 — verifier sentinel 失败提示 + llm envelope 重复 except hygiene 清理 + stderr 错误信息脱 `LLM_API_KEY` / `sk-` / `Bearer`(commit `ae0e89b`);+12 pytest,936 → **948 baseline** 实测 117.94s;**R6-F closeout 完成**:文档 / baseline 漂移 + UI chip 噪音 + 临时文件清理 + R6-E Phase 4 slot 对齐 fix 已 closeout(commit `a3f48b1`),见 `.harness/docs/round6-f-project-review-bug-audit-report.md`;**R6-E closeout 完成**:本地 main 与 origin/main 已同步至 `3b632c7`(0 ahead / 0 behind);R6-E Phase 4 `_do_answer` slot 对齐 bug fix(commit `7fe798c`)+ docs-only patch 落地,936 baseline 实测 65.60s;**R6-H 启动**:live eval v2 决策门禁 spec `.harness/docs/round6-h-live-eval-v2-decision-gate-spec.md` 已落档 draft,等用户在前端跑 10+ 轮真实对话后启动 Phase 2 跑分;R6-C.1+ C.2A+ C.2B+ C.3 全部完成 + R6-D 机械拆分行为不变重构 全部完成;R6-B Phase 0+1+2+3+4+5+6 可信增强层 全部完成;R6-A Phase 1+2+3+4+5 全部完成,LLM slot extraction 已上线;R5-E Prompt 版本化 + A/B Eval 闭环 + 文档收尾 全部完成,**不 rollout winner**;**main 与 origin/main 已同步至 `2c9e487`**(R6-H spec 落档 commit,R6-E docs-only + R6-F closeout + R6-G review-needed 3 项已推到 origin))
 
 **已上线能力**(用户视角):
 - FastAPI 后端 + Vue 3 前端 + 本地单用户工具
@@ -44,14 +44,14 @@
 - CI 验证(pre-push hook 自动 pytest + vue-tsc + build)
 - **948 个 pytest 全绿 + 0 skipped**(2026-07-03 R6-G 收尾时点 `D:\python3.11\python.exe -m pytest tests/ -q` 实测 948 passed in 117.94s;活跃基线以本行为准,历史快照 596/627/655/683/723/729/739/768/809/840/863/877/889/909/930/936 见各 round entry);计算口径沿用 R6-E 936 + R6-G +12:R6-B Phase 5 863 baseline + **14 R6-C.1** (`tests/test_interview_eval.py::TestPhaseC1*` 14 case = EvalContractValidation 7 + ReportContractSection 2 + ReportWording 3 + ReportPrivacy 2) + **12 R6-C.2A** (`tests/test_interview_eval.py::TestPhaseC2EvalContract` 12 case) + **20 R6-C.2B** (`tests/test_interview_policy.py::TestPhaseC2BCriticalSlot` 16 + `tests/test_interview_agent.py::TestPhaseC2BCriticalSlotIntegration` 4) + **21 R6-C.3** (`tests/test_interview_agent.py::TestPhaseC3LLMObservability` 11 + `tests/test_interview_eval.py::TestPhaseC3ObservabilityFields` 5 + `TestPhaseC3ObservabilityReport` 5) + **0 R6-D**(纯行为不变机械平移, 35 个 case 从 `test_interview_agent.py` 平移到新建 `test_interview_llm.py`) + **6 R6-E Phase 4** (`tests/test_interview_agent.py::TestSlotExtractionAlignsWithPolicy` 6 case: 4 gap × 3 轮对答 + 2 fallback 边界) + **0 R6-F closeout**(docs-only patch + UI chip fix + cleanup trash 不引入新测试) + **12 R6-G** (`tests/test_interview_verifier.py::TestVerifierSentinelF2_1` 5: sentinel 常量存在 / 触发条件 unsupported / 触发条件 low_confidence / 不触发空 sentinel / sentinel 不含 PII + `tests/test_interview_eval.py::TestEvalStderrSanitizeF2_3` 7: stderr 不含 LLM_API_KEY / sk- / Bearer + live mode key 错时脱敏 / offline mode 路径不变 / 错误信息含脱敏后路径 / 保留诊断信息)
 
-**最近 7 个 commit** (`main` 当前基线, ahead `origin/main` 3 commits):
+**最近 7 个 commit** (`main` 与 `origin/main` 已同步至 `2c9e487`):
+- `2c9e487` docs(round6-h): add live eval v2 decision gate (origin/main 同步点)
 - `ae0e89b` feat(round6-g): review-needed 整理 — verifier sentinel + envelope hygiene + stderr 脱敏
 - `a3f48b1` chore(round6-f): closeout patch — 4 处文档漂移修复 + 1 行 UI chip fix + R6-F 报告归档
 - `7811973` docs(round6-e): AGENTS.md R6-E Phase 1 + Phase 4 entry 落地
-- `3b632c7` chore(round6-e): API smoke 阈值 ≥2 → ≥1 bullets (origin/main 同步点)
+- `3b632c7` chore(round6-e): API smoke 阈值 ≥2 → ≥1 bullets
 - `7fe798c` fix(round6-e): _do_answer slot 优先读 question_plan 决策 (Phase 4)
 - `669a5ef` docs(round6-e): Phase 1 文档同步 — spec 落档 + README/MEMORY 对齐 930 baseline
-- `2177d27` chore(round6-e): add .planning/面试讲解/ gitignore shield
 
 ---
 

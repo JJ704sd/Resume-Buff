@@ -154,6 +154,16 @@ function handleBeforeUpload(file: File): boolean {
   width: 100%;
 }
 
+/* 拖拽区跟随主题:边框 hover 变青绿 */
+.resume-uploader :deep(.el-upload-dragger) {
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
+}
+.resume-uploader :deep(.el-upload-dragger:hover),
+.resume-uploader :deep(.el-upload:focus .el-upload-dragger) {
+  border-color: #00bebd;
+}
+
 .upload-icon {
   display: flex;
   justify-content: center;
@@ -166,7 +176,7 @@ function handleBeforeUpload(file: File): boolean {
   margin-bottom: 4px;
 }
 .upload-text em {
-  color: #2e75b6;
+  color: #00bebd;
   font-style: normal;
   font-weight: 600;
 }

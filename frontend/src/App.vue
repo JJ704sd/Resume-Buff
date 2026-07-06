@@ -538,11 +538,19 @@ async function onRefreshPreview() {
         </div>
       </div>
       <div class="stage-indicator">
-        <el-steps :active="stage === 'select' ? 0 : stage === 'preview' ? 1 : 2" finish-status="success" simple>
-          <el-step title="选择" />
-          <el-step title="预览" />
-          <el-step title="下载" />
-        </el-steps>
+        <div class="step-bar">
+          <span class="step-item" :class="{ active: stage === 'select' }">
+            <span class="step-dot">1</span>选岗位
+          </span>
+          <span class="step-sep">—</span>
+          <span class="step-item" :class="{ active: stage === 'preview' }">
+            <span class="step-dot">2</span>预览
+          </span>
+          <span class="step-sep">—</span>
+          <span class="step-item" :class="{ active: stage === 'done' }">
+            <span class="step-dot">3</span>下载
+          </span>
+        </div>
       </div>
     </header>
 
@@ -562,19 +570,19 @@ async function onRefreshPreview() {
 
               <el-form label-position="top">
                 <el-form-item label="目标岗位方向">
-                  <el-select v-model="selectedRole" size="large" style="width: 100%">
-                    <el-option
+                  <div class="role-grid">
+                    <button
                       v-for="r in roles"
                       :key="r.id"
-                      :label="r.name"
-                      :value="r.id"
+                      type="button"
+                      class="role-card"
+                      :class="{ active: selectedRole === r.id }"
+                      @click="selectedRole = r.id"
                     >
-                      <div style="display: flex; justify-content: space-between; gap: 12px">
-                        <span>{{ r.name }}</span>
-                        <span style="color: #999; font-size: 12px">{{ r.tone }}</span>
-                      </div>
-                    </el-option>
-                  </el-select>
+                      <span class="role-card-name">{{ r.name }}</span>
+                      <span class="role-card-tone">{{ r.tone }}</span>
+                    </button>
+                  </div>
                   <div class="hint" v-if="currentRole">
                     求职意向将使用:<b>{{ currentRole.intention }}</b>
                   </div>
@@ -1246,63 +1254,160 @@ async function onRefreshPreview() {
 </template>
 
 <style>
+/* ===== 招聘站风格设计变量 ===== */
+:root {
+  /* Element Plus 主色覆盖为招聘站青绿 */
+  --el-color-primary: #00bebd;
+  --el-color-primary-light-3: #4dd2d1;
+  --el-color-primary-light-5: #80e1e0;
+  --el-color-primary-light-7: #b3efee;
+  --el-color-primary-light-8: #ccf4f4;
+  --el-color-primary-light-9: #e6fbfb;
+  --el-color-primary-dark-2: #00a8a7;
+
+  --brand: #00bebd;          /* 青绿主色(Boss 直聘风) */
+  --brand-hover: #00a8a7;
+  --brand-soft: #e6fbfb;     /* 浅青绿底 */
+  --ink: #222326;            /* 主文字(深灰近黑) */
+  --ink-2: #666;             /* 次要文字 */
+  --ink-3: #999;             /* 占位/辅助 */
+  --line: #ebedf0;           /* 分隔线 */
+  --bg: #f4f5f7;             /* 页面浅灰底 */
+  --radius: 10px;
+  --card-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "微软雅黑", sans-serif;
-  background: #f5f7fa;
-  color: #303133;
+  background: var(--bg);
+  color: var(--ink);
 }
 .layout { min-height: 100vh; }
+
+/* 顶栏:白底 + 细描边,轻量导航风 */
 .topbar {
-  background: linear-gradient(135deg, #1f4e79 0%, #2e75b6 100%);
-  color: white;
-  padding: 16px 40px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 40px;
+  height: 60px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+  flex-wrap: nowrap;
   gap: 16px;
 }
-.brand { display: flex; align-items: center; gap: 16px; }
+.brand { display: flex; align-items: center; gap: 12px; }
 .logo {
-  width: 48px; height: 48px;
-  background: rgba(255,255,255,0.2);
-  border: 2px solid rgba(255,255,255,0.4);
+  width: 40px; height: 40px;
+  background: var(--brand);
   border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 16px; letter-spacing: 1px;
+  font-weight: 700; font-size: 15px; letter-spacing: 0.5px;
+  color: #fff;
 }
-.title-block h1 { margin: 0; font-size: 22px; font-weight: 600; }
-.subtitle { margin: 2px 0 0; font-size: 13px; opacity: 0.85; }
-.stage-indicator { min-width: 360px; }
+.title-block h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--ink); line-height: 1.2; }
+.subtitle { margin: 1px 0 0; font-size: 12px; color: var(--ink-3); }
+
+/* 步骤指示:自绘轻量三段(选岗位 → 预览 → 下载) */
+.stage-indicator { min-width: auto; }
+.step-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+.step-bar .step-item { display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.step-bar .step-item.active { color: var(--brand); font-weight: 600; }
+.step-bar .step-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #f0f1f3;
+  color: var(--ink-3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+}
+.step-bar .step-item.active .step-dot {
+  background: var(--brand);
+  color: #fff;
+}
+.step-bar .step-sep { color: #d0d3d9; font-size: 12px; }
+
 .main {
   max-width: 1280px;
   margin: 24px auto;
   padding: 0 24px;
 }
-.card { border-radius: 8px; }
+/* 卡片:白底 + 浅边框 + 轻阴影 + 统一圆角 */
+.card {
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  box-shadow: var(--card-shadow);
+}
+.card :deep(.el-card__header) {
+  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+}
 .card-header {
   display: flex; align-items: center; justify-content: space-between;
 }
-.card-title { font-weight: 600; font-size: 16px; }
-.hint { font-size: 12px; color: #909399; margin-top: 4px; }
+.card-title {
+  font-weight: 600; font-size: 16px; color: var(--ink);
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title::before {
+  content: '';
+  width: 4px; height: 16px;
+  background: var(--brand);
+  border-radius: 2px;
+}
+.hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; line-height: 1.6; }
+
+/* 岗位卡片网格(职位列表风) */
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.role-card:hover { border-color: var(--brand); box-shadow: 0 2px 8px rgba(0, 190, 189, 0.12); }
+.role-card.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.role-card-name { font-size: 14px; font-weight: 600; color: var(--ink); }
+.role-card.active .role-card-name { color: var(--brand-hover); }
+.role-card-tone { font-size: 12px; color: var(--ink-3); }
+
 .proj-list { list-style: none; padding: 0; margin: 0; }
 .proj-list li {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px;
 }
 .proj-list li:last-child { border-bottom: none; }
-.dot { width: 6px; height: 6px; background: #2e75b6; border-radius: 50%; flex-shrink: 0; }
+.dot { width: 6px; height: 6px; background: var(--brand); border-radius: 50%; flex-shrink: 0; }
 .proj-name { flex: 1; }
 .proj-period { color: #909399; font-size: 12px; flex-shrink: 0; }
 
 /* 预览样式 */
 .preview-header { text-align: center; padding: 8px 0 12px; }
-.preview-name { font-size: 22px; font-weight: 700; color: #1f4e79; }
-.preview-intention { color: #1f4e79; margin-top: 4px; font-size: 14px; }
-.preview-contact { color: #666; font-size: 13px; margin-top: 4px; }
+.preview-name { font-size: 22px; font-weight: 700; color: var(--ink); }
+.preview-intention { color: var(--brand-hover); margin-top: 4px; font-size: 14px; font-weight: 600; }
+.preview-contact { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
 .preview-line { line-height: 1.7; margin: 4px 0; }
 .preview-line-bold { font-weight: 600; margin: 6px 0 2px; color: #303133; }
 .preview-meta { color: #888; font-style: italic; font-size: 12px; margin-bottom: 4px; }
@@ -1317,8 +1422,8 @@ body {
 .lbl { font-weight: 600; color: #555; margin-right: 4px; }
 .skill-chip {
   display: inline-block;
-  background: #ecf5ff;
-  color: #1f4e79;
+  background: var(--brand-soft);
+  color: var(--brand-hover);
   padding: 2px 8px;
   margin: 2px 4px 2px 0;
   border-radius: 4px;
@@ -1337,23 +1442,24 @@ body {
   margin-top: 16px;
 }
 
-/* ===== Round 2 #2: JD 评分卡 ===== */
+/* ===== Round 2 #2: JD 评分卡(职位匹配度风) ===== */
 .score-box {
-  border: 3px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 16px;
   text-align: center;
   height: 100%;
+  background: #fff;
 }
 .score-value {
-  font-size: 56px;
-  font-weight: 700;
+  font-size: 48px;
+  font-weight: 800;
   line-height: 1;
 }
 .score-label {
-  color: #888;
+  color: var(--ink-2);
   font-size: 13px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .coverage-box { padding: 8px 0; }
 .coverage-title {
@@ -1532,7 +1638,7 @@ body {
   right: 16px;
   bottom: 24px;
   z-index: 1000;
-  background: linear-gradient(135deg, #1f4e79 0%, #2e75b6 100%);
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-hover) 100%);
   color: #fff;
   border: none;
   border-radius: 24px;
@@ -1542,7 +1648,7 @@ body {
   gap: 6px;
   font-size: 14px;
   font-weight: 600;
-  box-shadow: 0 4px 12px rgba(31, 78, 121, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 190, 189, 0.4);
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }

@@ -24,6 +24,10 @@ dist/
 .idea/
 Thumbs.db
 desktop.ini
+.codebuddy/
+
+# 与 .harness/docs/system-architecture.md 重复的仓库根副本,不入仓
+架构设计文档.md
 
 # 用户材料(不进 git,仅本地参考)
 原始材料/
@@ -41,6 +45,10 @@ backend/logs/
 
 # 面试讲解(本地脱敏稿,含大量面试题内容,R6-E 起 avoid 入库)
 .planning/面试讲解/
+
+# 本地体检 scratch 产物(不入库,report_only)
+.planning/health-check-r6g-2026-07-07/
+.harness/docs/health-check-r6g-2026-07-07.md
 
 # 环境变量(本地运行时配置,不入库;用 backend/.env.example 作模板)
 # 防止 LLM_API_KEY / 数据库密码等敏感配置误 commit

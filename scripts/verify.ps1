@@ -54,7 +54,7 @@ if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
 }
 
 # --- 3. 后端 pytest ----------------------------------------------------------
-Write-Host "[1/3] 后端 pytest（53 jd_parser + 3 api_jd + 16 llm_rewriter + 16 generator_layouts）" -ForegroundColor Yellow
+Write-Host "[1/3] 后端 pytest（基线 948 passed + 0 skipped，R6-G 2026-07-03 实测）" -ForegroundColor Yellow
 Write-Host "      $PythonExe -m pytest backend/tests/ -v" -ForegroundColor DarkGray
 Write-Host ""
 

@@ -449,4 +449,84 @@ Select-String -LiteralPath backend\logs\interview_eval_report_live_v2.md -Patter
 
 ---
 
-(spec 完, 2026-07-03 起草)
+## 10. Phase 2 跑分准备 spec 计划 (2026-07-06 落档)
+
+> 本章为 Phase 2 跑分的**准备期 spec 落档**, 不执行 live 跑分 (key 未配 + 真实样本 0/10 当前不可执行), 不改动任何业务代码。路径 A 已获用户拍板为后续 round 实施方向, 但本计划只落档设计, 不写代码。
+
+### 10.1 准备期核心发现 (基于现状核实)
+
+探查现有 `scripts/evaluate_interview_agent.py` 与 `backend/logs/interview_eval_samples_r6h.md` 后发现**关键缺口**:
+
+- 脚本 `--mode live --extractor compare` 当前只跑内置 `EVAL_SET_ALL` (10 条脱敏模拟样本, 含 `user_messages`), **没有加载 R6-H 真实对话样本的入口**;
+- R6-H 第一性原理要求"用真实用户对话验证", 但真实样本按 §3.3 / §3.4 隐私边界**只存 8 个统计字段 (sample_id / gap / expected_slot_keys / product_goal / toggle / capture_count / max_turn_reached / notes), 不含 `user_messages` 原文**;
+- 脚本 `_evaluate_one` 算 `schema_pass_rate` / `avg_completeness` / `fabrication_guard` 必须喂 `user_messages` 给 `extract_slots` → 真实统计样本**无法直接进现有跑分路径**;
+- 即: spec §4.2 字面命令跑的是"模拟集 live 对照", 不是"真实样本验证"。两者数据模型对不上, 必须桥接。
+
+### 10.2 桥接路径决策 (用户 2026-07-06 拍板: 路径 A)
+
+| 路径 | 内容 | 验证价值 | 代码改动 | 决策 |
+|---|---|---|---|---|
+| **A (已选)** | 前端/后端用户手动跑对话时, 把真实 session 的 `user_messages` 抽离落盘到本地 gitignored JSON (脱敏: `session_id` 前 4 字符、不存 `draft_card` 原文、不存 API key), 给脚本加 `--real-sessions <path>` 加载这批真实 session 跑 live compare | 真实验证, R6-H 第一性原理正解 | 需小改 `scripts/` + 加轻量落盘机制 | ✅ 后续 round 实施 |
+| B (弃) | 复用 `_run_real_sessions.py` 思路, 真实 API + 真实 LLM, 但 `user_messages` 仍来自 `EVAL_SET_ALL` | 仅链路 smoke, 不算真实样本验证 (R6-C.0 已做过) | 不改代码 | ❌ |
+
+**路径 A 实施边界 (后续 round, 本计划不落地)**:
+- 落盘 JSON 路径 `backend/logs/interview_real_sessions_r6h.json` (`.gitignore`, 不入 git);
+- 脱敏: 每条 `{session_short_id: 前4字符, gap, user_messages: [...], toggle, expected_slot_keys}`; **绝不**存 `draft_bullets` 原文 / 完整 `session_id` / API key / Bearer / `sk-` / prompt 正文;
+- 前端/后端落盘机制须遵守 R6-H spec §6 不做清单: 不引入新依赖、不改 `core/interview_prompts.py` / `core/interview_llm.py` / `core/interview_policy.py` / `core/interview_verifier.py` 4 个核心文件;
+- 脚本加 `--real-sessions <path>` CLI 分支, 加载真实 session 替代 `EVAL_SET_ALL` 走 `_evaluate_one` 同一套指标/报告/隐私扫描逻辑;
+- 实施前需另起 plan 经用户授权 (本计划仅文档)。
+
+### 10.3 前置核对清单 (Phase 2 入口检查表)
+
+| 项 | 状态 | 验证方式 |
+|---|---|---|
+| 948 baseline 全过 | ✅ | `D:\python3.11\python.exe -m pytest tests/ -q` (R6-G 锁) |
+| 前端 `npm run build` 成功 | ✅ | `cd frontend && npm run build` |
+| `core/interview_llm.py` 模块拆分 (R6-D) | ✅ | `git log` 含 `91ec8f3` |
+| `core/interview_policy.py` step 4.5 critical slot (R6-C.2B) | ✅ | `git log` 含 `caab6ff` |
+| `core/interview_verifier.py` sentinel (R6-G) | ✅ | `git log` 含 `ae0e89b` |
+| LLM key (`LLM_API_KEY`) 已配 | ⚠️ **当前未配** → live compare 不可执行; rules 对照 (offline compare) 仍可跑 | 用户自报, owner 不打印/校验 |
+| 真实对话样本回填进度 | ⚠️ **0/10 待填** (`interview_eval_samples_r6h.md` §6 入口判断) | 读 samples md 计数 |
+
+**任一 ⚠️ 项未解除 → 不开 Phase 2 live compare**, 先走 §10.4 准备期验证 (rules 对照) + 等用户补前置。
+
+### 10.4 准备期可立即跑的验证 (rules 对照, 不等同真实样本验证)
+
+```powershell
+cd D:\简历帮
+D:\python3.11\python.exe -m scripts.evaluate_interview_agent `
+  --mode offline `
+  --extractor compare `
+  --output backend/logs/interview_eval_report_r6h_prep.md
+```
+
+用途: 验证脚本/报告链路健康 + `slot_source_breakdown` / `llm_parse_retry_count` / `llm_to_rules_slot_fallback_count` 3 字段渲染正常, **不作为 R6-H 真实样本验证结论**。
+
+### 10.5 报告隐私扫描命令 (Phase 2 跑分后执行, 4 项 0 命中)
+
+```powershell
+cd D:\简历帮
+Select-String -LiteralPath backend\logs\interview_eval_report_live_v2.md -Pattern "LLM_API_KEY" -SimpleMatch   # 0 命中
+Select-String -LiteralPath backend\logs\interview_eval_report_live_v2.md -Pattern "Bearer" -SimpleMatch        # 0 命中
+Select-String -LiteralPath backend\logs\interview_eval_report_live_v2.md -Pattern "sk-" -SimpleMatch            # 0 命中
+Select-String -LiteralPath backend\logs\interview_eval_report_live_v2.md -Pattern "BEGIN PROMPT" -SimpleMatch   # 0 命中
+```
+
+### 10.6 阻塞项与待办 (标注)
+
+| 阻塞/待办 | 责任方 | 当前状态 | 解除条件 |
+|---|---|---|---|
+| 真实样本回填 (10+ 轮) | 用户 | ⚠️ 0/10, 前端手动跑过几轮但不足 10 轮 | 用户在 `InterviewAgentPanel` 跑满 10+ 轮并按 §3.4 schema 填 samples md |
+| LLM key 配置 | 用户 | ⚠️ 未配 (`LLM_API_KEY` 空) | 用户设 env `LLM_API_KEY` (非空即启用) |
+| 路径 A 桥接实施授权 | 用户决策 | ✅ 已拍板方向, ⏸ 未实施 | 另起 plan 授权小改 `scripts/` + 加落盘机制 |
+| Phase 2 live compare 可执行 | — | ❌ 当前不可执行 | 上 3 项全部解除后 |
+
+### 10.7 验收脚本清单汇总
+
+1. **现在可跑** (准备期 rules 对照): §10.4 offline compare 命令 → 验证链路健康;
+2. **待 key + 真实样本** (Phase 2 本体): §4.2 live compare 命令 + §10.5 四条隐私扫描 + §5 决策表评分;
+3. **配套 (路径 A 实施后)**: `--real-sessions <path>` 加载真实 session 跑 live compare, 同 §4.2 指标与 §10.5 扫描。
+
+---
+
+(spec 完, 2026-07-03 起草; §10 追加 2026-07-06)

@@ -108,3 +108,13 @@
 | * | `/api/materials/...` | 素材库 CRUD |
 
 > API 文档自动生成于 `/docs`（Swagger UI）。
+
+## 系统架构图与数据流（补全版）
+
+> 上面的「高层架构」与「目录详表」偏目录约定（仅覆盖 materials/resume 两路由）。
+> 完整的**系统分层架构图（Mermaid）+ core 模块职责表 + 四条数据流时序图（主生成 / JD 评分 / R5-C Agent / R6 面试 Agent）+ 安全隐私约束**，见：
+
+- `system-architecture.md`（本目录，与仓库根 `架构设计文档.md` 同步）
+- 仓库根 `架构设计文档.md`（同一份内容的副本）
+
+**维护提醒**：`generator.py` / `jd_*` / `agent_*` / `interview_*` 等核心模块发生变动时，需同步更新 `system-architecture.md` 中的模块职责表与对应数据流时序图（节点名与代码实体一一对应）。

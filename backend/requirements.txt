@@ -1,10 +1,14 @@
 # 简历帮 - 后端依赖
-fastapi==0.128.0
+# fastapi 升到 0.134.0:0.128.0 的 starlette<1.0.0 上限与 CVE-2026-48710 要求的 starlette>=1.0.1 冲突
+# 0.134.0 起 starlette 约束放开为 >=0.46.0(无上限),方可显式锁 starlette>=1.0.1;本地单用户 blast radius=0
+fastapi==0.134.0
+# starlette 显式锁:CVE-2026-48710 要求 >=1.0.1(fastapi 间接依赖,此处显式提升)
+starlette>=1.0.1
 uvicorn[standard]==0.40.0
 python-docx==1.2.0
 pymupdf==1.27.2.3
 pydantic==2.12.5
-python-multipart==0.0.20
+python-multipart==0.0.32
 
 # 测试（41 个用例：25 jd_parser + 16 llm_rewriter）
 pytest==9.0.2

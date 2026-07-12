@@ -55,6 +55,32 @@
 
 ---
 
+## 📸 实际效果
+
+### ① 桌面主界面 — 6 岗位 × 8 模板 + 素材库 + 面试官面板
+
+> 三段式流程:① 选岗位 → ② 预览 → ③ 下载。左列选岗位方向和模板,中列展示已加载的素材库和项目,右列是 JD 驱动面试官(空白状态)。
+
+![Desktop main view](.github/assets/screenshots/01_desktop_empty.png)
+
+### ② 桌面 — 粘贴 JD 后匹配度评分
+
+> 粘贴目标岗位 JD,点"对当前岗位跑匹配度评分",系统给出 0-100 综合分 + 三维覆盖率(技能/工具/领域)+ 命中关键词(绿)与缺失关键词(红)+ 补充建议。**示例:** 某 JD 拿到 82 分(放心投递),命中 5 个核心关键词,建议补"分布式训练 / A/B 实验"。
+
+![Desktop JD match](.github/assets/screenshots/03_desktop_jd_match.png)
+
+### ③ 移动端 — 响应式布局
+
+> ≤768px 自动切到单列 + 抽屉式聊天,核心选择(岗位 / 模板)依然可达。
+
+<p align="left">
+  <img src=".github/assets/screenshots/02_mobile_empty.png" alt="Mobile view" width="320" />
+</p>
+
+> 截图本地用 Edge headless 自动生成(同 `frontend/` 真实运行产物)。**预填 JD + 评分 mock 数据仅供截图展示,生产代码不保留 demo 模式。**
+
+---
+
 ## 🚀 快速开始
 
 ### 1. 启动后端

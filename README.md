@@ -1,46 +1,63 @@
-# 简历帮 (Resume-Buff)
+<div align="center">
 
-个人简历助手:用一份结构化素材库,按岗位和 JD 生成多份针对性 `.docx` 简历。
+# 🚀 简历帮 · Resume-Buff
 
-本项目是本地单用户工具。`PUT /api/materials` 当前无鉴权,不要直接暴露到公网。公开仓库中的 `backend/data/materials.json` 是脱敏示例数据;真实个人数据应只保留在本地。
+**一份结构化素材库，按岗位方向和 JD 一键生成多份针对性简历。**
 
-## 当前状态
+[English](#english) · 本地单用户工具 · 不做任何爬虫、不做任何投递、不做任何云端同步
 
-- GitHub 仓库:`JJ704sd/Resume-Buff`
-- 默认分支:`main`
-- 当前功能基线:**R6-G review-needed 3 项整理完成**(commit `ae0e89b`,2026-07-03):F-2.1 verifier sentinel 失败提示 / F-2.2 llm envelope 重复 except hygiene 清理 / F-2.3 stderr 错误信息脱 `LLM_API_KEY` 字面量 / `sk-` 前缀 / `Bearer` 头;+12 pytest,936 → **948 baseline**;**R6-F closeout 全部完成**(commit `a3f48b1`,docs-only + UI chip fix + 临时文件清理,0 P0/0 P1 真实 bug);**R6-E 全部完成**(Phase 1 文档同步 + Phase 4 `_do_answer` slot 优先读 `question_plan` 决策 bug fix,commit `7fe798c`);**R6-C.1+ C.2A+ C.2B+ C.3 + R6-D 全部完成**(R6-C: eval contract warnings / product_goal + contract_note / policy gap-critical slot step 4.5 / LLM 抽取可观测性 + `response_format=json_object` + prompt few-shot 优化;R6-D: 机械拆分 LLM slot 抽取到 `backend/core/interview_llm.py`,行为不变 0 新测试);**R6-B Phase 0+1+2+3+4+5+6 可信增强层全部完成**;**R6-A Phase 1+2+3+4+5 全部完成**(LLM slot extraction 已上线,phase 4 启动 1/3);R5-E 4 phase 全部完成(`scripts/evaluate_prompt_versions.py --mode {offline,live,auto}` + 4 个 prompt version 注册表 + 可选 LLM-as-Judge;**手动脚本,默认仍 offline**);R5-D 6 phase 真实 LLM eval 闭环延续
-- **默认 prompt 仍为 `v2-baseline`**:R5-E 新增 3 个候选 prompt (v3-priority / v4-counterexample / v5-minimal) 属实验,本轮**不 rollout winner**,后续基于 live A/B 报告决定
-- **interview agent 默认仍走 rules 路径**:`enable_interview_llm=False` 时 R6-A 行为字节级一致;**R6-D 后 LLM 抽取代码已搬到 `core/interview_llm.py`**,`core/interview_agent.py` 通过重导出保持向后兼容;前端"智能抽取"toggle 默认关闭;有 key 时回退规则模式显示 warning
-- 后端测试基线:**948 passed + 0 skipped**(2026-07-03 R6-G 收尾实测 117.94s;R5-E Phase 3 收尾 683 → R6-A Phase 1+2+3+5 → 729 → R6-A Phase 4 → 739 → R6-B Phase 0+1+2 → 768 → Phase 3 → 809 → Phase 4 → 840 → Phase 5 → **863** → R6-C.1 → **877** → R6-C.2A → **889** → R6-C.2B → **909** → R6-C.3 → **930** → R6-E Phase 4 → **936** → R6-G → **948**)
-- 真实 LLM eval (`scripts/evaluate_prompt_versions.py --mode live` / `scripts/evaluate_agent_workflow.py --mode live` / `scripts/evaluate_interview_agent.py --mode live`) 是手动脚本,不进入默认启动流程
-- **文档一致性**:R6-H 收尾完成:live eval v2 决策门禁 spec 落档 + 5 docs/sec commit 全推(commit `0556c91`,HEAD = `0556c91`),已与 `origin/main` 同步;**948 baseline** 全程零回退;R6-H live eval v2 决策门禁 spec 见 `.harness/docs/round6-h-live-eval-v2-decision-gate-spec.md`(draft,§10 路径 A 拍板为后续 round 实施方向,等用户跑完 10+ 轮真实对话后启动 Phase 2 跑分);新加 `.harness/docs/system-architecture.md` 系统架构总览(332 行,与仓库根 `架构设计文档.md` 同步副本,后者已 gitignore + trash);R6-F 项目回顾 + bug 审核报告见 `.harness/docs/round6-f-project-review-bug-audit-spec.md` + `.harness/docs/round6-f-project-review-bug-audit-report.md`
-- 详细开发锁点:见 [AGENTS.md](AGENTS.md)
-- 阶段记录和路线图:见 [.harness/docs/ROADMAP.md](.harness/docs/ROADMAP.md)
+</div>
 
-## 核心能力
+<div align="center">
 
-- 素材库管理:把项目、技能、荣誉、证书沉淀为唯一事实源。
-- 岗位定制:支持度量、产品、算法、标注、测试、通用等方向。
-- JD 匹配评分:解析 JD 关键词、经验、学历和领域要求,输出 0-100 匹配度和高/中/低建议。
-- 简历预览与生成:先预览模块内容,人工确认后再生成 `.docx`。
-- 模板选择:内置 classic、single_column、two_column、minimal、technical、academic、internet、bilingual 等排版。
-- 外部简历视角:可解析外部简历文本,对比 JD 与素材库覆盖情况。
-- 可选 LLM 改写:有 key 时改写项目亮点,无 key 时静默降级为原文。
-- **JD 驱动简历面试官 (R6-A 全 5 phase + R6-B 全 6 phase + R6-C 4 阶段 + R6-D 行为不变重构)**:粘贴 JD → 系统选一个最值得补的缺口 → 一问一答 → 生成 draft_card → 事实核验 + 低置信度提示 → 用户编辑 → 写回素材库(`save_card` 原子写闭环)→ 触发预览与评分刷新;桌面右侧 380px 聊天栏 / 移动端全屏 drawer;**R6-A Phase 4 LLM slot extraction 已上线(默认关闭,有 key 时回退规则模式 warning)** + **R6-B 可信增强层(slot_meta provenance / API mode 开关 / confidence-aware deterministic policy / draft verifier / eval compare / 前端最小呈现)** + **R6-C 评测合同化(eval contract warnings 段 + `product_goal`/`contract_note` 语义区分 + policy gap-critical slot step 4.5 三轮可达 + LLM 抽取可观测性 `slot_source_breakdown`/`retries`/`fb_to_rules` 3 字段)** + **R6-D 模块拆分(LLM slot 抽取代码搬到 `backend/core/interview_llm.py`,`interview_agent.py` 通过重导出保持向后兼容,行为不变)**。
-- **Prompt 版本化 + A/B 评测 harness (R5-E)**:默认 prompt 仍是 `v2-baseline`;新增 3 个候选 prompt 版本 (`v3-priority` / `v4-counterexample` / `v5-minimal`) 属实验,`scripts/evaluate_prompt_versions.py --mode offline` 跑 12 JD × 4 version 对比,**手动脚本不进入默认启动流程**;可选 `--judge on` 启用 LLM-as-Judge 评分。
-- Agent workflow 诊断:默认关闭;开启后可查看 evidence、工具摘要、bullet 评估、trace replay 等诊断信息。
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vuedotjs&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.134-009688?logo=fastapi&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-948%20passed-0A9B7C?logo=pytest&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT--style-lightgrey)
+![Local--only](https://img.shields.io/badge/run-localhost--only-blueviolet)
 
-## 不做什么
+</div>
 
-- 不自动投递。
-- 不爬招聘网站,JD 由用户粘贴。
-- 不追踪 HR 或面试进度。
-- 不做账号、多用户或云端协作。
-- 不替代人工确认,下载前仍需要用户 review。
+---
 
-## 快速启动
+## ✨ 这是什么
 
-后端:
+投实习时,你大概率会准备 **6 个岗位方向 × 多份针对性简历**:技术度量 / 算法 / 产品 / 数据标注 / 测试 / 通用。
+每份都要从同一份项目经历里挑不同项目、换不同表达、套不同模板。
+
+**简历帮做的事** —— 把"项目 / 技能 / 荣誉 / 证书"沉淀为唯一事实源,按岗位和 JD 自动选材 + 排版 + 生成 `.docx`。
+
+> 简历帮 ≠ 简历生成器,它是一个**带 JD 匹配评分和面试官补全**的个人投简历工具。
+
+---
+
+## 🎯 核心能力
+
+| 模块 | 能做什么 |
+| :--- | :--- |
+| 📚 **素材库** | 一次维护,所有简历共享。结构化存储项目 / 技能 / 荣誉 / 证书。 |
+| 🎯 **岗位定制** | 6 个方向 `tech_metric` / `product` / `algorithm` / `data_annot` / `test_qa` / `general`,每个角色自动选最匹配的项目。 |
+| 📄 **8 套模板** | `classic` / `single_column` / `two_column` / `minimal` / `technical` / `academic` / `internet` / `bilingual`,支持学术 / 互联网 / 中英双语等不同风格。 |
+| 🔍 **JD 匹配评分** | 粘贴 JD → 解析关键词 / 经验 / 学历 → 0-100 匹配度 + 高/中/低建议 + 缺什么补什么。 |
+| 📎 **外部简历对比** | 上传你已有的 `.docx` / `.pdf` 简历,自动对比"你有但素材库没有"和"素材库有但你没写"。 |
+| ✍️ **预览 → 确认 → 下载** | 先看模块内容,人工确认后再生成 `.docx`,所见即所得,改完再下载。 |
+
+<details>
+<summary><b>🤖 进阶能力(可选,不影响主流程)</b></summary>
+
+- **🧠 可选 LLM 改写** — 有 `LLM_API_KEY` 时改写项目亮点;无 key 时**静默降级**为原文,不出错不卡住。
+- **🛰️ Agent Workflow 诊断** — 默认关闭。开启后预览页出现 evidence / 工具摘要 / bullet 评估 / trace 回放,适合想知道"系统到底跑了啥"的开发者。
+- **💬 JD 驱动简历面试官** — 粘贴 JD,系统挑一个最值得补的缺口 → 一问一答 → 生成 `draft_card` → 事实核验 + 低置信度提示 → 你编辑 → 写回素材库。下次再投类似岗位,这条素材已经在库里。**desktop 380px 侧栏 / 移动端全屏 drawer。**
+- **🧪 离线评测 harness** — 4 个评测脚本:`replay_agent_trace.py` / `evaluate_agent_workflow.py` (4 开关对照) / `evaluate_prompt_versions.py` (4 prompt 对比 + 可选 judge) / `evaluate_interview_agent.py` (规则 vs LLM)。**手动跑,不入默认启动流程。**
+
+</details>
+
+---
+
+## 🚀 快速开始
+
+### 1. 启动后端
 
 ```bash
 cd backend
@@ -48,9 +65,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-后端默认地址:`http://127.0.0.1:8000`
+> 默认地址:`http://127.0.0.1:8000`
+> 健康检查:`curl http://127.0.0.1:8000/api/health` → `{"status":"ok"}`
 
-前端:
+### 2. 启动前端
 
 ```bash
 cd frontend
@@ -58,96 +76,173 @@ npm install
 npm run dev
 ```
 
-前端默认地址:`http://127.0.0.1:5173`
+> 默认地址:`http://127.0.0.1:5173`
 
-本地使用流程:
+### 3. 五步生成你的第一份简历
 
-1. 启动后端和前端。
-2. 打开 `http://127.0.0.1:5173`。
-3. 选择岗位方向和模板。
-4. 可选:粘贴 JD、上传外部简历、开启 Agent workflow 诊断。
-5. 点击预览,确认内容后下载 `.docx`。
+1. 打开 `http://127.0.0.1:5173`,从左侧选**岗位方向**(如 `tech_metric`)。
+2. 选**模板**(如 `classic` 或 `academic`)。
+3. *(可选)* 在 JD 框粘贴目标岗位的 JD,点"匹配评分"看 0-100 分 + 缺什么。
+4. 点"预览",看模块内容,不满意可改素材库或换模板。
+5. 满意后点"下载",得到 `.docx` 文件。
 
-## 配置
+> 💡 第一次没素材很正常,前端右上角有"素材库"入口,把所有项目 / 技能 / 证书一次性填进去就行。
 
-- 素材库:`backend/data/materials.json`
-- 本地私有备份建议:`backend/data/_private_backup.json` (已被 `.gitignore` 忽略)
-- LLM 配置模板:`backend/.env.example`
-- 输出目录:`backend/output/` (本地保留,不入库)
-- 运行日志:`backend/logs/` (本地保留,不入库)
+---
 
-常用环境变量:
+## 🎨 岗位方向 & 简历模板
+
+| 岗位方向 (`role_id`) | 意图 | 主推项目 | 适用 |
+| :--- | :--- | :--- | :--- |
+| `tech_metric` | 大模型技术度量实习 | 医疗评测 / ECG / Datawhale | AI Eval / 评测岗 |
+| `product` | AI 产品经理实习 | 医疗评测 / Datawhale | AI PM 岗 |
+| `algorithm` | 医疗 AI 算法实习 | ECG / 医疗评测 | 算法岗 |
+| `data_annot` | 大模型数据标注实习 | 医疗评测 / Datawhale | 标注 / 数据岗 |
+| `test_qa` | AI 测试 / QA 实习 | 医疗评测 / ECG | 测试 / QA 岗 |
+| `general` | 通用 | 全部 | 不确定方向时 |
+
+| 模板 (`template_id`) | 风格 | 适用 |
+| :--- | :--- | :--- |
+| `classic` | 经典单栏 | 通用 |
+| `single_column` | 紧凑单栏 | 互联网公司 |
+| `two_column` | 左右双栏 | 节省页数 |
+| `minimal` | 极简 | 突出项目本身 |
+| `technical` | 技术风 | 算法 / 研发岗 |
+| `academic` | 学术 CV | 学术申请 / 研究岗 |
+| `internet` | 互联网简洁 | 字节 / 阿里 style |
+| `bilingual` | 中英双语 | 跨境 / 外企 |
+
+---
+
+## 🗂️ 项目结构
+
+```text
+简历帮/
+├── backend/                     # FastAPI 后端
+│   ├── main.py                  # 入口
+│   ├── api/                     # materials / resume / jd / interview 4 个路由
+│   ├── core/                    # generator / jd_parser / agent_* / interview_* 业务核心
+│   ├── data/materials.json      # 脱敏示例素材库(真实数据走 _private_backup.json)
+│   └── tests/                   # 948 个 pytest
+│
+├── frontend/                    # Vue 3 + Vite 单页
+│   ├── src/App.vue              # 主界面
+│   ├── src/components/          # 聊天 / 上传 / 进度条
+│   └── src/api/index.ts         # API 封装 + 类型
+│
+├── scripts/                     # 4 个评测 + trace 回放 + JD 库构建
+│   ├── replay_agent_trace.py
+│   ├── evaluate_agent_workflow.py
+│   ├── evaluate_prompt_versions.py
+│   ├── evaluate_interview_agent.py
+│   ├── build_v4.py              # JD 库构建
+│   └── verify.ps1               # 本地全量验证
+│
+├── AI岗位JD库_v4_intern.*       # 个人用 AI 岗位 JD 资料库(86 份,4 级实习匹配)
+│
+├── AGENTS.md                    # 给 AI agent 看的开发手册(★ 内部信息)
+└── README.md                    # 你正在看
+```
+
+---
+
+## 🔍 AI 岗位 JD 资料库
+
+仓库自带一份**个人用 AI 岗位 JD 资料库**,86 份分 4 级(strong / campus_to_intern / weak / none),附匹配评分实测。
+
+- `AI岗位JD库_v4_intern.json` — 主库(86 份 JD)
+- `AI岗位JD库_v4_intern_筛选报告.md` — 4 级规则 + 52 份实习可投清单
+- `AI岗位JD库_v4_黄金标的match报告.md` — 黄金 JD × 6 role 实测对比
+- `scripts/build_v4.py` / `score_intern_match.py` / `match_golden_targets.py` — 扩库 / 打标 / 实测脚本
+
+> 投递前,把目标 JD 全文跑一次 `match_score(text, role, materials)`,先看素材库匹配度,缺什么再补什么。
+
+---
+
+## 🛠️ 开发与测试
+
+```bash
+# 后端全量测试(948 个用例,约 16s)
+cd backend
+D:\python3.11\python.exe -m pytest tests/ -q
+
+# 前端类型检查 + 构建
+cd frontend
+npx vue-tsc --noEmit
+npm run build
+
+# 一键本地全量验证(后端 + 前端)
+powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+```
+
+**可选 LLM 配置**(`backend/.env`):
 
 ```bash
 LLM_ENABLED=true
-LLM_API_KEY=your_key
+LLM_API_KEY=your_key_here
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=your_model
 ```
 
-## 验证
+> 没设 key 也能跑,所有 LLM 路径会**静默降级**为规则版,不影响主流程。
 
-后端全量测试:
+**安装 pre-push hook**:`powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1`
 
-```bash
-cd backend
-D:\python3.11\python.exe -m pytest tests/ -v
-```
+---
 
-前端类型检查和构建:
+## 🔒 隐私与边界
 
-```bash
-cd frontend
-npx vue-tsc --noEmit
-npm run build
-```
+**项目只做这些:**
 
-安装 pre-push hook:
+- 在你本机 8000 / 5173 端口跑
+- 读你维护的 `materials.json`,写 `.docx` 到本地 `output/`
+- 评估脚本读 JD 库,生成 Markdown 报告到 `backend/logs/`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1
-```
+**项目明确不做这些:**
 
-## 项目结构
+- ❌ 不自动投递
+- ❌ 不爬招聘网站(JD 由你粘贴)
+- ❌ 不追踪 HR / 面试进度
+- ❌ 不做账号 / 多用户 / 云端协作
+- ❌ 不替代人工确认,下载前你 review
+- ❌ **不暴露公网** —— `PUT /api/materials` 无鉴权,只服务本地
 
-```text
-backend/
-  main.py                 FastAPI 入口
-  api/materials.py        素材库 CRUD
-  api/resume.py           预览、生成、角色列表
-  core/generator.py       sections 构造和 docx 渲染
-  core/jd_parser.py       JD 解析、匹配评分、外部简历对比
-  core/agent_workflow.py  Agent workflow 编排
-  core/agent_tools.py     Agent 工具注册和权限校验
-  core/evidence.py        轻量 evidence 检索
-  data/materials.json     脱敏示例素材库
+**真实数据**:`backend/data/_private_backup.json`(.gitignore),clone 后 `cp` 一份到 `materials.json` 即用。
 
-frontend/
-  src/App.vue             主界面
-  src/api/index.ts        API 类型和 axios 封装
-  vite.config.ts          /api 代理到后端
+> 📖 详细隐私边界见 [`.harness/docs/privacy-deploy.md`](.harness/docs/privacy-deploy.md)。
 
-scripts/
-  replay_agent_trace.py   Agent trace 回放
-  evaluate_agent_workflow.py  R5-D 离线评测报告 (FC × AW 4 开关对照)
-  evaluate_prompt_versions.py  R5-E Prompt A/B 评测 (4 prompt version 对比 + 可选 judge)
-  evaluate_interview_agent.py  R6-A Phase 5 + R6-B Phase 5 + R6-C.1 + C.2A + C.3 interview agent 评测 (--extractor {rules,llm,compare}; offline compare 双组同跑; live mode 脚本内拒绝; R6-C.1 新增 `## 4.5 Eval contract warnings` 章节按 sample 去重列 unreachable / beyond-3 warning;R6-C.2A 新增 `## 4.6 Eval contract: product goal` 章节按 `product_goal` 分工区分 `three_turn_friendly` / `full_fact_coverage`;R6-C.3 新增 `## 4.7 LLM 抽取可观测性` 章节含 `slot_source_breakdown` (rules/llm/mixed) + `llm_parse_retry_count` + `llm_to_rules_slot_fallback_count` 全局 / 按 source / 按 extractor (compare 模式) 拆分聚合;LLM slot 抽取代码在 R6-D 后位于 `core/interview_llm.py` 但评测脚本仍走 `core.interview_agent` 重导出符号调用)
-  verify.ps1             本地验证脚本
+---
 
-.harness/
-  docs/                  架构、路线图、阶段报告
-  memory/                协作记忆
-```
+## 📚 延伸阅读
 
-## JD 资料库
+| 你想知道… | 看这里 |
+| :--- | :--- |
+| 内部开发流程 / round 锁点 / pytest 边界 | [`AGENTS.md`](AGENTS.md) |
+| 未来规划 / 各 round 设计文档 | [`.harness/docs/ROADMAP.md`](.harness/docs/ROADMAP.md) |
+| 系统架构总览 | [`.harness/docs/system-architecture.md`](.harness/docs/system-architecture.md) |
+| 隐私 / 部署边界细则 | [`.harness/docs/privacy-deploy.md`](.harness/docs/privacy-deploy.md) |
+| 内部测试开发参考 | [`.harness/docs/resume-buff-test-development-interview-guide.md`](.harness/docs/resume-buff-test-development-interview-guide.md) |
+| 内部架构详情 | [`.harness/docs/architecture.md`](.harness/docs/architecture.md) |
 
-仓库包含个人用 AI 岗位 JD 资料库和评估脚本:
+---
 
-- `AI岗位JD库_v4_intern.json`
-- `AI岗位JD库_v4_intern_筛选报告.md`
-- `AI岗位JD库_v4_黄金标的match报告.md`
-- `scripts/build_v4.py`
-- `scripts/score_intern_match.py`
-- `scripts/match_golden_targets.py`
+<div align="center">
 
-扩库时优先更新脚本中的数据源,再重新生成 JSON 和报告。
+Made with ❤️ for job-hunting season · 本地单用户工具,代码随用随改
+
+</div>
+
+<a id="english"></a>
+
+## English Quick Reference
+
+**Resume-Buff** — a local single-user resume assistant.
+
+One structured `materials.json` (projects / skills / honors / certs) → pick a role (6 options) + a template (8 options) + optionally paste a JD → get a tailored `.docx` resume.
+
+- **Backend:** Python 3.11+ / FastAPI / 948 pytest passing
+- **Frontend:** Vue 3 + Vite + Element Plus
+- **Privacy:** local-only, no auth, no cloud, no tracking. **Do not expose to public network.**
+- **Optional LLM:** set `LLM_API_KEY` to enable smart rewrite / JD-driven interview agent. Without a key, everything silently falls back to rules.
+
+See [`AGENTS.md`](AGENTS.md) for the full developer handbook.

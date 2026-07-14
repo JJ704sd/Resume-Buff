@@ -318,5 +318,5 @@ SLOT_EXTRACTION_USER_TEMPLATE: str = (
 防止 LLM 调用意外拿到 JD 全文(spec §4.4 隐私边界)。
 """
 
-INTERVIEW_LLM_TIMEOUT_SEC: int = 15
+INTERVIEW_LLM_TIMEOUT_SEC: int = 60
 """LLM slot 抽取调用超时(秒)。跟 evaluate_prompt_versions._JUDGE_TIMEOUT_SEC 同源。"""

@@ -64,7 +64,7 @@ from typing import Optional
 # ----------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
-REQUEST_TIMEOUT_SEC = 15
+REQUEST_TIMEOUT_SEC = 60
 
 # R3-P: max 1 retry on invalid response(总最多 2 次尝试,避免 key 成本失控)
 MAX_RETRY_ON_INVALID = 1

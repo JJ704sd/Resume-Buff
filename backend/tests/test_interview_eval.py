@@ -61,6 +61,7 @@ from evaluate_interview_agent import (  # noqa: E402
     EVAL_SET_ALL,
     EVAL_SET_PLAN_BASELINE,
     EVAL_SET_SIMULATED,
+    EVAL_SET_BOUNDARY,
     EVAL_CONTRACT_WARN_BEYOND_3,
     EVAL_CONTRACT_WARN_UNREACHABLE,
     EXTRACTOR_COMPARE,
@@ -2080,3 +2081,144 @@ class TestPhaseC3ObservabilityReport:
         assert row.slot_source_breakdown.get("llm", 0) == 0, (
             f"rules 路径 llm 应 = 0, 实际 {row.slot_source_breakdown!r}"
         )
+
+
+# ======================================================================
+# R6-J: 扩 eval set 验证 (5 类 boundary 10 条 + process_metric 兜底)
+# 来源: .harness/docs/round6-j-eval-set-expansion-spec.md
+# ======================================================================
+class TestR6JBoundarySamplesLoading:
+    """R6-J 10 条新 boundary sample 加载 + 关键字段锁死."""
+
+    def test_boundary_v1_has_ten_samples(self):
+        """EVAL_SET_BOUNDARY 必须是 10 条 (5 类各 2 条)."""
+        assert len(EVAL_SET_BOUNDARY) == 10, (
+            f"R6-J boundary sample 数量应为 10, 实际 {len(EVAL_SET_BOUNDARY)}"
+        )
+
+    def test_eval_set_all_is_20_after_expansion(self):
+        """EVAL_SET_ALL = 3 plan_baseline + 7 simulated_user_v1 + 10 boundary_v1 = 20."""
+        assert len(EVAL_SET_ALL) == 20, (
+            f"R6-J EVAL_SET_ALL 应为 20 条, 实际 {len(EVAL_SET_ALL)}"
+        )
+        assert len(EVAL_SET_PLAN_BASELINE) == 3
+        assert len(EVAL_SET_SIMULATED) == 7
+        assert len(EVAL_SET_BOUNDARY) == 10
+
+    def test_all_boundary_samples_have_source_boundary_v1(self):
+        """全部 10 条 boundary sample source 字段必须是 boundary_v1."""
+        for s in EVAL_SET_BOUNDARY:
+            assert s.get("source") == "boundary_v1", (
+                f"{s.get('name')!r} source 应为 boundary_v1, 实际 {s.get('source')!r}"
+            )
+
+    def test_boundary_samples_cover_five_categories(self):
+        """5 类 boundary 场景 (chaos / multi_slot / long_context / jargon / process_metric) 各 2 条."""
+        categories = {
+            "chaos": ["boundary_chaos_annotation", "boundary_chaos_feedback"],
+            "multi_slot": [
+                "boundary_multi_slot_clustering",
+                "boundary_multi_slot_research",
+            ],
+            "long_context": [
+                "boundary_long_context_eval_pipeline",
+                "boundary_long_context_rubric",
+            ],
+            "jargon": [
+                "boundary_jargon_llm_sft",
+                "boundary_jargon_rag",
+            ],
+            "process_metric_boost": [
+                "boundary_process_metric_rubric",
+                "boundary_process_metric_checklist",
+            ],
+        }
+        actual_names = {s["name"] for s in EVAL_SET_BOUNDARY}
+        for cat, names in categories.items():
+            for n in names:
+                assert n in actual_names, f"R6-J 类别 {cat!r} 缺 {n!r}"
+
+
+class TestR6JProcessMetricCoverage:
+    """R6-H §7 ⚠️ process_metric 0 轮覆盖兜底验证."""
+
+    def test_process_metric_appears_in_4_samples(self):
+        """process_metric gap 在 20 条 sample 中至少 4 条 (R6-H 0 轮 → R6-J ≥4 条)."""
+        process_metric_samples = [
+            s for s in EVAL_SET_ALL if s.get("gap_id") == "process_metric"
+        ]
+        assert len(process_metric_samples) >= 4, (
+            f"process_metric 兜底应 ≥4 条, 实际 {len(process_metric_samples)} 条. "
+            f"names: {[s['name'] for s in process_metric_samples]}"
+        )
+
+    def test_process_metric_samples_include_boundary_boost(self):
+        """process_metric 兜底必须含 2 条 R6-J 新 boundary_process_metric_* 样本."""
+        process_metric_names = {
+            s["name"]
+            for s in EVAL_SET_ALL
+            if s.get("gap_id") == "process_metric"
+        }
+        assert "boundary_process_metric_rubric" in process_metric_names
+        assert "boundary_process_metric_checklist" in process_metric_names
+
+
+class TestR6JBoundaryContractNote:
+    """R6-J boundary sample contract_note 必须含 R6-C.2A 锁定的字面量."""
+
+    def test_all_boundary_contract_notes_have_r6c2a_literal(self):
+        """R6-C.2A 锁定 3 个字面量: '需后续 policy 调整' / '需后续执行' / '完整项目事实覆盖'.
+        全部 10 条 boundary sample 都应至少含 1 个 (走 full_fact_coverage 合同)."""
+        for s in EVAL_SET_BOUNDARY:
+            note = s.get("contract_note", "")
+            has_literal = (
+                "需后续 policy 调整" in note
+                or "需后续执行" in note
+                or "完整项目事实覆盖" in note
+            )
+            assert has_literal, (
+                f"{s['name']!r} contract_note 缺 R6-C.2A 锁定字面量, got: {note!r}"
+            )
+
+    def test_all_boundary_samples_use_full_fact_coverage_product_goal(self):
+        """R6-J boundary sample product_goal 全部 = full_fact_coverage
+        (跟 R6-C.2A 枚举兼容, contract_note 标 boundary 场景)."""
+        for s in EVAL_SET_BOUNDARY:
+            assert s.get("product_goal") == "full_fact_coverage", (
+                f"{s['name']!r} product_goal 应为 full_fact_coverage, "
+                f"实际 {s.get('product_goal')!r}"
+            )
+
+
+class TestR6JBoundaryStructure:
+    """R6-J 10 条 boundary sample 结构对齐 R6-C.2A 模板."""
+
+    def test_boundary_samples_have_required_fields(self):
+        """每条 boundary sample 必须有 R6-C.2A 必填字段."""
+        required_fields = {
+            "name", "source", "jd_text", "role", "gap_id",
+            "user_messages", "expected_slots", "expected_draft_has_metrics",
+            "product_goal", "contract_note",
+        }
+        for s in EVAL_SET_BOUNDARY:
+            missing = required_fields - set(s.keys())
+            assert not missing, f"{s.get('name')!r} 缺字段: {missing}"
+
+    def test_boundary_user_messages_include_draft_trigger(self):
+        """每条 boundary sample 的 user_messages 最后一句必须是 '整理成素材' (触发 can_draft)."""
+        for s in EVAL_SET_BOUNDARY:
+            msgs = s.get("user_messages", [])
+            assert msgs, f"{s.get('name')!r} user_messages 不能为空"
+            assert msgs[-1] == "整理成素材", (
+                f"{s.get('name')!r} 最后一句必须是 '整理成素材', "
+                f"实际 {msgs[-1]!r}"
+            )
+
+    def test_boundary_samples_expected_draft_has_metrics_true(self):
+        """R6-J boundary sample 全部 expected_draft_has_metrics=True
+        (boundary 场景强调查 metric 抽取能力, 跟 R6-H simulated 一致)."""
+        for s in EVAL_SET_BOUNDARY:
+            assert s.get("expected_draft_has_metrics") is True, (
+                f"{s.get('name')!r} expected_draft_has_metrics 应为 True, "
+                f"实际 {s.get('expected_draft_has_metrics')!r}"
+            )

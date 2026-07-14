@@ -322,6 +322,20 @@ def _resolve_interview_llm_config(
     }
 
 
+def _llm_response_format_enabled() -> bool:
+    """LLM 是否发 OpenAI 标准 response_format={"type": "json_object"} 强约束 JSON 输出。
+
+    默认 True (R6-C.3 字节级兼容老路径 + 老测试)。
+    显式设 LLM_RESPONSE_FORMAT_JSON=false 可关掉 — 适用于 MiniMax 等不完全兼容 OpenAI
+    的端点(会返 400 "invalid params, unknown response_format type 'json_object' (2013)",
+    触发 fallback_rules 兜底, 误以为是 LLM 能力问题。R6-H Phase 1 实测确认根因)。
+
+    - OpenAI 官方 / 部分 OpenAI 兼容端点: 不设 env (默认 True) — 强约束 JSON 输出
+    - MiniMax / Abab 等端点: LLM_RESPONSE_FORMAT_JSON=false — 走 prompt 强约束, 不发 response_format
+    """
+    return os.environ.get("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() != "false"
+
+
 def _validate_llm_extraction_payload(
     parsed: object,
     current_slot: str,
@@ -399,9 +413,12 @@ def _call_llm_for_slot_extraction(
             {"role": "system", "content": SLOT_EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ],
-        "response_format": {"type": "json_object"},
         "temperature": 0.0,
     }
+    # R6-C.3 response_format 强约束, 改成 env opt-in (默认 False 字节级一致老测试)。
+    # MiniMax / Abab 等端点需要 LLM_RESPONSE_FORMAT_JSON=false (默认就是)。
+    if _llm_response_format_enabled():
+        body["response_format"] = {"type": "json_object"}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url,

@@ -299,6 +299,15 @@ def _env(name: str, default: str = "") -> str:
     return v.strip() if isinstance(v, str) else default
 
 
+def _llm_response_format_enabled() -> bool:
+    """跟 core.interview_llm._llm_response_format_enabled 同源, 不互相 import (R5-E 边界保持)。
+
+    默认 True (R6-C.3 字节级兼容老测试); 显式 LLM_RESPONSE_FORMAT_JSON=false 关掉
+    (MiniMax 等不完全兼容 OpenAI 端点用)。
+    """
+    return os.environ.get("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() != "false"
+
+
 def is_llm_enabled() -> bool:
     """
     LLM 启用判定:
@@ -402,9 +411,11 @@ def _build_request_payload(
     payload: dict = {
         "model": model,
         "temperature": 0.3,
-        "response_format": {"type": "json_object"},
         "messages": messages,
     }
+    # R6-C.3 response_format 强约束, 改成 env opt-in (默认 False 字节级一致老测试)。
+    if _llm_response_format_enabled():
+        payload["response_format"] = {"type": "json_object"}
     # R4-F: Function Calling 挂载
     # 协议扩展: tools / tool_choice 是 OpenAI 标准, 不传时老路径字节级一致
     if tools is not None:
@@ -933,11 +944,13 @@ def _call_with_agent_loop(
         payload = {
             "model": model,
             "temperature": 0.3,
-            "response_format": {"type": "json_object"},
             "messages": messages,
             "tools": TOOL_EVALUATE_SCHEMA,
             "tool_choice": "auto",
         }
+        # R6-C.3 response_format 强约束, 改成 env opt-in (默认 False 字节级一致老测试)。
+        if _llm_response_format_enabled():
+            payload["response_format"] = {"type": "json_object"}
 
         # 3b) 调一次 LLM(不 retry, 节省 token — loop 已经给了 3 次机会)
         try:

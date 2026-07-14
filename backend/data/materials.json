@@ -1,7 +1,7 @@
 {
   "_meta": {
     "version": "0.1.0",
-    "last_updated": "2026-06-24",
+    "last_updated": "2026-07-14",
     "source_files": [
       "个人简历——大模型技术度量方向.docx",
       "产品经理实习-个人简历.docx",
@@ -185,6 +185,42 @@
         "coordination",
         "responsibility"
       ]
+    },
+    {
+      "id": "interview_20260714_001",
+      "name": "学校和企业合作的高级项目里面，我参加了其中的选拔并通过，在里面进行有关的研究(技术深度/方法论)",
+      "period": "",
+      "role": "学校和企业合作的高级项目里面，我参加了其中的选拔并通过，在里面进行有关的研究",
+      "category": "interview_captured",
+      "summary": "",
+      "highlights": {
+        "general": [
+          "LLM as a Judge(最终 让流程变快)",
+          "设计了自动化测评脚本(最终 让流程变快)"
+        ]
+      },
+      "tags": [
+        "interview_agent"
+      ],
+      "_interview_meta": {
+        "source_gap_id": "tech_metric",
+        "source_session_id": "ia0ab2aa9e",
+        "created_at": "2026-07-14T14:48:20.772034+08:00",
+        "warnings": [
+          "缺少量化数据, 建议补一个数字(人数/比例/时长/次数)",
+          "缺少方法描述, 建议补一句你具体怎么做的"
+        ],
+        "extraction_mode": "rules",
+        "verification": {
+          "claims_total": 2,
+          "claims_supported": 2,
+          "low_confidence_claims": 2,
+          "unsupported_claims": 0,
+          "warnings": [
+            "result 槽位置信度偏低, 保存前请确认"
+          ]
+        }
+      }
     }
   ],
   "skills": {

@@ -57,10 +57,11 @@
 
 ## 1. P1 — 短期可做(下次 round 候选)
 
-### R6-A follow-up — 修正 `/api/interview/draft` 状态返回 + 补测试
-- **问题**:2026-06-29 审计发现 `POST /api/interview/draft` 在 `can_draft=True` 时会返回 `draft_card`,但 API 层保持原 session state(`sess.state = sess.state`),未显式置为 `DRAFT_READY`。前端 `InterviewAgentPanel.vue` 用返回的 `res.state` 决定是否展示素材卡,因此这条直接 draft 路径存在 UI 状态不一致风险。
-- **建议修法**:`backend/api/interview.py::interview_draft` 在生成 card 后设置 `sess.state = InterviewState.DRAFT_READY`,并在 `backend/tests/test_interview_api.py::TestDraftEndpoint::test_draft_returns_card_when_can_draft_true` 增加 `data["state"] == "DRAFT_READY"` 断言。
-- **范围**:小型 bugfix,不涉及 LLM / materials 写库 / eval 脚本;修复后跑 `D:\python3.11\python.exe -m pytest tests/test_interview_api.py tests/test_interview_agent.py -q`,再按需跑全量 729。
+### R6-A follow-up — 修正 `/api/interview/draft` 状态返回 + 补测试 ✅ 完成 (2026-06-30, commit `37ad00c`)
+- **问题**(已修):`POST /api/interview/draft` 在 `can_draft=True` 时会返回 `draft_card`,但 API 层 `sess.state = sess.state` 是 no-op,未显式置为 `DRAFT_READY`。前端 `InterviewAgentPanel.vue` 素材卡视图依赖 `state === 'DRAFT_READY' && draftCard`,在 ASKING 状态下手动注入 slots 调 `/draft` 会返 `state="ASKING"`,与"已生成 draft_card" 语义不一致,UI 看不到素材卡。
+- **修法**:`backend/api/interview.py` import `InterviewState`,在 `interview_draft()` 成功生成 card 后显式设 `sess.state = InterviewState.DRAFT_READY`(`can_draft=False -> 400` 旧路径不变)
+- **回归测试**:`backend/tests/test_interview_api.py::TestDraftEndpoint::test_draft_returns_card_when_can_draft_true` 加 `data["state"] == "DRAFT_READY"` + `sess.state.value == "DRAFT_READY"` 双断言
+- **范围**:小型 bugfix,不涉及 LLM / materials 写库 / eval 脚本;本轮顺手清 docs 漂移(2026-07-14 落到 ROADMAP)
 
 ### R3.5+ — 修 match_score 漏匹配 bug ✅ 完成 (2026-06-27, commit `2889dd9`)
 - **问题**:`baiyun_2026_product` / `baiyun_2026_qa` 触发 score=0,本应命中 Python/AI/LLM 等关键词

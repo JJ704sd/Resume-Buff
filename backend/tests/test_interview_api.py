@@ -1168,3 +1168,109 @@ class TestSaveCardVerificationMeta:
             "unsupported_claims", "warnings",
         ):
             assert f in verification
+
+
+# ======================================================================
+# R6-K: circuit breaker 状态透传 (start + reply 端点)
+# 来源: .harness/docs/round6-k-llm-resilience-spec.md §2.5
+# ======================================================================
+class TestCircuitBreakerApiResponse:
+    """R6-K: StartResponse / ReplyResponse 含 circuit_state + circuit_remaining_seconds."""
+
+    def setup_method(self):
+        """每个 case 前重置 circuit 单例 (避免测试间污染)."""
+        from core.llm_circuit_breaker import reset_circuit
+        reset_circuit()
+
+    def test_start_response_default_circuit_closed(self, client):
+        """默认 circuit closed → StartResponse.circuit_state="closed", remaining=0."""
+        resp = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": "测试 JD"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert "circuit_state" in data
+        assert "circuit_remaining_seconds" in data
+        assert data["circuit_state"] == "closed"
+        assert data["circuit_remaining_seconds"] == 0.0
+
+    def test_start_response_reflects_open_circuit(self, client):
+        """circuit open → StartResponse.circuit_state="open", remaining≈60s."""
+        from core.llm_circuit_breaker import get_circuit
+        get_circuit().record_hang()  # 立即 open
+
+        resp = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": "测试 JD"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["circuit_state"] == "open"
+        # 60s 倒计时, 允许 ±1s 测试 jitter
+        assert 59.0 <= data["circuit_remaining_seconds"] <= 61.0
+
+    def test_reply_response_includes_circuit_state(self, client):
+        """/reply 端点也透传 circuit_state (R6-K §3.1 透传链路)."""
+        from core.llm_circuit_breaker import get_circuit
+        # 1. start
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": "测试 JD"},
+        )
+        assert start.status_code == 200
+        sid = start.json()["session_id"]
+
+        # 2. 触发 circuit open
+        get_circuit().record_hang()
+
+        # 3. /reply 透传 circuit_state
+        reply = client.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "action": "answer", "message": "测试回答"},
+        )
+        assert reply.status_code == 200, reply.text
+        data = reply.json()
+        assert "circuit_state" in data
+        assert data["circuit_state"] == "open"
+        assert 59.0 <= data["circuit_remaining_seconds"] <= 61.0
+
+    def test_circuit_open_forces_rules_mode_in_session(self, client, monkeypatch):
+        """circuit open 时 /reply 触发, session.interview_mode 强制 "rules" (R6-K §2.4 行为).
+
+        需要 monkeypatch LLM_API_KEY 让 session.interview_mode = "llm_assisted"
+        (无 key 时 session 默认 rules, circuit 检查不触发).
+        """
+        from core.llm_circuit_breaker import get_circuit
+        # 0. 配 LLM_API_KEY 让 start 返 llm_assisted
+        monkeypatch.setenv("LLM_API_KEY", "sk-test-circuit-1234567890abcdef")
+
+        # 1. start (enable_interview_llm=True 让 session 走 llm_assisted)
+        start = client.post(
+            "/api/interview/start",
+            json={"target_role": "test_qa", "jd_text": "测试 JD", "enable_interview_llm": True},
+        )
+        assert start.status_code == 200, start.text
+        assert start.json()["interview_mode"] == "llm_assisted", (
+            f"有 key + enable=True 应 llm_assisted, 实际 {start.json().get('interview_mode')!r}"
+        )
+        sid = start.json()["session_id"]
+
+        # 2. 触发 circuit open (模拟 LLM 端点挂)
+        get_circuit().record_hang()
+
+        # 3. /reply 触发 _do_answer → 强制降级
+        reply = client.post(
+            "/api/interview/reply",
+            json={"session_id": sid, "action": "answer", "message": "测试回答"},
+        )
+        assert reply.status_code == 200
+
+        # 4. session.interview_mode 应该是 "rules" (强制降级)
+        from core.interview_agent import get_session
+        sess = get_session(sid)
+        assert sess.interview_mode == "rules"
+        # 5. mode_warning 应该含 "LLM 端点" 描述 (隐私边界: 不含 LLM_API_KEY)
+        assert sess.mode_warning is not None
+        assert "LLM 端点" in sess.mode_warning
+        assert "LLM_API_KEY" not in sess.mode_warning

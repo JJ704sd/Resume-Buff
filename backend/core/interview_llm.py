@@ -54,6 +54,8 @@ from core.interview_prompts import (
     SLOT_LIST_KEYS,
     SLOT_STRING_KEYS,
 )
+# R6-K: circuit breaker state tracking (不动 retry/schema/token 路径,仅 state tracking)
+from core.llm_circuit_breaker import get_circuit
 
 if TYPE_CHECKING:
     # 仅用于类型注解, 运行时**不**import core.interview_agent(防循环依赖)。
@@ -429,11 +431,34 @@ def _call_llm_for_slot_extraction(
             "Authorization": f"Bearer {api_key}",
         },
     )
+    # R6-K: circuit breaker state tracking
+    # 不动 retry / schema / token 策略, 仅在已有 try/except 加 state record
+    # (前/后都无 retry, 仅记录状态, 不影响行为)
+    circuit = get_circuit()
+    if not circuit.allow_request():
+        # circuit open → 跳过 LLM, 返 None 让 caller 走 rules fallback
+        return None
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             raw = resp.read().decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, Exception):
+    except TimeoutError:
+        # hang 立即 open, 不等累计 (32 min 端点卡场景的关键)
+        circuit.record_hang()
         return None
+    except urllib.error.HTTPError:
+        # 4xx / 5xx, 累计
+        circuit.record_failure()
+        return None
+    except urllib.error.URLError:
+        # 网络错 (DNS / connect refused / 等), 累计
+        circuit.record_failure()
+        return None
+    except Exception:
+        # 兜底 (例如 ssl 错 / 编码错), 累计
+        circuit.record_failure()
+        return None
+    # urlopen 成功, 记录 success (envelope parse 失败不算 failure, 由 caller 处理)
+    circuit.record_success()
 
     # 尝试从 OpenAI-style envelope 提取 content; 提取不到也返 raw(让 caller 自己判)
     # R6-G F-2.2: 清理冗余 — `Exception` 已包含 `json.JSONDecodeError` / `TypeError`,

@@ -221,6 +221,76 @@
           ]
         }
       }
+    },
+    {
+      "id": "interview_20260714_002",
+      "name": "Postman 调试测试项目",
+      "period": "",
+      "role": "课程项目里的测试反馈整理",
+      "category": "interview_captured",
+      "summary": "",
+      "highlights": {
+        "test_qa": [
+          "R6-K Postman 调试测试 bullet 1",
+          "R6-K Postman 调试测试 bullet 2"
+        ],
+        "general": [
+          "R6-K Postman 调试测试 bullet 1",
+          "R6-K Postman 调试测试 bullet 2"
+        ]
+      },
+      "tags": [
+        "interview_agent"
+      ],
+      "_interview_meta": {
+        "source_gap_id": "communication",
+        "source_session_id": "ia0f9c98e0",
+        "created_at": "2026-07-14T20:11:58.559237+08:00",
+        "warnings": [],
+        "extraction_mode": "rules",
+        "verification": {
+          "claims_total": 2,
+          "claims_supported": 2,
+          "low_confidence_claims": 0,
+          "unsupported_claims": 0,
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "interview_20260714_003",
+      "name": "Postman 调试测试项目",
+      "period": "",
+      "role": "课程项目里的测试反馈整理",
+      "category": "interview_captured",
+      "summary": "",
+      "highlights": {
+        "test_qa": [
+          "R6-K Postman 调试测试 bullet 1",
+          "R6-K Postman 调试测试 bullet 2"
+        ],
+        "general": [
+          "R6-K Postman 调试测试 bullet 1",
+          "R6-K Postman 调试测试 bullet 2"
+        ]
+      },
+      "tags": [
+        "interview_agent"
+      ],
+      "_interview_meta": {
+        "source_gap_id": "communication",
+        "source_session_id": "iaf59805f9",
+        "created_at": "2026-07-14T20:15:03.339113+08:00",
+        "warnings": [],
+        "extraction_mode": "rules",
+        "verification": {
+          "claims_total": 2,
+          "claims_supported": 2,
+          "low_confidence_claims": 0,
+          "unsupported_claims": 0,
+          "warnings": []
+        }
+      }
     }
   ],
   "skills": {

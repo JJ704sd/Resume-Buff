@@ -1,0 +1,315 @@
+{
+  "info": {
+    "_postman_id": "r6-k-interview-agent-2026-07-14",
+    "name": "R6-K Interview Agent (5 步流程 + circuit breaker 验证)",
+    "description": "R6-K 部署后 interview agent 调试 collection。\n\n- 5 步: health → start → reply 3 轮 → draft → save-card\n- 配 Postman Environment: base_url=http://127.0.0.1:8000\n- step 2 响应里 session_id 通过 Tests script 自动写入 env, 后续 reply/draft/save-card 用 {{session_id}} 引用\n- R6-K circuit breaker 字段 (circuit_state / circuit_remaining_seconds) 在 start / reply 响应里都能看\n\n跑前: server 进程在 8000 跑 (R6-K 部署后), Postman Desktop Agent 装好 (localhost 能通)。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. health check (确认 server 活)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/health",
+          "host": ["{{base_url}}"],
+          "path": ["api", "health"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('health check 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('返回 status=ok', function () {",
+              "        pm.expect(json.status).to.eql('ok');",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. start interview (rules 路径, 不需 LLM env)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"target_role\": \"test_qa\",\n  \"jd_text\": \"测试岗位: 参与 AI 产品测试与数据质量评估, 能梳理流程、跟进问题闭环, 有量化意识。\",\n  \"enable_interview_llm\": false\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/start",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "start"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('start 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('有 session_id', function () {",
+              "        pm.expect(json.session_id).to.be.a('string');",
+              "        pm.expect(json.session_id).to.match(/^ia[a-f0-9]+$/);",
+              "        pm.environment.set('session_id', json.session_id);",
+              "    });",
+              "    pm.test('state=ASKING', function () {",
+              "        pm.expect(json.state).to.eql('ASKING');",
+              "    });",
+              "    pm.test('selected_gap 非空', function () {",
+              "        pm.expect(json.selected_gap).to.be.an('object');",
+              "        pm.expect(json.selected_gap.gap_id).to.be.a('string');",
+              "    });",
+              "    pm.test('interview_mode=rules', function () {",
+              "        pm.expect(json.interview_mode).to.eql('rules');",
+              "    });",
+              "    pm.test('R6-K circuit_state=closed', function () {",
+              "        pm.expect(json.circuit_state).to.eql('closed');",
+              "        pm.expect(json.circuit_remaining_seconds).to.eql(0);",
+              "    });",
+              "    pm.test('有第一问 message', function () {",
+              "        pm.expect(json.message).to.be.an('object');",
+              "        pm.expect(json.message.text).to.be.a('string');",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. reply answer #1 (填 responsibility)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"action\": \"answer\",\n  \"message\": \"我负责课程项目里的测试反馈整理, 主要是把同学发现的问题统一收集。\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/reply",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "reply"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('reply 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('captured_delta 是 object (1st turn 至少抽 1 个 slot)', function () {",
+              "        pm.expect(json.captured_delta).to.be.an('object');",
+              "        pm.expect(Object.keys(json.captured_delta).length).to.be.greaterThan(0);",
+              "    });",
+              "    pm.test('captured_delta 含 responsibility 或 background (1st turn slot)', function () {",
+              "        var has_first_slot = (json.captured_delta.responsibility || json.captured_delta.background);",
+              "        pm.expect(has_first_slot).to.be.a('string');",
+              "    });",
+              "    pm.test('extraction_summary.extractor=rules', function () {",
+              "        pm.expect(json.extraction_summary.extractor).to.eql('rules');",
+              "        pm.expect(json.extraction_summary.fallback_used).to.eql(false);",
+              "    });",
+              "    pm.test('can_draft=false (还没 3 轮)', function () {",
+              "        pm.expect(json.can_draft).to.eql(false);",
+              "    });",
+              "    pm.test('R6-K circuit_state 仍 closed', function () {",
+              "        pm.expect(json.circuit_state).to.eql('closed');",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. reply answer #2 (填 action)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"action\": \"answer\",\n  \"message\": \"我做了一个表格模板, 按问题类型、复现步骤、负责人和状态来记录。\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/reply",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "reply"]
+        }
+      }
+    },
+    {
+      "name": "5. reply answer #3 (填 result, 触发 can_draft)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"action\": \"answer\",\n  \"message\": \"最后小组查问题更快, 返工少了一些, 但没有特别精确的数字。\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/reply",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "reply"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('reply #3 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('can_draft=true (combo1 满足)', function () {",
+              "        pm.expect(json.can_draft).to.eql(true);",
+              "    });",
+              "    pm.test('force_draft=true', function () {",
+              "        pm.expect(json.force_draft).to.eql(true);",
+              "    });",
+              "    pm.test('state=DRAFT_READY', function () {",
+              "        pm.expect(json.state).to.eql('DRAFT_READY');",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. draft (生成 draft_card)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/draft",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "draft"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('draft 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('draft_card 非空', function () {",
+              "        pm.expect(json.draft_card).to.be.an('object');",
+              "    });",
+              "    pm.test('draft_card.actions 有值', function () {",
+              "        pm.expect(json.draft_card.actions).to.be.an('array');",
+              "        pm.expect(json.draft_card.actions.length).to.be.greaterThan(0);",
+              "    });",
+              "    pm.test('R6-B Phase 4: verification 字段', function () {",
+              "        pm.expect(json.draft_card.verification).to.be.an('object');",
+              "        pm.expect(json.draft_card.verification.claims_total).to.be.a('number');",
+              "        pm.expect(json.draft_card.verification.claims_supported).to.be.a('number');",
+              "        pm.expect(json.draft_card.verification.fabrication_violations).to.satisfy(function (v) { return v === undefined || v === 0; });",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. save-card 写库 (可选, 会真改 backend/data/materials.json)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"save_mode\": \"append_project\",\n  \"edited_card\": {\n    \"title\": \"Postman 调试测试项目\",\n    \"responsibility\": \"课程项目里的测试反馈整理\",\n    \"actions\": [\"做了一个表格模板\", \"按问题类型分类记录\"],\n    \"draft_bullets\": [\"R6-K Postman 调试测试 bullet 1\", \"R6-K Postman 调试测试 bullet 2\"]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/interview/save-card",
+          "host": ["{{base_url}}"],
+          "path": ["api", "interview", "save-card"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('save-card 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var json = pm.response.json();",
+              "    pm.test('ok=true', function () {",
+              "        pm.expect(json.ok).to.eql(true);",
+              "    });",
+              "    pm.test('有 project_id (material_ref.id)', function () {",
+              "        pm.expect(json.material_ref.id).to.match(/^interview_\\d{8}_\\d{3}$/);",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "session_id",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

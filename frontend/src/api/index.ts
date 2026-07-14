@@ -365,6 +365,13 @@ export interface InterviewStartResponse {
   /** R6-B Phase 2: 用户可见模式说明(spec §5.1)。智能抽取不可用时给出原因摘要;
    *  老路径/正常情况为 null */
   mode_warning?: string | null
+  /** R6-K: LLM 端点 circuit breaker 状态。"closed" 正常 / "open" 端点挂已切回 rules /
+   *  "half_open" 试探中。前端 open 状态显示降级 chip + 隐藏 LLM toggle。
+   *  老后端不传默认 "closed" (字段 optional,字节级一致锁) */
+  circuit_state?: 'closed' | 'open' | 'half_open'
+  /** R6-K: 距下次 half_open probe 的剩余秒数 (open 状态时使用, closed/half_open 时为 0)。
+   *  前端用 setInterval 倒计时,归零时自动重试 / 后端按响应回流 */
+  circuit_remaining_seconds?: number
 }
 
 /** R6-B Phase 2: ReplyResponse 本轮抽取摘要(spec §5.3)。仅 answer 动作非 None;
@@ -401,6 +408,10 @@ export interface InterviewReplyResponse {
   extraction_summary?: ExtractionSummary | null
   /** R6-B Phase 2/3: 下一问策略(spec §5.3 / §6)。Phase 2 起就有,Phase 3 policy 填充 */
   question_plan?: QuestionPlan | null
+  /** R6-K: LLM 端点 circuit breaker 状态(跟 StartResponse 一致,用于实时更新前端降级 UI) */
+  circuit_state?: 'closed' | 'open' | 'half_open'
+  /** R6-K: 距下次 half_open probe 的剩余秒数 */
+  circuit_remaining_seconds?: number
 }
 
 // ----- R6-B Phase 4: draft verifier 类型 -----

@@ -53,6 +53,8 @@ from core.interview_agent import (
     next_question,
     save_card,
 )
+# R6-K: circuit breaker 状态透传 (LLM 端点 stability 监控)
+from core.llm_circuit_breaker import get_circuit
 from core.interview_prompts import (
     INTERVIEW_MAX_JD_TEXT_LEN,
     INTERVIEW_MAX_MESSAGE_LEN,
@@ -116,6 +118,17 @@ class StartResponse(BaseModel):
         default=None,
         description="用户可见模式说明(智能抽取不可用时给出原因摘要)",
     )
+    # R6-K: LLM 端点 circuit breaker 状态透传
+    # 前端用 circuit_state 显示降级 chip + 倒计时 (open 时隐藏 LLM toggle)
+    # 旧前端不消费也不报错(字段 optional + 默认 closed)
+    circuit_state: str = Field(
+        default="closed",
+        description='circuit 状态: "closed" | "open" | "half_open"',
+    )
+    circuit_remaining_seconds: float = Field(
+        default=0.0,
+        description="距下次 half_open probe 的剩余秒数 (closed/half_open 时为 0)",
+    )
 
 
 class ReplyRequest(BaseModel):
@@ -148,6 +161,15 @@ class ReplyResponse(BaseModel):
             "下一问策略占位(Phase 2: slot + reason_code + low_confidence_slots; "
             "Phase 3 由 interview_policy 填充)"
         ),
+    )
+    # R6-K: LLM 端点 circuit breaker 状态透传 (跟 StartResponse 一致)
+    circuit_state: str = Field(
+        default="closed",
+        description='circuit 状态: "closed" | "open" | "half_open"',
+    )
+    circuit_remaining_seconds: float = Field(
+        default=0.0,
+        description="距下次 half_open probe 的剩余秒数",
     )
 
 
@@ -270,6 +292,8 @@ def interview_start(req: StartRequest):
         # R6-B Phase 2(spec §5.3): 把 session mode / warning 暴露给前端
         interview_mode=sess.interview_mode,
         mode_warning=sess.mode_warning,
+        # R6-K: 透传 LLM 端点 circuit breaker 状态 (前端降级 UI 用)
+        **get_circuit().snapshot(),
     )
 
 
@@ -317,6 +341,8 @@ def interview_reply(req: ReplyRequest):
         # 非 answer 动作为 None; 老前端不消费也不报错
         extraction_summary=resp.get("extraction_summary"),
         question_plan=resp.get("question_plan"),
+        # R6-K: 透传 LLM 端点 circuit breaker 状态 (前端降级 UI 用)
+        **get_circuit().snapshot(),
     )
 
 

@@ -1377,6 +1377,27 @@ def _do_answer(session: InterviewSession, user_message: str) -> tuple[InterviewS
     # R6-B Phase 2(spec §5.3): reply 沿用 session.interview_mode 决定 llm_enabled
     # 老路径(sess.interview_mode == "rules") 字节级一致: llm_enabled=False 走 _extract_slots_by_rules
     use_llm = (sess.interview_mode == INTERVIEW_MODE_LLM_ASSISTED)
+    # R6-K: circuit breaker 强制降级
+    # circuit open + 当前 session 想用 LLM → 强制 mode="rules" + mode_warning 提示用户
+    # 避免 32 min 端点卡场景下 user 看到 30+ 秒的 hang 后才 fallback
+    # 不动 retry/schema/token 路径 (R6-H §6), 仅在 _do_answer 入口改 mode 让 extract_slots
+    # 走 rules 路径 (extract_slots 内部 llm_enabled=False 时不调 LLM)
+    from core.llm_circuit_breaker import get_circuit  # 局部 import 防循环依赖
+    circuit = get_circuit()
+    if use_llm and not circuit.allow_request():
+        # 强制降级 rules
+        use_llm = False
+        remaining = circuit.time_until_probe()
+        # 隐私边界 (R6-K spec §2.5 + AGENTS.md):
+        # - 不含 LLM_API_KEY 字面量
+        # - 不含 user_message 原文
+        # - 不含 source_span / prompt
+        # 通用描述 "LLM 端点" + circuit 状态 + 倒计时
+        sess.interview_mode = "rules"
+        sess.mode_warning = (
+            f"LLM 端点暂不可用 (circuit {circuit.state()}, "
+            f"距下次试探 {int(remaining)}s), 已使用规则模式"
+        )
     # R6-C.3: 传 sess 让 extract_slots 写 3 个可观测性字段
     # (slot_source_breakdown / llm_parse_retry_count / llm_to_rules_slot_fallback_count)
     delta = extract_slots(

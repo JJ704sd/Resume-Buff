@@ -19,7 +19,7 @@
  *   - 不显示 prompt / raw response / source_span 明文
  *   - 移动端 drawer 不被 toggle/warning 挤坏(都用普通 div + el-tag,无 portal)
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   interviewApi,
@@ -68,6 +68,16 @@ const enableInterviewLlm = ref(false)
 const interviewMode = ref<InterviewMode>('rules')
 const modeWarning = ref<string | null>(null)
 
+// ----- R6-K: LLM 端点 circuit breaker 状态 -----
+// "closed" 正常 / "open" 端点挂已切回 rules / "half_open" 试探中
+// open 状态时: 显示降级 chip + 倒计时 + 隐藏 enableInterviewLlm toggle
+// 老后端不传默认 'closed' (字段 optional,字节级一致锁)
+type CircuitState = 'closed' | 'open' | 'half_open'
+const circuitState = ref<CircuitState>('closed')
+const circuitRemainingSeconds = ref(0)
+// 倒计时 setInterval 句柄 (open 状态时每秒 -1, 归零时自动重新 start 触发 probe)
+let circuitCountdownTimer: number | null = null
+
 const canStart = computed(() => Boolean(props.targetRole && props.jdText.trim()))
 const canSubmitAnswer = computed(
   () => state.value === 'ASKING' && userInput.value.trim().length > 0 && !loading.value,
@@ -91,6 +101,66 @@ const modeTagInfo = computed<{
   }
   return { show: true, label: '规则模式', type: 'info' }
 })
+
+// R6-K: circuit breaker 降级 chip 渲染 (跟 modeTagInfo 独立, 不冲突)
+//   - closed  → 不显示 (跟老 UI 一致)
+//   - open    → 紫红 danger, "LLM 端点暂不可用, 已使用规则模式" + 倒计时
+//   - half_open → 黄 warning, "LLM 端点恢复中, 试探中..."
+const circuitTagInfo = computed<{
+  show: boolean
+  label: string
+  type: 'danger' | 'warning' | ''
+}>(() => {
+  if (circuitState.value === 'open') {
+    return {
+      show: true,
+      label: `LLM 端点暂不可用, 已使用规则模式 (距下次试探 ${Math.max(0, Math.ceil(circuitRemainingSeconds.value))}s)`,
+      type: 'danger',
+    }
+  }
+  if (circuitState.value === 'half_open') {
+    return {
+      show: true,
+      label: 'LLM 端点恢复中, 试探中...',
+      type: 'warning',
+    }
+  }
+  return { show: false, label: '', type: '' }
+})
+
+// R6-K: open 状态时 enableInterviewLlm toggle 应该被隐藏
+// (用户不能启 LLM, 后端已强制 rules)
+const isLlmToggleHidden = computed(() => circuitState.value !== 'closed')
+
+// R6-K: 启动/停止倒计时 (open 状态时每秒 -1, 归零时清空 interval 等待后端 probe)
+function startCircuitCountdown() {
+  if (circuitCountdownTimer !== null) return
+  circuitCountdownTimer = window.setInterval(() => {
+    if (circuitRemainingSeconds.value > 0) {
+      circuitRemainingSeconds.value -= 1
+    } else {
+      // 归零: 停止 timer, 等待后端半开 probe 结果 (下一次 /reply 或 /start 时回流)
+      stopCircuitCountdown()
+    }
+  }, 1000)
+}
+function stopCircuitCountdown() {
+  if (circuitCountdownTimer !== null) {
+    window.clearInterval(circuitCountdownTimer)
+    circuitCountdownTimer = null
+  }
+}
+// 同步 circuit state 到 ref (start / reply 时调)
+function syncCircuitState(state: CircuitState | undefined, remaining: number | undefined) {
+  if (state) circuitState.value = state
+  if (remaining !== undefined) circuitRemainingSeconds.value = remaining
+  // open 状态启动倒计时
+  if (circuitState.value === 'open' && circuitRemainingSeconds.value > 0) {
+    startCircuitCountdown()
+  } else {
+    stopCircuitCountdown()
+  }
+}
 
 // 滚动消息到底部
 async function scrollToBottom() {
@@ -123,6 +193,11 @@ async function onStart() {
     // R6-B Phase 2(spec §5.3): 抽取模式从响应里读,展示在 header
     interviewMode.value = res.interview_mode ?? 'rules'
     modeWarning.value = res.mode_warning ?? null
+    // R6-K: LLM 端点 circuit state 同步 (前端降级 UI 用)
+    syncCircuitState(
+      res.circuit_state as CircuitState | undefined,
+      res.circuit_remaining_seconds,
+    )
     messages.value = []
     if (res.message) {
       messages.value.push({
@@ -187,6 +262,11 @@ async function sendReply(action: 'answer' | 'skip_question' | 'rephrase_question
     })
     state.value = res.state as InterviewState
     if (res.progress) progress.value = res.progress
+    // R6-K: 同步 circuit state (每次 reply 实时更新,open/half_open/closed 转换)
+    syncCircuitState(
+      res.circuit_state as CircuitState | undefined,
+      res.circuit_remaining_seconds,
+    )
     if (res.message) {
       messages.value.push({
         role: 'assistant',
@@ -287,6 +367,11 @@ watch(
     }
   },
 )
+
+// R6-K: 组件 unmount 时清理 setInterval (避免内存泄漏)
+onUnmounted(() => {
+  stopCircuitCountdown()
+})
 </script>
 
 <template>
@@ -303,6 +388,14 @@ watch(
         :title="modeWarning ?? ''"
       >{{ modeTagInfo.label }}</el-tag>
       <el-tag v-else size="small" type="info" effect="plain">Round 6-A · β</el-tag>
+      <!-- R6-K: circuit breaker 降级 chip (LLM 端点挂时显示, 跟 modeTagInfo 独立, 优先级高)
+           open 紫红 danger / half_open 黄 warning / closed 不显示 -->
+      <el-tag
+        v-if="circuitTagInfo.show"
+        :type="circuitTagInfo.type"
+        size="small"
+        effect="dark"
+      >{{ circuitTagInfo.label }}</el-tag>
     </div>
 
     <!-- EMPTY -->
@@ -323,7 +416,8 @@ watch(
 
       <!-- R6-B Phase 6(spec §9): 智能抽取 toggle,默认关闭;
            tooltip 解释 fallback 行为;不影响移动 drawer 布局(普通 div + flex,不 portal) -->
-      <div class="ip-toggle-row">
+      <!-- R6-K: circuit open / half_open 时隐藏 toggle (用户不能启 LLM, 后端已强制 rules) -->
+      <div v-if="!isLlmToggleHidden" class="ip-toggle-row">
         <el-switch
           v-model="enableInterviewLlm"
           size="small"

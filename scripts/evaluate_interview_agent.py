@@ -487,7 +487,320 @@ EVAL_SET_SIMULATED: list[dict] = [
 ]
 
 # 把两组样本合并, 但用 source 字段区分, 报告里分别聚合
-EVAL_SET_ALL: list[dict] = EVAL_SET_PLAN_BASELINE + EVAL_SET_SIMULATED
+# ======================================================================
+# Eval set 3: R6-J boundary + process_metric 兜底样本 (10 条)
+# R6-H 决策报告 §7 标记 process_metric 0 轮覆盖, R6-H decision 报告 §6
+# 建议扩 eval set 加 LLM 优势场景 (乱答/跨 slot/长上下文/行业 jargon).
+# R6-J 目标: 验证 LLM 在 boundary 场景下能否展现增量, 补 process_metric 兜底.
+# 5 类各 2 条: chaos / multi_slot / long_context / jargon / process_metric_boost
+# 全部 product_goal="full_fact_coverage" (跟 R6-C.2A 兼容, contract_note 标 boundary)
+# R6-H spec §6 严格不做清单保持: 不改 prompt / retry / schema / token / PROMPT_VERSIONS
+# ======================================================================
+EVAL_SET_BOUNDARY: list[dict] = [
+    # ===== 类别 1: boundary_chaos 乱答 / 口语化 (2 条) =====
+    {
+        "name": "boundary_chaos_annotation",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 理解数据标注规范、能制定判断标准、"
+            "沉淀样例库, 有大模型评估经验加分。"
+        ),
+        "role": "data_annot",
+        "gap_id": "process_metric",
+        "user_messages": [
+            "我那年实习, 反正就是, 数据那块儿, 啊具体啥, 嗯我想想, 标了 2000 多条吧, 应该有, 判断标准啥的我整理过",
+            "我先把样例看了一遍, 然后跟同组的 3 个人对了下口径, 模糊的地方写了个判断规则",
+            "后面组员问得少, 我那些规则成了组内参考",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "数据标注实习",
+            "action": ["看样例", "跟同组 3 人对口径", "写判断规则"],
+            "result": "组员问得少, 规则成组内参考",
+            "metric": ["2000 多条", "3 个人"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 乱答/口语化场景; responsibility/action/result 在 process_metric suggested "
+            "0-2 位置 3 轮内可达, metric 在 suggested 末位 3 轮内 near_limit 触达. "
+            "预期 LLM 比规则版更能在散句里重组出 structured slot (action 列表)."
+        ),
+    },
+    {
+        "name": "boundary_chaos_feedback",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 熟悉深度学习模型训练流程, 能复现论文模型、"
+            "对比不同架构效果、用量化指标评估。"
+        ),
+        "role": "data_annot",
+        "gap_id": "tech_metric",
+        "user_messages": [
+            "我那个项目, 嗯, 怎么说呢, 主要是搞标注的, 对就是, 看样例那种, 跟 3 个人一起, 最后大家口径统一了",
+            "我整了 20 多条样例, 比较边界那种, 然后整理成判断标准",
+            "后面组员查问题快了一些, 没出过返工",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "看样例 + 整理判断标准",
+            "action": ["看样例", "整 20 多条边界样例", "整理成判断标准"],
+            "result": "组员查问题快, 没返工",
+            "metric": ["20 多条", "3 个人"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 乱答场景; responsibility/action/result 在 tech_metric suggested 0/1/4 "
+            "位置, result 在 near_limit 触达, metric 不在 suggested. "
+            "预期 LLM 比规则版更能在散句中分清 responsibility 和 action 边界."
+        ),
+    },
+    # ===== 类别 2: boundary_multi_slot 跨 slot 单回答 (2 条) =====
+    {
+        "name": "boundary_multi_slot_clustering",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 理解数据标注、质量检查和大模型评估流程, "
+            "能描述方法和判断标准。"
+        ),
+        "role": "data_annot",
+        "gap_id": "tech_metric",
+        "user_messages": [
+            "我在文本聚类项目里用了层次聚类 + 人工抽检, 5 个人一起做的, 用了 2 周时间, 最后聚类纯度从 0.6 升到 0.8, 准确率 0.85",
+            "我们对比了 K-means 和 层次聚类, 层次聚类在边界 case 上更稳, 抽检准确率更高",
+            "最后输出 5 份聚类质量报告, 团队采纳了层次聚类方案",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "文本聚类项目",
+            "action": ["对比 K-means 和层次聚类", "人工抽检", "输出 5 份聚类质量报告"],
+            "method": "层次聚类 + 人工抽检",
+            "result": "团队采纳层次聚类方案",
+            "metric": ["5 个人", "2 周", "0.6", "0.8", "0.85", "5 份"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 跨 slot 单回答场景; user_message 1 单条含 responsibility/action/method/"
+            "result/metric 5 slot. tech_metric suggested 不含 metric → unreachable, "
+            "method 在 position 3 beyond. 预期 LLM 比规则版更能从单回答里抽到多 slot."
+        ),
+    },
+    {
+        "name": "boundary_multi_slot_research",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 能跨角色沟通需求, 梳理用户反馈, "
+            "推动活动或产品方案落地。"
+        ),
+        "role": "product",
+        "gap_id": "communication",
+        "user_messages": [
+            "我负责用户调研 + 文档整理, 同时拉了 3 个用户访谈, 整理成需求清单交给开发, 4 周后上线 v1, 解决率 60%",
+            "我每天同步一次状态, 把需求按优先级分 3 类, 开发直接看我的分类就能排期",
+            "最后产品迭代效率明显提升, 跨角色沟通成本下降",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "用户调研 + 文档整理",
+            "action": ["拉 3 个用户访谈", "整理需求清单", "每天同步状态", "按优先级分 3 类"],
+            "method": "按优先级分 3 类 + 每天同步",
+            "result": "产品迭代效率提升, 跨角色沟通成本下降",
+            "metric": ["3 个", "4 周", "60%"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 跨 slot 单回答; user_message 1 含 action+method+result+metric. "
+            "communication suggested 不含 responsibility, 含 (background, action, method, result). "
+            "预期 LLM 比规则版更能识别 action 列表中的多个动作."
+        ),
+    },
+    # ===== 类别 3: boundary_long_context 长上下文 100+ 字 (2 条) =====
+    {
+        "name": "boundary_long_context_eval_pipeline",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 能搭建评测流程、跟进问题闭环、"
+            "输出可视化报告, 推动模型迭代。"
+        ),
+        "role": "test_qa",
+        "gap_id": "process_metric",
+        "user_messages": [
+            "我当时在医疗垂类评测项目里负责评测流程搭建, 进来的时候团队没有标准化流程, 我先花 2 周时间梳理了现有标注员的标注准确率, 发现 5 个标注员之间一致性只有 60% 左右, 然后我设计了一个三层质检机制 — 抽样 1%、3%、5% 三档 — 配合标注员互查和专家仲裁, 4 周后一致性提升到 85%, 错误率从 12% 降到 4%, 输出 5 份可视化分析报告",
+            "我整理了 30 多条典型 Badcase 样例, 按错误类型和严重度分级, 给标注员做培训材料",
+            "最后团队采纳我的流程方案, 成为项目标准",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "医疗垂类评测流程搭建",
+            "action": ["设计三层质检机制", "整理 30 多条 Badcase 样例", "做培训材料"],
+            "result": "团队采纳流程方案成为项目标准",
+            "metric": ["2 周", "5 个", "60%", "1%", "3%", "5%", "4 周", "85%", "12%", "4%", "5 份", "30 多条"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 长上下文场景; user_message 1 是 200+ 字长段落, 含 11 个量化数字. "
+            "process_metric suggested (responsibility, action, result, metric) 3 轮内可达, "
+            "但单轮 200 字里 metric 列表很长, 预期 LLM 比规则版更能在长段落里抓齐所有 metric."
+        ),
+    },
+    {
+        "name": "boundary_long_context_rubric",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 理解数据标注、质量检查和大模型评估流程, "
+            "能描述方法和判断标准。"
+        ),
+        "role": "data_annot",
+        "gap_id": "tech_metric",
+        "user_messages": [
+            "我参与一个文本分类项目的评估标准设计, 负责从 Badcase 中抽象出可量化的判断维度. 当时团队用 GPT-4 做分类, 但 Badcase 一致性只有 65%, 我花了 3 周时间分析了 500 多条 Badcase, 把判断标准拆成内容安全、格式合规、意图理解、上下文一致性 4 个维度, 每个维度再分 3 档 (高/中/低), 用这个 rubric 跟 3 个标注员对答案, 最终 inter-annotator agreement (Kappa) 达到 0.72, 准确率从 78% 升到 89%, 错判率从 22% 降到 11%",
+            "我整理了 50 多条边界样例作为标注员培训材料, 团队采纳了 rubric 方案",
+            "最后成了项目标准, 复用到 3 个下游任务",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "文本分类项目评估标准设计",
+            "action": ["分析 500 多条 Badcase", "拆成 4 维度 3 档 rubric", "整理 50 多条边界样例"],
+            "method": "4 维度 3 档 rubric + 标注员对答案",
+            "result": "团队采纳, 复用到 3 个下游任务",
+            "metric": ["65%", "3 周", "500 多条", "4", "3", "3", "0.72", "78%", "89%", "22%", "11%", "50 多条", "3 个"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 长上下文场景; user_message 1 是 250+ 字长段落, 含 12 个量化数字. "
+            "tech_metric suggested (background, responsibility, action, method, result) 不含 metric. "
+            "预期 LLM 比规则版更能在长段落里分离 method 和 action, 并抓齐 metric 列表."
+        ),
+    },
+    # ===== 类别 4: boundary_jargon 行业 jargon (2 条) =====
+    {
+        "name": "boundary_jargon_llm_sft",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 理解 LLM 评估流程, 能设计评测维度、构建评测集、"
+            "输出 Badcase 分析报告。"
+        ),
+        "role": "data_annot",
+        "gap_id": "tech_metric",
+        "user_messages": [
+            "我做了 few-shot prompt, 然后用 SFT 蒸馏了一个 7B 模型, 接着走 DPO 对齐, 最终 human eval 通过率 92%, eval set 300 条",
+            "我对比了 base 模型和蒸馏后模型在 5 个业务场景的效果, 蒸馏模型在长文本上更稳",
+            "最后团队采纳蒸馏方案, 部署到生产环境",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "LLM 蒸馏与对齐",
+            "action": ["做 few-shot prompt", "SFT 蒸馏 7B 模型", "走 DPO 对齐", "对比 5 个业务场景"],
+            "method": "few-shot prompt + SFT 蒸馏 + DPO 对齐",
+            "result": "团队采纳蒸馏方案, 部署到生产",
+            "metric": ["7B", "92%", "300 条", "5 个"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 行业 jargon 场景; 术语: few-shot / SFT / DPO / human eval. "
+            "tech_metric suggested 不含 metric. 预期 LLM 比规则版更能识别 jargon 关键词, "
+            "并把 few-shot/SFT/DPO 归到 method 字段."
+        ),
+    },
+    {
+        "name": "boundary_jargon_rag",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 能从 Badcase 中抽象可量化指标、"
+            "设计评分维度、提出优化方案。"
+        ),
+        "role": "data_annot",
+        "gap_id": "tech_metric",
+        "user_messages": [
+            "我用 RAG 做检索增强, embedding 走 BGE, top-k 10, 调过 3 轮 recall@5, 最终 0.78, 配合 cross-encoder rerank, 答案准确率 85%",
+            "我对比了不用 RAG 的 baseline, RAG 版本 Badcase 率从 35% 降到 15%",
+            "最后团队采纳 RAG 方案, 部署到客服系统",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "RAG 检索增强",
+            "action": ["调 3 轮 recall@5", "加 cross-encoder rerank", "对比 RAG baseline"],
+            "method": "RAG + BGE embedding + top-k 10 + cross-encoder rerank",
+            "result": "团队采纳, 部署到客服系统",
+            "metric": ["10", "3 轮", "0.78", "85%", "35%", "15%"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; boundary 行业 jargon 场景; 术语: RAG / BGE / top-k / recall@5 / cross-encoder rerank. "
+            "tech_metric suggested 不含 metric. 预期 LLM 比规则版更能识别 jargon 术语, "
+            "并把 BGE/top-k/cross-encoder 归到 method 字段."
+        ),
+    },
+    # ===== 类别 5: process_metric_boost process_metric 兜底 (2 条) =====
+    {
+        "name": "boundary_process_metric_rubric",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 理解数据标注规范、能制定判断标准、"
+            "沉淀样例库, 有大模型评估经验加分。"
+        ),
+        "role": "data_annot",
+        "gap_id": "process_metric",
+        "user_messages": [
+            "我设计了一个评估 rubric, 跟 3 个标注员对答案, 覆盖 5 个任务类型",
+            "rubric 把判断标准拆成 4 个维度, 每个维度 3 档 (高/中/低), 标注员按 rubric 打分",
+            "最后 inter-annotator agreement (Kappa) 达到 0.72, 准确率 85%",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "评估 rubric 设计",
+            "action": ["设计 rubric", "跟 3 个标注员对答案", "拆 4 维度 3 档"],
+            "result": "团队采纳 rubric 方案",
+            "metric": ["3 个", "5 个", "4", "3", "0.72", "85%"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; process_metric 兜底 (R6-H §7 ⚠️ 盲点); process_metric suggested "
+            "(responsibility, action, result, metric) 3 轮内可达, metric 末位 near_limit 触达. "
+            "R6-H 0 轮覆盖, R6-J 补 2 条, 验证 LLM 跟 Rules 在 process_metric gap 下的 delta."
+        ),
+    },
+    {
+        "name": "boundary_process_metric_checklist",
+        "source": "boundary_v1",
+        "jd_text": (
+            "岗位要求: 参与 AI 产品测试与数据质量评估, "
+            "能梳理流程、跟进问题闭环, 有量化意识。"
+        ),
+        "role": "test_qa",
+        "gap_id": "process_metric",
+        "user_messages": [
+            "我在测试组搞了一个验收 checklist, 10 项验收标准, 每项有明确 pass/fail 规则",
+            "checklist 上线后, 漏测率从 30% 降到 8%, 节省回归时间 40%",
+            "最后团队采纳 checklist, 复用到 3 个项目的测试流程",
+            "整理成素材",
+        ],
+        "expected_slots": {
+            "responsibility": "测试验收 checklist 设计",
+            "action": ["设计 10 项 checklist", "制定 pass/fail 规则", "复用到 3 个项目"],
+            "result": "团队采纳, 复用到 3 个项目",
+            "metric": ["10 项", "30%", "8%", "40%", "3 个"],
+        },
+        "expected_draft_has_metrics": True,
+        "product_goal": "full_fact_coverage",
+        "contract_note": (
+            "完整项目事实覆盖目标; process_metric 兜底 (R6-H §7 ⚠️ 盲点); process_metric suggested "
+            "(responsibility, action, result, metric) 3 轮内可达, metric 末位 near_limit 触达. "
+            "本条 role=test_qa, 显式 gap_id=process_metric, 绕过后端自动选 gap 路径."
+        ),
+    },
+]
+
+# R6-J: 3 组合并 = 20 条 (3 plan_baseline + 7 simulated_user_v1 + 10 boundary_v1)
+EVAL_SET_ALL: list[dict] = EVAL_SET_PLAN_BASELINE + EVAL_SET_SIMULATED + EVAL_SET_BOUNDARY
 
 
 # ======================================================================
